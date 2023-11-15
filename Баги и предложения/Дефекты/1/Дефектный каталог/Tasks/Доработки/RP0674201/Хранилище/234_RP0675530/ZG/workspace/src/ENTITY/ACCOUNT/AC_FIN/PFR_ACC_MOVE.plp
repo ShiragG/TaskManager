@@ -1,0 +1,344 @@
+class AC_FIN;
+
+@import_plsql(true)
+@this(plsql_lock:=false)
+@name('Выписка по операциям на счёте для предоставления в ПФР и ФСС')
+@tag('COPIED')
+@generate_ansi_joins(true)
+
+method PFR_ACC_MOVE is
+
+@name('Регистрационный номер клиента')
+public V_REG_NUM [STRING_13];
+@name('Код подчиненности')
+public V_CODE_SUBORD [STRING_13];
+@name('Вид отчета')
+public V_TYPE_REP [CASE_BETWEEN_TWO];
+@name('Вывод примечания')
+public V_PRINT_NOTE [BOOLEAN];
+lvClientName	varchar2(32767); 	-- Наименование клиента
+lvClientINN		varchar2(32767);	-- ИНН клиента
+lvClientKPP		varchar2(32767);	-- КПП клиента
+lbTmpPrintNote	boolean;			-- примечание для ФСС
+
+PFR_ACC_MOVE (
+	@name('Дата с')
+	P_DATE in [DATE],
+	@name('Клиент')
+	P_CLIENT in [CLIENT_REF],
+	@name('Наименование налогового органа')
+	P_FUND_NAME in [STRING_254],
+	@name('Адрес налогового органа')
+	P_FUND_ADDRESS in [STRING_254],
+	@name('Номер запроса')
+	P_REQ_NUM in [STRING_30],
+	@name('Дата запроса')
+	P_REQ_DATE in [DATE],
+	@name('Представитель банка')
+	P_USER in [USER_REF],
+	@name('Дата по')
+	P_DATE2 in [DATE],
+	@name('Счет')
+	P_ACC in [AC_FIN_REF],
+	@name('Пропускать заполнение графы 6 для документов SWIFT')
+	P_C6_SKIP_SWIFT in [BOOLEAN],
+	@name('Территориальный орган')
+	P_FUND in [FUNDS_REF],
+	@name('Номер счета')
+	P_ACC_NUM in [ACCNUM]
+) is
+
+validate is
+/*Функция для определения рег. номера клиента в социальном фонде*/
+function GetRegNumClient (P_FONDS_AR 	::[CLIENT].[FONDS_AR]%type
+						/*Массив "Социальные фонды"*/)
+	return varchar2(40)
+	/*Возвращает регистрационный номер клиента (Фондовый номер клиента)*/
+is
+	vRegNum		varchar2(40); -- рег. номер клиента
+begin
+	vRegNum := null;
+	-- Цикл по массиву "Социальные фонды"
+	for(select x( x.[FOUND_NUM]	 : C_FOUND_NUM)
+		in ::[SOC_FOUNDS] all
+		where x%collection = P_FONDS_AR
+		and x.[FOUND] = P_FUND 									-- Отбор по заданному фонду,
+		and (x.[DATE_REG] <= P_DATE2 or x.[DATE_REG] is null) 	-- по дате окончания отчетного периода.
+		and (x.[REG_DATE_END] >= P_DATE2 or x.[REG_DATE_END] is null) -- по дате снятия с регистрации
+		order by x.[DATE_REG] desc nulls last 					-- Сортировка по дате, по убыванию
+		fetch 1
+		)
+	loop
+		vRegNum  := x.C_FOUND_NUM;
+		exit;
+	end loop;
+	return vRegNum;
+end;
+
+-- Процедура для получения информации о клиенте
+procedure GetInfoClient(P_REF_ACC	ref [AC_FIN] default null
+						/* Ссылка на счет*/
+						)
+is
+	recBank			[CL_BANK_N];	-- Структура для получения информации о банке
+	vCodeFund		varchar2;		-- Код социального фонда
+begin
+	-- удаление информации о территориальном органе
+	P_FUND = P_FUND_NAME = P_FUND_ADDRESS = V_REG_NUM = V_CODE_SUBORD := null;
+	
+	-- Если выбран первый вариант,
+	if V_TYPE_REP.[0] = 1 then
+		-- отчет формируется для предоставления в ПФР,
+		vCodeFund :=  'ПФР';
+	-- иначе,
+	else
+		-- отчет формируется для предоставления в ФСС
+		vCodeFund :=  'ФСС';
+	end if;
+	
+	-- Установка контекста для выбора социального фонда в зависимости от выбранного типа отчета
+	executor.set_context ('VW_FUND_TYPE', vCodeFund);
+
+	-- Если передана ссылка на счет,
+	if P_REF_ACC is not null then
+		P_CLIENT := null;
+
+		-- цикл по финансовым счетам,
+		for (	select u(	coalesce(u.[CLIENT_R], u.[CLIENT_V])	: C_CLIENT
+						,	u.[MAIN_V_ID]							: C_MAIN_V_ID
+				)	in	::[AC_FIN]
+				where	u = P_REF_ACC
+				fetch 1
+		) loop
+			-- сохранение ссылки на клиента со счета
+			P_CLIENT := u.C_CLIENT;
+			P_ACC_NUM := u.C_MAIN_V_ID;
+			exit;
+		end loop;
+	end if;
+
+	-- Если заполнена ссылка на клиента,
+	if P_CLIENT is not null then
+		lvClientKPP := P_CLIENT.[KPP];
+				
+		-- цикл по клиентам,		
+		for	(	select k(	k%class									: C_CL_CLASS
+						,	k.[FONDS_AR]							: C_FONDS_AR
+						,	coalesce(co.[LONG_NAME], k.[NAME])		: C_NAME
+						,	case
+								 when co.[LONG_NAME] is null
+								 then 'NAME'
+								 else 'LONG_NAME'
+							end	: C_HIST_QUAL
+						,	coalesce(k.[INN], co.[KIO])				: C_INN
+				)	in	::[CLIENT]
+				left join (::[CL_CORP] :co)
+				on	k%id = co%id
+				where 	k = P_CLIENT
+				fetch 1
+		) loop
+			-- Если клиент - нац. банк, то реквизиты определяются с учетом историчности
+			if k.C_CL_CLASS = ::[CL_BANK_N]%class then
+				recBank			:= ::[CL_BANK_N].[LIB].GetBankReqsOnDate(P_CLIENT, P_DATE2);
+				lvClientName	:= nvl(recBank.[NAME]	, k.C_NAME);
+				lvClientINN		:= nvl(recBank.[INN]	, k.C_INN);
+				lvClientKPP		:= nvl(recBank.[KPP]	, lvClientKPP);
+			else
+				lvClientName	:= k.C_NAME;
+				lvClientINN 	:= k.C_INN;
+			end if;
+
+			-- цикл по социальным фондам клиента,			
+			for (	select	x(	x.[FOUND] 						: C_FUND
+								, x.[FOUND_NUM]					: C_FOUND_NUM
+								, x.[FOUND].[CLIENTS].[NAME]	: C_FOUND_NAME
+							)
+					in	k.C_FONDS_AR
+					where x.[FOUND].[TYPES].[CODE] = vCodeFund 				-- выбирается фонд по коду, в зависимости от типа отчета
+					and (x.[DATE_REG] <= P_DATE2 or x.[DATE_REG] is null) 	-- сортировка по дате, по убыванию
+					and (x.[REG_DATE_END] >= P_DATE2 or x.[REG_DATE_END] is null) -- по дате снятия с регистрации
+					order by x.[DATE_REG] desc nulls last
+					fetch 1
+			) loop
+				P_FUND			:= x.C_FUND;													-- Ссылка на фонд
+				P_FUND_NAME		:= x.C_FOUND_NAME;												-- Наименование социального фонда
+				P_FUND_ADDRESS	:= ::[RUNTIME].[VIEWFUN].GetAddress(P_FUND.[CLIENTS], 'ALL');	-- Адрес социального фонда
+				V_REG_NUM		:= x.C_FOUND_NUM;												-- Рег. номер клиента в фонде
+				exit;
+			end loop;
+			debug_pipe('Клиент в заголовке: "'||lvClientName||'" ('||to_char(P_CLIENT)||'), '||
+									'класс: "'||k.C_CL_CLASS||'", '||
+									'тип имени из истории: "'||k.C_HIST_QUAL||'", '||
+									'дата определения информации из истории: "'||to_char(P_DATE2, 'dd.mm.yyyy')||'"'
+									, 10);			
+			exit;
+		end loop;
+	end if;
+end;
+
+-- Процедура для получения ссылки на счет
+procedure GetAccRef(P_ACC_NUM	::[AC_FIN].[MAIN_V_ID]%type)
+is
+begin
+	P_ACC := null;
+	for (	select acc(	acc		: id)
+			in ::[AC_FIN]
+			where acc.[MAIN_V_ID] = P_ACC_NUM
+			fetch 1
+	) loop
+		P_ACC		:= acc.id;
+		P_CLIENT	:= coalesce(P_ACC.[CLIENT_R], P_ACC.[CLIENT_V]);
+		exit;
+	end loop;
+end;
+
+begin
+	if P_MESSAGE = 'DEFAULT' then
+		lvClientName = lvClientINN = lvClientKPP = V_REG_NUM := null;
+		P_DATE	= P_DATE2 = P_REQ_DATE	:= ::[SYSTEM].[OP_DATE];
+		P_ACC			:= this;
+		P_USER			:= coalesce(::[BRANCH].[SLIB].GetGeneralACC(P_ACC.[FILIAL]), ::[RUNTIME].[STDLIB].userid);
+		V_TYPE_REP.[0] 	:= 1;
+		V_PRINT_NOTE = lbTmpPrintNote := false;
+		
+		-- Получение информации по клиенту
+		GetInfoClient(P_ACC);
+
+	elsif P_MESSAGE = 'VALIDATE' then
+		-- При смене даты окончания отчетного периода
+		if P_INFO = 'P_DATE2' then
+			-- получение информации о клиенте и социальном фонде
+			GetInfoClient;
+		-- При смене социального фонда
+		elsif P_INFO = 'P_FUND' then
+			V_CODE_SUBORD 	:= null;
+			P_FUND_NAME		:= P_FUND.[CLIENTS].[NAME];										-- Наименование социального фонда
+			P_FUND_ADDRESS	:= ::[RUNTIME].[VIEWFUN].GetAddress(P_FUND.[CLIENTS], 'ALL');	-- Адрес социального фонда
+			V_REG_NUM 		:= GetRegNumClient(P_CLIENT.[FONDS_AR]);
+		-- При смене клиента
+		elsif P_INFO = 'P_CLIENT' then
+			-- удаление информации о счете,
+			P_ACC := null;
+			-- получение информации о клиенте и социальном фонде
+			GetInfoClient;
+		-- При смене счета
+		elsif P_INFO = 'P_ACC' then
+			-- получение информации о клиенте и социальном фонде по ссылке на счет
+			GetInfoClient(P_ACC);
+		elsif P_INFO = 'P_ACC_NUM' then
+			-- получение информации о клиенте и социальном фонде по ссылке на счет
+			GetAccRef(P_ACC_NUM);
+			GetInfoClient(P_ACC);
+		-- При смене типа отчета
+		elsif P_INFO like '%V_TYPE_REP%' then
+			-- получение информации о клиенте и социальном фонде
+			GetInfoClient;
+			-- если отчет в ПФР
+			if V_TYPE_REP.[0] = 1 then
+				lbTmpPrintNote	:= V_PRINT_NOTE;
+				V_PRINT_NOTE	:= false;
+			else
+				V_PRINT_NOTE	:= lbTmpPrintNote;
+				lbTmpPrintNote	:= V_PRINT_NOTE;
+			end if;
+		elsif P_INFO = 'OK' then
+			-- Проверка на регистрацию приложения, к которому относится данный расчет
+			if not ::[REPS_DATA].[LIB_REG_DOP_PRIL].CheckRegPril('1B010195') then
+				pragma error('Для использования операции, необходимо зарегистрировать приложение с кодом 1B010195 "Формирование справок и выписок по операциям на счетах по запросам ПФР и ФСС".');
+			end if;			
+		end if;
+	end if;
+end;
+
+execute is
+begin
+
+	if P_ACC is null and P_ACC_NUM is null then
+		pragma error('Пожалуйста, укажите счет!');
+	end if;
+
+	if P_REQ_DATE is null then
+		pragma error('Пожалуйста, укажите дату запроса!');
+	end if;
+
+	if P_REQ_NUM is null then
+		pragma error('Пожалуйста, укажите номер запроса!');
+	end if;
+
+	-- Добавление информации об использовании приложения
+	::[OPTIONAL_REP_INT].[PRX_REPS].AddData('PFR_ACC_MOVE', null);
+
+	::[PFR_MOVE_DATA].[LIB].init(
+			P_DATE				==	P_DATE				--	Дата с
+		,	P_DATE2				==	P_DATE2				--	Дата по
+		,	P_ACC				==	P_ACC				--	Счет
+		,	P_C6_SKIP_SWIFT		==	P_C6_SKIP_SWIFT		--	Пропускать заполнение графы 6 для документов SWIFT
+		,	P_CLIENT			==	P_CLIENT			--	Ссылка на клиента
+	);
+
+	--	Экспериментально произведена оценка, что при выводе более 500 строк в таблице 1 предпочтительнее по быстродействию использовать вариант с выводом данных на 3 листа
+	if ::[PFR_MOVE_DATA].[LIB].GetDocumentCount > 500 then
+		-- На основании Приказа ФСС РФ от 02.11.2017 №539
+		if P_REQ_DATE >= to_date('02/02/2018', 'dd/mm/yyyy') then
+			::[PFR_MOVE_DATA].[PRN_3L_002].run(
+					P_DATE				==	P_DATE				--	Дата с
+				,	P_DATE2				==	P_DATE2				--	Дата по
+				,	P_FUND_NAME			==	P_FUND_NAME			--	Наименование социального фонда
+				,	P_FUND_ADDRESS		==	P_FUND_ADDRESS		--	Адрес социального фонда
+				,	P_USER				==	P_USER				--	Представитель банка
+				,	P_REQ_NUM			==	P_REQ_NUM			--	Номер запроса
+				,	P_REQ_DATE			==	P_REQ_DATE			--	Дата запроса
+				,	P_ACC				==	P_ACC				--	Счет
+				,	P_C6_SKIP_SWIFT		==	P_C6_SKIP_SWIFT		--	Пропускать заполнение графы 6 для документов SWIFT
+				,	P_CLIENT_NAME		==	lvClientName		--	Наименование клиента
+				,	P_CLIENT_INN		==	lvClientINN			--	ИНН клиента
+				,	P_CLIENT_KPP		==	lvClientKPP			--	КПП клиента
+				, 	P_REG_NUM			== 	V_REG_NUM			-- 	Регистрационный номер клиента в фонде
+				, 	P_CODE_SUBORD		== 	V_CODE_SUBORD		-- 	Код подчиненности
+				, 	P_TYPE_REP			== 	V_TYPE_REP.[0]		-- 	Тип отчета (в ПФР или в ФСС)
+				, 	P_PRINT_NOTE		== 	V_PRINT_NOTE		-- 	Выводить примечание для ФСС
+			);
+		else
+			::[PFR_MOVE_DATA].[PRN_3L_001].run(
+					P_DATE				==	P_DATE				--	Дата с
+				,	P_DATE2				==	P_DATE2				--	Дата по
+				,	P_FUND_NAME			==	P_FUND_NAME			--	Наименование социального фонда
+				,	P_FUND_ADDRESS		==	P_FUND_ADDRESS		--	Адрес социального фонда
+				,	P_USER				==	P_USER				--	Представитель банка
+				,	P_REQ_NUM			==	P_REQ_NUM			--	Номер запроса
+				,	P_REQ_DATE			==	P_REQ_DATE			--	Дата запроса
+				,	P_ACC				==	P_ACC				--	Счет
+				,	P_C6_SKIP_SWIFT		==	P_C6_SKIP_SWIFT		--	Пропускать заполнение графы 6 для документов SWIFT
+				,	P_CLIENT_NAME		==	lvClientName		--	Наименование клиента
+				,	P_CLIENT_INN		==	lvClientINN			--	ИНН клиента
+				,	P_CLIENT_KPP		==	lvClientKPP			--	КПП клиента
+				, 	P_REG_NUM			== 	V_REG_NUM			-- 	Регистрационный номер клиента в фонде
+				, 	P_CODE_SUBORD		== 	V_CODE_SUBORD		-- 	Код подчиненности
+				, 	P_TYPE_REP			== 	V_TYPE_REP.[0]		-- 	Тип отчета (в ПФР или в ФСС)
+				, 	P_PRINT_NOTE		== 	V_PRINT_NOTE		-- 	Выводить примечание для ФСС
+			);
+		end if;
+	else
+		::[PFR_MOVE_DATA].[PRN_1L_001].run(
+				P_DATE				==	P_DATE				--	Дата с
+			,	P_DATE2				==	P_DATE2				--	Дата по
+			,	P_FUND_NAME			==	P_FUND_NAME			--	Наименование социального фонда
+			,	P_FUND_ADDRESS		==	P_FUND_ADDRESS		--	Адрес социального фонда
+			,	P_USER				==	P_USER				--	Представитель банка
+			,	P_REQ_NUM			==	P_REQ_NUM			--	Номер запроса
+			,	P_REQ_DATE			==	P_REQ_DATE			--	Дата запроса
+			,	P_ACC				==	P_ACC				--	Счет
+			,	P_ACC_NUM			==	P_ACC_NUM			--	Номер счета
+			,	P_C6_SKIP_SWIFT		==	P_C6_SKIP_SWIFT		--	Пропускать заполнение графы 6 для документов SWIFT
+			,	P_CLIENT_NAME		==	lvClientName		--	Наименование клиента
+			,	P_CLIENT_INN		==	lvClientINN			--	ИНН клиента
+			,	P_CLIENT_KPP		==	lvClientKPP			--	КПП клиента
+			, 	P_REG_NUM			== 	V_REG_NUM			-- 	Регистрационный номер клиента в фонде
+			, 	P_CODE_SUBORD		== 	V_CODE_SUBORD		-- 	Код подчиненности
+			, 	P_TYPE_REP			== 	V_TYPE_REP.[0]		-- 	Тип отчета (в ПФР или в ФСС)
+			, 	P_PRINT_NOTE		== 	V_PRINT_NOTE		-- 	Выводить примечание для ФСС
+		);
+	end if;
+end;
+end;
+end;

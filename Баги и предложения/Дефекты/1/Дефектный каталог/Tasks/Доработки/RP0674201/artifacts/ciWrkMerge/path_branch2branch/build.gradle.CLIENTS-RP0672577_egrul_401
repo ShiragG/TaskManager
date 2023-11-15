@@ -1,0 +1,23 @@
+buildscript {
+	dependencies {
+		classpath files(CFT_UPDATE_PLUGIN_PATH)
+	}
+}
+
+apply plugin: ru.cft.platform.ide.plugin.UpdatePlugin
+
+task ImportZipPatch(type: ru.cft.platform.ide.plugin.tasks.ImportElement){
+    storage_file = 'patch.zip'
+    pck_file = 'patch.pck'
+    compilation = true
+}
+
+task ExecuteOperationNSI(type: ru.cft.platform.ide.plugin.tasks.RunMethodNSI) {
+	dependsOn ImportZipPatch
+	class_id = 'CONV_57'
+	method_short_name = 'U20230914_UYA'
+}
+
+task run(type: ru.cft.platform.ide.plugin.tasks.Run) {
+	dependsOn ExecuteOperationNSI
+}

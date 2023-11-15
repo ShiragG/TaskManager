@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<installations>
+<installation log-file="Logs\CFTUpdate.log" storage-app="cft-platform-ide" title="Программа установки обновления " version-text="1.0" welcome-text="Вас приветствует программа установки обновления.">
+<constraints/>
+<steps>
+<step can-skip="false" info="01. Импорт элементов модели" name="import-storage">
+<parameters>
+<parameter info="Файл хранилища" name="storage-file" value="patch.zip"/>
+<parameter info="Файл разметки" name="pck-file" value="patch.pck"/>
+<parameter info="Файл резервного хранилища" name="backup-file" value="Logs\backup_patch.zip"/>
+<parameter info="Файл журнала монитора коммуникационного канала" name="oramon-file" value="Logs\01_oramon_patch.zip.log"/>
+<parameter info="Файл логирования работы в безынтерфейсном режиме" name="log-file" value="Logs\01_pick_patch.zip.log"/>
+<parameter info="Проводить сбор статистики" name="check-stat" value="false"/>
+<parameter info="Проводить компиляцию операций и представлений" name="compilation" value="true"/>
+<parameter info="Многопоточная компиляция операций" name="method-compilation-threads" value="true"/>
+<parameter info="Режим отложенных действий" name="delayed-actions-mode" value="false"/>
+<parameter info="Замещение прав доступа" name="subject-rights-mode" value="true"/>
+<parameter info="Файл platform.project" name="project-config-path" value="..\..\DEPLOY\platform.project"/>
+</parameters>
+<exceptions default-type="error">
+<exception info="Файл хранилища не доступен или не существует" name="storage-file-not-exists" type="error"/>
+<exception info="Не удалось открыть файл хранилища" name="open-storage-file-failed" type="error"/>
+<exception info="Невалидное хранилище. Работа с таким хранилищем невозможна." name="storage-file-is-invalid" type="error"/>
+<exception info="Файл разметки не доступен или не существует" name="pck-file-not-exists" type="error"/>
+<exception info="Не удалось прочитать файл разметки" name="open-pck-file-failed" type="error"/>
+<exception info="Невалидный файл разметки. Работа с таким файлом невозможна." name="pck-file-is-invalid" type="error"/>
+<exception info="Не удалось создать файл резервного хранилища" name="create-backup-file-failed" type="error"/>
+<exception info="Ошибка проверки подписи" name="check-signature-failed" type="error"/>
+<exception info="Не удалось создать файл журнала монитора" name="create-oramon-file-failed" type="error"/>
+<exception error-code="3114" info="Нет связи с Oracle (ORA-03114)" name="pick-exception" type="error"/>
+<exception info="Не удалось создать файл логирования" name="create-log-file-failed" type="error"/>
+<exception error-code="3112" info="Режим отложенных действий не поддерживается текущей версией ТЯ" name="pick-exception" type="error"/>
+<exception info="Произошла ошибка" name="pick-exception" type="error"/>
+</exceptions>
+</step>
+<step can-skip="false" info="02. Выполнение операции конвертации НСИ" name="run-method">
+<parameters>
+<parameter info="Короткое имя ТБП" name="class-id" value="CONV_57"/>
+<parameter info="Короткое имя операции" name="method-short-name" value="U20230914_UYA"/>
+<parameter info="Файл журнала монитора коммуникационного канала" name="oramon-file" value="Logs\02_oramon_[CONV_57]_[U20230914_UYA].log"/>
+</parameters>
+<exceptions default-type="error">
+<exception info="Операция не существует" name="method-not-exists" type="error"/>
+<exception info="Операция не групповая" name="method-not-static" type="error"/>
+<exception info="Не удалось создать файл журнала монитора" name="create-oramon-file-failed" type="error"/>
+<exception info="Произошла ошибка при запуске монитора" name="oramon-exception" type="error"/>
+<exception info="При запуске тела операции произошла ошибка (SQL-exception)" name="sql-exception" type="error"/>
+</exceptions>
+</step>
+</steps>
+<images/>
+</installation>
+</installations>

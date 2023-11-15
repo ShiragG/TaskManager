@@ -1,0 +1,30 @@
+REM ERR RP0674481  
+В форме 0409128 исправлена ошибка задвоения показателей в справочнике данных, печатной форме, экспорте. Реализована отчистка справочника данных при пересчете формы.  
+
+<AUTHORS>aguljaev:a.guljaev@cft.ru</AUTHORS>
+
+
+
+<COMMENT>
+</COMMENT>
+
+<DEPLOY_CATALOG></DEPLOY_CATALOG>
+
+<DEPLOY_VERSION></DEPLOY_VERSION>
+
+
+<PATCH_PCK>
+
+REM ERR RP0674481  
+
+REM В макросе таблицы F_128_DATA и F_129_DATA заменены на REPS_DATA  
+METH F_128_DATA DEL_DATA_PARAM  
+METH F_129_DATA DEL_DATA_PARAM  
+
+</PATCH_PCK>
+
+
+
+<README_TXT></README_TXT>
+
+<EXPERT_APPROVAL_LINK></EXPERT_APPROVAL_LINK>

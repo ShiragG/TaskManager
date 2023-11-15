@@ -1,0 +1,562 @@
+class AC_FIN;
+
+@import_plsql(true)
+@this(plsql_lock:=false)
+@name('Справка об остатках денежных средств на счетах для предоставления в ПФР и ФСС')
+@tag('COPIED')
+@generate_ansi_joins(true)
+
+method PFR_ACC_SALDO is
+
+@name('По всем счетам клиента')
+public V_ALL_ACC [BOOLEAN];
+@name('Маски счетов')
+public V_ACC_MASK [STRING_250];
+@name('Список филиалов')
+public V_BRANCH_LIST [MEMO_32767];
+@name('Вид отчета')
+public V_TYPE_REP [CASE_BETWEEN_TWO];
+@name('Код подчиненности')
+public V_CODE_SUBORD [STRING_13];
+@name('Регистрационный номер клиента')
+public V_REG_NUM [STRING_13];
+
+pragma include(::[REPS_DATA].[LIB_VIEW]);	-- Библиотека макросов
+
+pragma macro(lp , 		'::[REPS_DATA].[LIB_PRINT]');
+pragma macro(xl , 		'::[OOXML].[API_XL]');
+pragma macro(lib_cl, 	'::[OPTIONAL_REP_INT].[PRX_REPS]');
+pragma macro(slib, 		'::[REPS].[SLIB]');
+pragma macro(sum_fmt, 	'trim(to_char([1],''FM99999999999999999990D00'',''NLS_NUMERIC_CHARACTERS = ''''- ''''''))', substitute);
+
+lvClientName		varchar2(32767); 			-- Наименование клиента
+lvClientINN			varchar2(32767);			-- ИНН клиента
+lvClientKPP			varchar2(32767);			-- КПП клиента
+lrAccTmp		ref [AC_FIN];					-- Сслыка на счет
+lvAccNumTmp			::[AC_FIN].[MAIN_V_ID]%type;	-- Номер счета
+lvAccMaskTmp		varchar2(32767);			-- Маска счета
+lvDescription		varchar2(2000);		-- Описание отчета
+
+-- Переменные для форматирования текста
+liFontH			integer;
+liBorderAll		integer;
+
+-- Инициализация переменных для форматирования текста
+procedure init_xl_cache	is
+begin
+	liBorderAll	:= &xl.get_border
+						( p_top			== &xl.xl_b_thin
+						, p_bottom		== &xl.xl_b_thin
+						, p_left		== &xl.xl_b_thin
+						, p_right		== &xl.xl_b_thin
+						);
+	liFontH		:= &xl.get_font
+						( p_name		== 'Arial'
+						, p_fontsize	== 10
+						);
+end;
+
+-- Процедура печати справки
+procedure Draw
+			( P_DATE			date							-- Дата отчета
+			, P_CLIENT		ref	[CLIENT]						-- Клиент
+			, P_ACC			ref	[AC_FIN]						-- Ссылка на счет
+			, P_ACC_NUM			::[AC_FIN].[MAIN_V_ID]%type		-- Номер счета
+			, P_FUND_NAME		varchar2(255)					-- Наименование ПРФ
+			, P_FUND_ADDRESS	varchar2(255)                   -- Адрес ПФР
+			, P_BANK		ref [CL_BANK_N]                     -- Банк
+			, P_BRANCH		ref [BRANCH]                        -- Филиал
+			, P_USER		ref [USER]                          -- Пользователь
+			, P_REQ_NUM			varchar2(30)                    -- Номер запроса
+			, P_REQ_DATE		date                            -- Дата запроса
+			)
+is
+	iRow 			integer := 41;				-- текущая строка
+	bIsEmpty		boolean := true;    		-- признак отсутствия/наличия данных
+	vAccVid 		varchar2(30);       		-- тип счета
+	vNomerDog		varchar2(250);      		-- номер договора
+	dDogDateB		date;               		-- дата начала действия договора
+	dDogDateE		date;               		-- дата окончания действия договора
+	nSaldo			number;						-- остаток по счету
+	nHeight			number;						-- Высота строки
+	vValue			varchar2(32767);			-- Значение в ячейке
+	iTypeRep		integer;					-- Тип отчета (для предоставления в ПФР или в ФСС)
+
+	vStrParam		varchar2(4000);				-- строка параметров
+	tvVars			&lp.tp_tabPlaceholders_v;	-- массив подстановочных переменных
+begin
+	init_xl_cache;
+	iTypeRep := V_TYPE_REP.[0];
+	-- Если выбран тип отчета "Для предоставления в ПФР"
+	if iTypeRep = 1 then
+		-- удаляется лист с печатным шаблоном отчета для ФСС,
+		&xl.DelSheet(2);
+		&xl.open_sheet(1);
+	-- иначе, если выбран тип отчета "Для предоставления в ФСС"
+	else
+		-- удаляется лист с печатным шаблоном отчета для ПФР
+		&xl.DelSheet(1);
+		&xl.open_sheet(2);
+	end if;
+
+	-- Заполняем в таблице подстановочные значения по реализации (для шапки)
+	if P_BRANCH is null then
+		-- Получение информации о банке на дату отчета
+		&slib.add_placeholders_by_param(null, tvVars, p_bank == P_BANK, p_date_rep == P_REQ_DATE, p_rep_mode == false);
+	else
+		V_BRANCH_LIST := '#'||P_BRANCH%id||'#';
+		-- Получение информации о филиале на дату отчета
+		&slib.add_placeholders_by_param(null, tvVars, p_branch == P_BRANCH, p_date_rep == P_REQ_DATE, p_rep_mode == true);
+	end if;
+
+	-- Заполняем в таблице подстановочные значения по строке параметров (для подвала)
+	::[RUNTIME].[STR].Set_Par(vStrParam, 'P_USER', P_USER%id);
+	&slib.add_placeholders_for_footer(vStrParam, tvVars);
+
+	-- установка дополнительных параметров
+	tvVars('ФОНД_ИМЯ')		:= P_FUND_NAME;
+	tvVars('ФОНД_АДРЕС')	:= P_FUND_ADDRESS;
+	&slib.split_by_char(tvVars, 'ИНН', 10);
+	&slib.split_by_char(tvVars, 'КПП', 9);
+	&slib.split_by_char(tvVars, 'БИК', 9);
+	tvVars('ЗАПРОС_ДАТА')	:= to_char(P_REQ_DATE, 'dd.mm.yy');
+	tvVars('ЗАПРОС_НОМЕР')	:= P_REQ_NUM;
+	tvVars('РЕГ_НОМЕР_Ф')	:= V_REG_NUM;
+	&slib.split_by_char(tvVars, 'РЕГ_НОМЕР_Ф', 13);
+	tvVars('КОД_ПОДЧИН_Ф')	:= V_CODE_SUBORD;
+	&slib.split_by_char(tvVars, 'КОД_ПОДЧИН_Ф', 5);
+	tvVars('ТЕКУЩАЯ_ДАТА')	:= to_char(sysdate, 'dd.mm.yyyy');
+	tvVars('ОТЧЕТНАЯ_ДАТА') :=	to_char(P_DATE, 'dd') || ' ' ||
+								(case
+									when to_char(P_DATE, 'mm') = '01' then 'января'
+									when to_char(P_DATE, 'mm') = '02' then 'февраля'
+									when to_char(P_DATE, 'mm') = '03' then 'марта'
+									when to_char(P_DATE, 'mm') = '04' then 'апреля'
+									when to_char(P_DATE, 'mm') = '05' then 'мая'
+									when to_char(P_DATE, 'mm') = '06' then 'июня'
+									when to_char(P_DATE, 'mm') = '07' then 'июля'
+									when to_char(P_DATE, 'mm') = '08' then 'августа'
+									when to_char(P_DATE, 'mm') = '09' then 'сентября'
+									when to_char(P_DATE, 'mm') = '10' then 'октября'
+									when to_char(P_DATE, 'mm') = '11' then 'ноября'
+									when to_char(P_DATE, 'mm') = '12' then 'декабря'
+								end) || ' ' ||
+								to_char(P_DATE, 'yyyy') || ' г.';
+
+	-- Печать информации по клиенту
+	for	(	select i( i									: ID
+					, i%class							: C_CLASS
+					, i->(true)(::[CL_CORP])[LONG_NAME]	: C_LONG_NAME
+					, i.[NAME]							: C_NAME
+					, i->(true)(::[CL_CORP])[KIO]		: C_KIO
+					, i.[INN]							: C_CLIENT_INN
+					, i.[KPP]							: C_CLIENT_KPP
+					)
+				in	::[CLIENT]
+			where i = P_CLIENT
+			fetch 1
+		)
+	loop
+		-- для юр.лиц выводим значение реквизита LONG_NAME
+		tvVars('НАИМЕНОВАНИЕ_КЛИЕНТА') := nvl(i.C_LONG_NAME, i.C_NAME);
+		-- ИНН/КИО
+		If i.C_CLIENT_INN is null then
+			if i.C_CLASS in (::[CL_CORP]%class, ::[CL_ORG]%class) then
+				tvVars('ИНН_КЛИЕНТА') := i.C_KIO;
+			end if;
+		else
+			tvVars('ИНН_КЛИЕНТА') := i.C_CLIENT_INN;
+		end if;
+		&slib.split_by_char(tvVars, 'ИНН_КЛИЕНТА', 12);
+		-- КПП
+		tvVars('КПП_КЛИЕНТА') := i.C_CLIENT_KPP;
+		&slib.split_by_char(tvVars, 'КПП_КЛИЕНТА', 9);
+		exit;
+	end loop;
+
+	-- Информация по счетам
+	for	(	select a( a													: ID
+					, a.[MAIN_V_ID]										: C_ACC_NUM
+					, a.[FINTOOL].[CODE_ISO]							: C_CUR
+					, a.[ARC_MOVE]										: C_ARC_MOVE
+					, a.[ACC_SUMMARY] 									: C_ACC_SUMMARY
+					, a.[COM_STATUS]  									: C_COM_STATUS
+					, a.[VID]      										: C_VID
+					, a.[SALDO]       									: C_SALDO
+					, a.[SALDO_NT]   									: C_SALDO_NT
+					, a.[DATE_OP]										: C_DATE_OP
+					, a.[DATE_CLOSE]									: C_DATE_CLOSE
+					)
+				in	::[AC_FIN]
+			where	a.[MAIN_USV].[VID_P] = ::[SYSTEM].[SYS_MAIN_PLAN]
+				and	(	a.[CLIENT_R] = P_CLIENT
+					or		(a.[CLIENT_R] is null
+						and	a.[CLIENT_V] = P_CLIENT)
+					)
+				and	a.[DATE_OP] < P_DATE
+				and  instr(V_BRANCH_LIST, '#'||a.[FILIAL]%id||'#') > 0
+			order by a.[MAIN_V_ID]
+		)
+	loop
+		-- добавлена проверка: по требованиям DBI условие patt2where требуется убрать из выбрки и перенсти в цикл
+		if	(		&bool_not(V_ALL_ACC)
+				or	nvl(::[RUNTIME].[FD].patt2where(V_ACC_MASK, '~'||a.C_ACC_NUM), '0') != '1'
+			)
+			and	a.ID != nvl(P_ACC, 0)
+		then
+			continue;
+		end if;
+
+		nSaldo := f.a_saldo
+			( p_date		== P_DATE
+			, p_acc			== a.ID
+			, p_move		== a.C_ARC_MOVE
+			, p_summary		== a.C_ACC_SUMMARY
+			, p_status		== a.C_COM_STATUS
+			, p_vid			== a.C_VID
+			, p_cur			== a.C_SALDO
+			, p_nat			== a.C_SALDO_NT
+			, p_saldo_type	== 'С'
+			, p_in_nat		== false
+		);
+		&xl.ins_row(iRow+1, 1);
+		iRow := iRow + 1;
+		&xl.PasteSpecial(41, 1, 41, 256, iRow, 1, p_no_cache == true);
+		&xl.put(iRow, 2, a.C_ACC_NUM);
+		-- получение вида счета
+		::[OPTIONAL_REP_INT].[PRX_UCH_CORE].AC_FIN_GET_PROD_REQ
+					( a.ID
+					, vNomerDog
+					, vAccVid
+					, dDogDateB
+					, dDogDateE
+					);
+		-- Если выбран отчет для предоставления в ПФР,
+		if iTypeRep = 1 then
+			&xl.put(iRow, 10, vAccVid);
+			&xl.put(iRow, 16, a.C_CUR);
+			&xl.put(iRow, 26, nSaldo);
+			&xl.put(iRow, 34, to_char(a.C_DATE_OP, 'dd.mm.yy'));
+			&xl.put(iRow, 40, to_char(a.C_DATE_CLOSE, 'dd.mm.yy'));
+		-- иначе, если выбран отчет для предоставления в ФСС, другой порядок столбцов
+		else
+			&xl.put(iRow, 10, to_char(a.C_DATE_OP, 'dd.mm.yy'));
+			&xl.put(iRow, 16, to_char(a.C_DATE_CLOSE, 'dd.mm.yy'));
+			&xl.put(iRow, 22, vAccVid);
+			&xl.put(iRow, 29, a.C_CUR);
+			&xl.put(iRow, 39, &sum_fmt(nSaldo));
+		end if;
+		bIsEmpty := false;
+	end loop;
+
+	-- Сообщение об отсутствии счетов
+	if bIsEmpty and P_ACC_NUM is not null then
+		tvVars('СЧЕТ') := P_ACC_NUM;
+		if iTypeRep = 2 then
+			tvVars('ВАЛЮТА') := nvl(P_ACC.[FINTOOL].[CODE_ISO], replace(substr(P_ACC_NUM, 6, 3), '810', '643'));
+		end if;
+	end if;
+	&slib.split_by_char(tvVars, 'СЧЕТ', 20);
+	&slib.split_by_char(tvVars, 'ВАЛЮТА', 3);
+
+	-- Устанавливается новое значение высоты выбранной строки
+	if tvVars.exists('ДОЛЖНОСТЬ_ИСПОЛНИТЕЛЬ') then
+		nHeight := ::[PFR_MOVE_DATA].[LIB].GetHeightRow(iRow + 12, 20, 28, vValue);
+		&xl.set_row_height(nHeight, iRow + 12);
+	end if;
+
+	-- Удаление пустой строки
+	if not bIsEmpty then
+		&xl.delete_row(41);
+	end if;
+
+	-- Выводим подстановочные значения в шаблоне
+	&lp.fill_xl_placeholders(tvVars);
+end;
+
+PFR_ACC_SALDO (
+	@name('Дата')
+	P_DATE in [DATE],
+	@name('Клиент')
+	P_CLIENT in [CLIENT_REF],
+	@name('Наименование территориального органа')
+	P_FUND_NAME in [STRING_254],
+	@name('Адрес территориального органа')
+	P_FUND_ADDRESS in [STRING_254],
+	@name('Банк')
+	P_BANK in [CL_BANK_REF],
+	@name('Номер запроса')
+	P_REQ_NUM in [STRING_30],
+	@name('Дата запроса')
+	P_REQ_DATE in [DATE],
+	@name('Представитель банка')
+	P_USER in [USER_REF],
+	@name('Счет')
+	P_ACC in [AC_FIN_REF],
+	@name('Территориальный орган')
+	P_FUND in [FUNDS_REF],
+	@name('Филиал')
+	P_BRANCH in [BRANCH_REF],
+	@name('Номер счета')
+	P_ACC_NUM in [ACCNUM]
+) is
+
+validate is
+/*Функция для определения рег. номера клиента в социальном фонде*/
+function GetRegNumClient (P_FONDS_AR 	::[CLIENT].[FONDS_AR]%type
+						/*Массив "Социальные фонды"*/)
+	return varchar2(40)
+	/*Возвращает регистрационный номер клиента (Фондовый номер клиента)*/
+is
+	vRegNum		varchar2(40); -- рег. номер клиента
+begin
+	vRegNum := null;
+	-- Цикл по массиву "Социальные фонды"
+	for(select x( x.[FOUND_NUM]	 : C_FOUND_NUM)
+		in ::[SOC_FOUNDS] all
+		where x%collection = P_FONDS_AR
+		and x.[FOUND] = P_FUND 									-- Отбор по заданному фонду,
+		and (x.[DATE_REG] <= P_DATE or x.[DATE_REG] is null) 	-- по дате окончания отчетного периода.
+		and (x.[REG_DATE_END] >= P_DATE or x.[REG_DATE_END] is null) -- по дате снятия с регистрации
+		order by x.[DATE_REG] desc nulls last 					-- Сортировка по дате, по убыванию
+		fetch 1
+		)
+	loop
+		vRegNum  := x.C_FOUND_NUM;
+		exit;
+	end loop;
+	return vRegNum;
+end;
+
+-- Процедура для получения информации о клиенте
+procedure GetInfoClient(P_REF_ACC	ref [AC_FIN] default null)
+is
+	vCodeFund		varchar2;		-- Код социального фонда
+begin
+	-- удаление информации о территориальном органе
+	P_FUND = P_FUND_NAME = P_FUND_ADDRESS = V_REG_NUM = V_CODE_SUBORD := null;
+	
+	-- Если выбран первый вариант,
+	if V_TYPE_REP.[0] = 1 then
+		-- отчет формируется для предоставления в ПФР,
+		vCodeFund :=  'ПФР';
+	-- иначе,
+	else
+		-- отчет формируется для предоставления в ФСС
+		vCodeFund :=  'ФСС';
+	end if;
+	
+	-- Установка контекста для выбора социального фонда в зависимости от выбранного типа отчета
+	executor.set_context ('VW_FUND_TYPE', vCodeFund);
+
+	-- Если передана ссылка на счет,
+	if P_REF_ACC is not null then
+		P_CLIENT := null;
+
+		-- цикл по финансовым счетам,
+		for (	select u(	u%id								: ID
+						,	coalesce(u.[CLIENT_R], u.[CLIENT_V]) : C_CLIENT
+						,	u.[MAIN_V_ID]						: C_MAIN_V_ID
+				)	in	::[AC_FIN]
+				where	u = P_REF_ACC
+				fetch 1
+		) loop
+			-- сохранение ссылки на клиента со счета
+			P_CLIENT := u.C_CLIENT;
+			P_ACC_NUM := u.C_MAIN_V_ID;
+			P_ACC := u.ID;
+			exit;
+		end loop;
+	end if;
+
+	-- Если заполнена ссылка на клиента,
+	if P_CLIENT is not null then
+		lvClientKPP := P_CLIENT.[KPP];
+		
+		-- цикл по клиентам,		
+		for	(	select k(	k.[FONDS_AR]											: C_FONDS_AR
+						,	coalesce(k->(true)(::[CL_CORP])[LONG_NAME], k.[NAME])	: C_NAME
+						,	coalesce(k.[INN], k->(true)(::[CL_CORP])[KIO])			: C_INN
+						, 	k.[REGISTR_NUM]											: C_REGISTR_NUM
+				)	in	::[CLIENT]
+				where	k = P_CLIENT
+				fetch 1
+		) loop
+			lvClientName 	:= k.C_NAME;
+			lvClientINN 	:= k.C_INN;
+			
+			-- цикл по социальным фондам клиента,			
+			for (	select	x(	x.[FOUND] 					: C_FUND
+							,	x.[FOUND].[CLIENTS].[NAME]	: C_FUND_NAME
+							,	x.[FOUND_NUM]				: C_FOUND_NUM)
+					in	k.C_FONDS_AR
+					where x.[FOUND].[TYPES].[CODE] = vCodeFund -- выбирается фонд по коду, в зависимости от типа отчета
+					and (x.[DATE_REG] <= P_DATE or x.[DATE_REG] is null) -- сортировка по дате, по убыванию
+					and (x.[REG_DATE_END] >= P_DATE or x.[REG_DATE_END] is null) -- по дате снятия с регистрации
+					order by x.[DATE_REG] desc nulls last
+					fetch 1
+			) loop
+				P_FUND			:= x.C_FUND;													-- Ссылка на социальный фонд
+				P_FUND_NAME		:= x.C_FUND_NAME;												-- Наименование социального фонда
+				P_FUND_ADDRESS	:= ::[RUNTIME].[VIEWFUN].GetAddress(P_FUND.[CLIENTS], 'ALL');	-- Адрес социального фонда
+				V_REG_NUM		:= x.C_FOUND_NUM;
+				exit;
+			end loop;
+			exit;
+		end loop;
+	end if;
+end;
+
+-- Процедура для получения ссылки на счет
+procedure GetAccRef(P_ACC_NUM	::[AC_FIN].[MAIN_V_ID]%type)
+is
+begin
+	P_ACC := null;
+	V_ALL_ACC := false;
+	for (	select acc(	acc		: id)
+			in ::[AC_FIN]
+			where acc.[MAIN_V_ID] = P_ACC_NUM
+			fetch 1
+	) loop
+		P_ACC		:= acc.id;
+		P_CLIENT	:= coalesce(P_ACC.[CLIENT_R], P_ACC.[CLIENT_V]);
+		exit;
+	end loop;
+end;
+
+begin
+	-- Установка умолчательных значений
+	if P_MESSAGE = 'DEFAULT' then
+		P_DATE = P_REQ_DATE	:= ::[SYSTEM].[OP_DATE];
+		-- По умолчанию поле "Маски счетов" заполняется значением настройки "Маски счетов по умолчанию для формирования справок в органы ПФР и ФСС" из справочника "Настройки."
+		lvAccMaskTmp := ::[FP_TUNE].[LIB].get_str_value('MASK_ACC_REPORT_FUNDS');		
+		V_TYPE_REP.[0] 	:= 1;
+			
+		If this is null Then
+			V_ALL_ACC	:= true;
+			P_BRANCH	:= ::[SYSTEM].[VARIABLES].OurBranch;
+			P_BANK		:= coalesce(P_BRANCH.[BANK_REQ], P_BRANCH.[BANK], &lib_cl.GetBankByBranch(null));
+			V_ACC_MASK	:= lvAccMaskTmp;
+		else
+			P_CLIENT	:= coalesce(this.[CLIENT_R], this.[CLIENT_V]);
+			P_ACC		:= this;
+			P_ACC_NUM	:= this.[MAIN_V_ID];
+			V_ALL_ACC	:= false;
+			V_ACC_MASK	:= null;
+			lrAccTmp	:= P_ACC;
+			lvAccNumTmp := P_ACC_NUM;
+			P_BRANCH	:= this.[FILIAL];
+			P_BANK		:= coalesce(P_BRANCH.[BANK_REQ], P_BRANCH.[BANK], &lib_cl.GetBankByBranch(P_BRANCH));
+			GetInfoClient(this);
+		End If;
+		V_BRANCH_LIST	:= &lib_cl.GetBranchByBank(P_BANK);
+		P_USER			:= coalesce(::[BRANCH].[SLIB].GetGeneralACC(P_ACC.[FILIAL]), ::[RUNTIME].[STDLIB].userid);
+
+	elsif P_MESSAGE = 'VALIDATE' then
+		if P_INFO = 'P_CLIENT' then
+			-- обновление информации по клиенту
+			if P_CLIENT is not null then
+				P_ACC		:= null;
+				GetInfoClient;
+			end if;
+		elsif P_INFO = 'P_ACC' then
+			-- обновление информации по счету
+			if P_ACC is not null then
+				P_CLIENT	:= coalesce(P_ACC.[CLIENT_R], P_ACC.[CLIENT_V]);
+				V_ALL_ACC	:= false;
+				GetInfoClient(P_ACC);
+				P_BRANCH	:= P_ACC.[FILIAL];
+				P_BANK		:= coalesce(P_BRANCH.[BANK_REQ], P_BRANCH.[BANK], &lib_cl.GetBankByBranch(P_BRANCH));
+			end if;
+
+		elsif P_INFO = 'P_ACC_NUM' then
+			GetAccRef(P_ACC_NUM);
+			GetInfoClient(P_ACC);
+
+		elsif P_INFO = '%VAR%.V_ALL_ACC' then
+			-- При расчете по всем счетам очищаем поле номер счета
+			if V_ALL_ACC then
+				lrAccTmp		:= P_ACC;
+				lvAccNumTmp		:= P_ACC_NUM;
+				V_ACC_MASK		:= lvAccMaskTmp;
+				P_ACC			:= null;
+				P_ACC_NUM		:= null;
+			else
+				P_ACC			:= lrAccTmp;
+				P_ACC_NUM		:= lvAccNumTmp;
+				lvAccMaskTmp	:= V_ACC_MASK;
+				V_ACC_MASK		:= null;
+			end if;
+			GetInfoClient(P_ACC);
+		elsif P_INFO = 'P_DATE' or P_INFO like '%V_TYPE_REP%' then
+			GetInfoClient(P_ACC);
+		elsif P_INFO = 'P_FUND' then
+			V_CODE_SUBORD 	:= null;
+			P_FUND_NAME		:= P_FUND.[CLIENTS].[NAME];										-- Наименование социального фонда
+			P_FUND_ADDRESS	:= ::[RUNTIME].[VIEWFUN].GetAddress(P_FUND.[CLIENTS], 'ALL');	-- Адрес социального фонда
+			V_REG_NUM 		:= GetRegNumClient(P_CLIENT.[FONDS_AR]);
+		-- при смене банка в поле с филиалом прописываем головной филиал
+		elsif P_INFO = 'P_BANK' then
+			-- если поле банк пустое, то восстанавливаем значение по умолчанию
+			if P_BANK is null then
+				P_BANK 		:= &lib_cl.GetBankByBranch(null);
+				P_BRANCH	:= ::[SYSTEM].[VARIABLES].OurBranch;
+			else
+				P_BRANCH	:= &lib_cl.GetHeadBranchByBank(P_BANK);
+			end if;
+			-- определим список филиалов, принадлежащих банку
+			V_BRANCH_LIST := &lib_cl.GetBranchByBank(P_BANK);
+		end if;
+	end if;
+end;
+
+execute is
+begin
+	-- Проверка на регистрацию приложения, к которому относится данный расчет
+	if not ::[REPS_DATA].[LIB_REG_DOP_PRIL].CheckRegPril('1B010195') then
+		pragma error('Для использования операции, необходимо зарегистрировать приложение с кодом 1B010195 "Формирование справок и выписок по запросам ПФР и ФСС".');
+	end if;
+	
+	If P_REQ_DATE is null Then
+		pragma error('Пожалуйста, укажите дату запроса!');
+	End If;
+
+	If P_REQ_NUM is null Then
+		pragma error('Пожалуйста, укажите номер запроса!');
+	End If;
+	
+	-- На основании Приказа ФСС РФ от 02.11.2017 №539
+	if P_REQ_DATE >= to_date('02/02/2018', 'dd/mm/yyyy') then
+		&lp.xl_init('pfr_acc_saldo_539.xlt');
+	-- предыдущие указания
+	else
+		&lp.xl_init('pfr_acc_saldo.xlt');
+	end if;
+		
+	draw( P_DATE
+		, P_CLIENT
+		, P_ACC
+		, P_ACC_NUM
+		, P_FUND_NAME
+		, P_FUND_ADDRESS
+		, P_BANK
+		, P_BRANCH
+		, P_USER
+		, P_REQ_NUM
+		, P_REQ_DATE
+		);
+	
+	-- Формирование описания отчета
+	if V_TYPE_REP.[0] = 1 then
+		lvDescription := 'Выписка об остатках денежных средств на счетах для предоставления в ПФР';
+	else
+		lvDescription := 'Выписка об остатках денежных средств на счетах для предоставления в ФСС';
+	end if;
+	&lp.xl_finish(p_description == lvDescription);
+	
+	::[DEFVALS].[SLIB].SaveStr(P_BRANCH, 'AC_FIN', 'PFR', 'ACC_MASK', nvl(V_ACC_MASK, lvAccMaskTmp));
+	-- Добавление информации об использовании приложения
+	::[OPTIONAL_REP_INT].[PRX_REPS].AddData('PFR_ACC_SALDO', null);
+end;
+end;
+end;

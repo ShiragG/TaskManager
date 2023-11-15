@@ -1,0 +1,71 @@
+class F_129_DATA;
+
+@generate_ansi_joins(true)
+@name('Удалить реализацию отчета')
+@tag('COPIED')
+method DEL_DATA_PARAM is
+
+pragma include(::[REPS_DATA].[LIB_DEL_PARAM]);
+
+DEL_DATA_PARAM (
+	@name('Параметры')
+	P_PARAM in [REPS_PARAMS_REF],
+	@name('Параметры удаления')
+	P_INFO_PAR in [STRING_4000]
+) is
+
+execute is
+	iCount								integer;
+	vRep								varchar2(32767);
+	rProf							ref [REPS_PROF_TUN];
+	bKeepPar							boolean;
+	bOnlyForm							boolean;
+begin
+	-- проверка на пустоту значения параметра реализации
+	if P_PARAM is null
+	then
+		debug_pipe('Реализация не указана.', 0);
+		return;
+	end if;
+	
+	vRep := '';
+	--Получение кода отчёта и проверка на существование реализации
+	for(select p( p.[REPORT].[CODE]				: C_REP_CODE
+				 ,p.[PROF]						: C_PROF
+				)
+		in ::[REPS_PARAMS]
+		where p = P_PARAM
+	)loop
+		vRep := p.C_REP_CODE;
+		rProf := p.C_PROF;
+		debug_pipe('Удаление данных реализации c ID ['||P_PARAM%id||'] отчёта с кодом '||vRep, 0);
+		exit;
+	end loop;
+
+	--Если отчёт не найден, то не удалось найти реализацию
+	if vRep = ''
+	then
+		debug_pipe('Реализация с ID ['||to_char(P_PARAM)||'] не найдена.', 0);
+		return;
+	end if;
+
+	--Получение параметра "Не удалять реализацию" (ДА - реализация не удаляется, НЕТ - реализация удаляется)
+	bKeepPar := nvl(::[RUNTIME].[STR].get_bool_par(P_INFO_PAR, 'KEEP_PAR'), false);
+	--Получение параметра "Не удалять только формульные настройки"
+	bOnlyForm := nvl(::[RUNTIME].[STR].get_bool_par(P_INFO_PAR, 'ONLY_FORMULA'), false);
+
+	--Удаление данных
+	iCount := 0;
+	&del_data_param(::[REPS_DATA], P_PARAM, rProf, bOnlyForm, iCount, [DELETE#AUTO]);
+
+	-- Если pKeepPar = НЕТ, то удалить реализацию
+	if not bKeepPar and not bOnlyForm
+	then
+		debug_pipe('Удаление реализации с ID ['||P_PARAM%id||']', 1);
+		P_PARAM.[DELETE#AUTO];
+	end if;
+
+	debug_pipe('Удаление данных окончено. Удалено записей : '||iCount||'.', 0);	
+end;
+end;
+end;

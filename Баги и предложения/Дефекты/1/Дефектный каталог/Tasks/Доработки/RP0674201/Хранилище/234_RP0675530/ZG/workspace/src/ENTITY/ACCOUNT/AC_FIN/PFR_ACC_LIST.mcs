@@ -1,0 +1,68 @@
+'Установка возможности расчета, подсветка незаполненых обязательных значений
+Sub ValidateParam
+	' Кнопка расчета доступна, если указана клиент, дата запроса, номер запроса и регистрационный номер.
+	Ok.Enabled = ( ObjClient.Text <> "" and P_REQ_DATE <> "" and P_REQ_NUM <> "" and txtRegNum <> "")
+	
+	' Если номер запроса указан
+	If P_REQ_NUM <> "" Then
+		' то фон номера запроса раскрашивается обычным (белым) цветом
+		P_REQ_NUM.BackColor = &h00FFFFFF
+	Else
+		' иначе подсвечивается красным
+		P_REQ_NUM.BackColor = &h00DBDAFC
+	End If
+	
+	' Если дата запроса указана
+	If P_REQ_DATE <> "" Then
+		' то фон номера запроса раскрашивается обычным (белым) цветом
+		P_REQ_DATE.BackColor = &h00FFFFFF
+	Else
+		' иначе подсвечивается красным
+		P_REQ_DATE.BackColor = &h00DBDAFC
+	End If
+	
+	' Если клиент указан
+	If ObjClient.Text <> "" Then
+		' то фон номера запроса раскрашивается обычным (белым) цветом
+		txtClient.BackColor = &h00FFFFFF
+	Else
+		' иначе подсвечивается красным
+		txtClient.BackColor = &h00DBDAFC
+	End If 
+	
+	' Если рег. номер клиента указан
+	If txtRegNum <> "" Then
+		' то фон номера запроса раскрашивается обычным (белым) цветом
+		txtRegNum.BackColor = &h00FFFFFF
+	Else
+		' иначе подсвечивается красным
+		txtRegNum.BackColor = &h00DBDAFC
+	End If 
+	
+End Sub
+
+Public Function Main(LastControl)
+	' "Раскраска" обязательных полей и установка доступности кнопки ОК
+	ValidateParam
+	
+	Main = True 'Результат валидатора (True, False, NULL)
+End Function
+
+' При изменении даты запроса
+Public Sub P_REQ_DATE_OnChange(Cancel)
+	' "Раскраска" обязательных полей и установка доступности кнопки ОК
+	ValidateParam	
+End Sub
+
+
+' При изменении номера запроса
+Public Sub P_REQ_NUM_OnChange(Cancel)
+	' "Раскраска" обязательных полей и установка доступности кнопки ОК
+	ValidateParam
+End Sub
+
+' При изменении рег. номер клиента
+Public Sub txtRegNum_OnChange(Cancel)
+	' "Раскраска" обязательных полей и установка доступности кнопки ОК
+	ValidateParam
+End Sub
