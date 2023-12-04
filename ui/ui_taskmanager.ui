@@ -14,8 +14,8 @@
    <string>Task Manager</string>
   </property>
   <property name="windowIcon">
-   <iconset resource="../../src/resources.qrc">
-    <normaloff>:/icons/icons/ico/light/paw.ico</normaloff>:/icons/icons/ico/light/paw.ico</iconset>
+   <iconset>
+    <normaloff>:/icons/src/icons/ico/light/paw.ico</normaloff>:/icons/src/icons/ico/light/paw.ico</iconset>
   </property>
   <property name="styleSheet">
    <string notr="true">*{
@@ -26,13 +26,13 @@
 	margin:0;
 }
 #leftMenuSubContainer{
-	background-color: rgb(150, 150, 150);
+	background-color:rgb(65, 87, 122)
 }
 #leftMenu{
-	background-color: rgb(216, 211, 255);
+	background-color: rgb(100, 135, 188)
 }
 #headerContainer{
-	background-color: rgb(200, 200, 200);
+	background-color: rgb(65, 87, 122);
 }
 #notificationContent{
 	background-color: rgb(192, 220, 255);
@@ -44,6 +44,11 @@ QPushButton{
 }
 QPushButton:hover{
 	background-color: rgb(235, 235, 235);
+}
+QToolTip { 
+	background-color: white; 
+	color: black; 
+	border: black solid 1px
 }</string>
   </property>
   <widget class="QWidget" name="centralwidget">
@@ -144,8 +149,8 @@ QPushButton:hover{
                 <string/>
                </property>
                <property name="icon">
-                <iconset resource="../../src/resources.qrc">
-                 <normaloff>:/icons/icons/svg/dark/menu.svg</normaloff>:/icons/icons/svg/dark/menu.svg</iconset>
+                <iconset resource="../resources.qrc">
+                 <normaloff>:/icons/src/icons/png/light/menu.png</normaloff>:/icons/src/icons/png/light/menu.png</iconset>
                </property>
                <property name="iconSize">
                 <size>
@@ -188,8 +193,8 @@ QPushButton:hover{
                 <string/>
                </property>
                <property name="icon">
-                <iconset resource="../../src/resources.qrc">
-                 <normaloff>:/icons/icons/svg/dark/gear.svg</normaloff>:/icons/icons/svg/dark/gear.svg</iconset>
+                <iconset resource="../resources.qrc">
+                 <normaloff>:/icons/src/icons/png/light/gear.png</normaloff>:/icons/src/icons/png/light/gear.png</iconset>
                </property>
                <property name="iconSize">
                 <size>
@@ -220,8 +225,8 @@ QPushButton:hover{
                 <string/>
                </property>
                <property name="icon">
-                <iconset resource="../../src/resources.qrc">
-                 <normaloff>:/icons/icons/svg/dark/info.svg</normaloff>:/icons/icons/svg/dark/info.svg</iconset>
+                <iconset resource="../resources.qrc">
+                 <normaloff>:/icons/src/icons/png/light/info.png</normaloff>:/icons/src/icons/png/light/info.png</iconset>
                </property>
                <property name="iconSize">
                 <size>
@@ -279,41 +284,115 @@ QPushButton:hover{
              <property name="bottomMargin">
               <number>0</number>
              </property>
-             <item>
+             <item alignment="Qt::AlignHCenter|Qt::AlignTop">
               <widget class="QStackedWidget" name="menuContents">
+               <property name="layoutDirection">
+                <enum>Qt::LeftToRight</enum>
+               </property>
                <property name="currentIndex">
                 <number>0</number>
                </property>
                <widget class="QWidget" name="modulesPage">
+                <property name="layoutDirection">
+                 <enum>Qt::LeftToRight</enum>
+                </property>
                 <layout class="QVBoxLayout" name="verticalLayout_10">
+                 <property name="spacing">
+                  <number>0</number>
+                 </property>
+                 <property name="leftMargin">
+                  <number>0</number>
+                 </property>
+                 <property name="topMargin">
+                  <number>0</number>
+                 </property>
+                 <property name="rightMargin">
+                  <number>0</number>
+                 </property>
+                 <property name="bottomMargin">
+                  <number>0</number>
+                 </property>
                  <item>
-                  <widget class="QLabel" name="label">
-                   <property name="text">
-                    <string>Модули</string>
+                  <layout class="QVBoxLayout" name="verticalLayout_16">
+                   <property name="spacing">
+                    <number>10</number>
                    </property>
-                  </widget>
-                 </item>
-                 <item>
-                  <widget class="QListWidget" name="listWidget">
-                   <property name="enabled">
-                    <bool>true</bool>
+                   <property name="topMargin">
+                    <number>0</number>
                    </property>
                    <item>
-                    <property name="text">
-                     <string>Ведение задач</string>
-                    </property>
+                    <widget class="QLabel" name="label">
+                     <property name="maximumSize">
+                      <size>
+                       <width>16777215</width>
+                       <height>40</height>
+                      </size>
+                     </property>
+                     <property name="font">
+                      <font>
+                       <pointsize>14</pointsize>
+                      </font>
+                     </property>
+                     <property name="text">
+                      <string>Модули</string>
+                     </property>
+                    </widget>
                    </item>
                    <item>
-                    <property name="text">
-                     <string>Активные задачи</string>
-                    </property>
+                    <widget class="QPushButton" name="showTasksBtn">
+                     <property name="minimumSize">
+                      <size>
+                       <width>0</width>
+                       <height>30</height>
+                      </size>
+                     </property>
+                     <property name="font">
+                      <font>
+                       <pointsize>12</pointsize>
+                      </font>
+                     </property>
+                     <property name="text">
+                      <string>Ведение задач</string>
+                     </property>
+                    </widget>
                    </item>
                    <item>
-                    <property name="text">
-                     <string>Котёл</string>
-                    </property>
+                    <widget class="QPushButton" name="showActiveTasksBtn">
+                     <property name="minimumSize">
+                      <size>
+                       <width>0</width>
+                       <height>30</height>
+                      </size>
+                     </property>
+                     <property name="font">
+                      <font>
+                       <pointsize>12</pointsize>
+                      </font>
+                     </property>
+                     <property name="text">
+                      <string>Активные задачи</string>
+                     </property>
+                    </widget>
                    </item>
-                  </widget>
+                   <item>
+                    <widget class="QPushButton" name="showPotBtn">
+                     <property name="minimumSize">
+                      <size>
+                       <width>0</width>
+                       <height>30</height>
+                      </size>
+                     </property>
+                     <property name="font">
+                      <font>
+                       <pointsize>12</pointsize>
+                      </font>
+                     </property>
+                     <property name="text">
+                      <string>Котёл</string>
+                     </property>
+                    </widget>
+                   </item>
+                  </layout>
                  </item>
                 </layout>
                </widget>
@@ -444,8 +523,8 @@ QPushButton:hover{
                 <string/>
                </property>
                <property name="icon">
-                <iconset resource="../../src/resources.qrc">
-                 <normaloff>:/icons/icons/svg/dark/action.svg</normaloff>:/icons/icons/svg/dark/action.svg</iconset>
+                <iconset resource="../resources.qrc">
+                 <normaloff>:/icons/src/icons/png/light/action.png</normaloff>:/icons/src/icons/png/light/action.png</iconset>
                </property>
                <property name="iconSize">
                 <size>
@@ -476,8 +555,8 @@ QPushButton:hover{
                 <string/>
                </property>
                <property name="icon">
-                <iconset resource="../../src/resources.qrc">
-                 <normaloff>:/icons/icons/svg/dark/add.svg</normaloff>:/icons/icons/svg/dark/add.svg</iconset>
+                <iconset resource="../resources.qrc">
+                 <normaloff>:/icons/src/icons/png/light/add.png</normaloff>:/icons/src/icons/png/light/add.png</iconset>
                </property>
                <property name="iconSize">
                 <size>
@@ -508,8 +587,40 @@ QPushButton:hover{
                 <string/>
                </property>
                <property name="icon">
-                <iconset resource="../../src/resources.qrc">
-                 <normaloff>:/icons/icons/svg/dark/remove.svg</normaloff>:/icons/icons/svg/dark/remove.svg</iconset>
+                <iconset resource="../resources.qrc">
+                 <normaloff>:/icons/src/icons/png/light/remove.png</normaloff>:/icons/src/icons/png/light/remove.png</iconset>
+               </property>
+               <property name="iconSize">
+                <size>
+                 <width>24</width>
+                 <height>24</height>
+                </size>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="editBtn">
+               <property name="minimumSize">
+                <size>
+                 <width>40</width>
+                 <height>40</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>40</width>
+                 <height>40</height>
+                </size>
+               </property>
+               <property name="toolTip">
+                <string>Изменить</string>
+               </property>
+               <property name="text">
+                <string/>
+               </property>
+               <property name="icon">
+                <iconset resource="../resources.qrc">
+                 <normaloff>:/icons/src/icons/png/light/edit.png</normaloff>:/icons/src/icons/png/light/edit.png</iconset>
                </property>
                <property name="iconSize">
                 <size>
@@ -583,8 +694,8 @@ QPushButton:hover{
                 <string/>
                </property>
                <property name="icon">
-                <iconset resource="../../src/resources.qrc">
-                 <normaloff>:/icons/icons/svg/dark/bell.svg</normaloff>:/icons/icons/svg/dark/bell.svg</iconset>
+                <iconset resource="../resources.qrc">
+                 <normaloff>:/icons/src/icons/png/light/bell.png</normaloff>:/icons/src/icons/png/light/bell.png</iconset>
                </property>
                <property name="iconSize">
                 <size>
@@ -602,6 +713,11 @@ QPushButton:hover{
        </item>
        <item>
         <widget class="QWidget" name="notificationContent" native="true">
+         <property name="font">
+          <font>
+           <pointsize>10</pointsize>
+          </font>
+         </property>
          <layout class="QVBoxLayout" name="verticalLayout_6">
           <item>
            <widget class="QFrame" name="frame_3">
@@ -631,7 +747,7 @@ QPushButton:hover{
           <item>
            <widget class="QStackedWidget" name="mainContents">
             <property name="currentIndex">
-             <number>2</number>
+             <number>0</number>
             </property>
             <widget class="QWidget" name="taskManagerPage">
              <layout class="QVBoxLayout" name="verticalLayout_11">
@@ -693,7 +809,7 @@ QPushButton:hover{
   </widget>
  </widget>
  <resources>
-  <include location="../../src/resources.qrc"/>
+  <include location="../resources.qrc"/>
  </resources>
  <connections/>
 </ui>
