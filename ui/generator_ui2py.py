@@ -3,7 +3,7 @@ import re
 import time
 
 #.qrc>py
-# pyside6-rcc resources.qrc > resources_rc.py
+# pyside6-rcc resources.qrc -o resources_rc.py
 
 def generate_all_ui2py(path: str):
     files = os.listdir(path)

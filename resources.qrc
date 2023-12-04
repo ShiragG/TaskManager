@@ -1,0 +1,13 @@
+<RCC>
+  <qresource prefix="icons">
+    <file>src/icons/png/light/action.png</file>
+    <file>src/icons/png/light/add.png</file>
+    <file>src/icons/png/light/bell.png</file>
+    <file>src/icons/png/light/edit.png</file>
+    <file>src/icons/png/light/gear.png</file>
+    <file>src/icons/png/light/info.png</file>
+    <file>src/icons/png/light/menu.png</file>
+    <file>src/icons/png/light/paw.png</file>
+    <file>src/icons/png/light/remove.png</file>
+  </qresource>
+</RCC>
