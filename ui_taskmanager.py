@@ -17,14 +17,15 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QPalette, QPixmap, QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
     QMainWindow, QPlainTextEdit, QPushButton, QSizePolicy,
-    QSpacerItem, QStackedWidget, QVBoxLayout, QWidget)
+    QSpacerItem, QStackedWidget, QTabWidget, QVBoxLayout,
+    QWidget)
 import resources_rc
 
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
             MainWindow.setObjectName(u"MainWindow")
-        MainWindow.resize(981, 714)
+        MainWindow.resize(1097, 714)
         icon = QIcon()
         icon.addFile(u":/icons/src/icons/ico/light/paw.ico", QSize(), QIcon.Normal, QIcon.Off)
         MainWindow.setWindowIcon(icon)
@@ -363,7 +364,9 @@ class Ui_MainWindow(object):
         self.mainBodyContent = QWidget(self.mainBodyContainer)
         self.mainBodyContent.setObjectName(u"mainBodyContent")
         self.verticalLayout_9 = QVBoxLayout(self.mainBodyContent)
+        self.verticalLayout_9.setSpacing(0)
         self.verticalLayout_9.setObjectName(u"verticalLayout_9")
+        self.verticalLayout_9.setContentsMargins(0, 0, 0, 0)
         self.mainContents = QStackedWidget(self.mainBodyContent)
         self.mainContents.setObjectName(u"mainContents")
         self.taskManagerPage = QWidget()
@@ -372,31 +375,46 @@ class Ui_MainWindow(object):
         self.verticalLayout_11.setObjectName(u"verticalLayout_11")
         self.label_4 = QLabel(self.taskManagerPage)
         self.label_4.setObjectName(u"label_4")
-        self.label_4.setFont(font)
+        self.label_4.setFont(font1)
 
         self.verticalLayout_11.addWidget(self.label_4)
 
+        self.taskManagerTab = QTabWidget(self.taskManagerPage)
+        self.taskManagerTab.setObjectName(u"taskManagerTab")
+
+        self.verticalLayout_11.addWidget(self.taskManagerTab)
+
         self.mainContents.addWidget(self.taskManagerPage)
-        self.activeTasksPage = QWidget()
-        self.activeTasksPage.setObjectName(u"activeTasksPage")
-        self.verticalLayout_12 = QVBoxLayout(self.activeTasksPage)
+        self.activeTaskPage = QWidget()
+        self.activeTaskPage.setObjectName(u"activeTaskPage")
+        self.verticalLayout_12 = QVBoxLayout(self.activeTaskPage)
         self.verticalLayout_12.setObjectName(u"verticalLayout_12")
-        self.label_3 = QLabel(self.activeTasksPage)
+        self.label_3 = QLabel(self.activeTaskPage)
         self.label_3.setObjectName(u"label_3")
-        self.label_3.setFont(font)
+        self.label_3.setFont(font1)
 
         self.verticalLayout_12.addWidget(self.label_3)
 
-        self.mainContents.addWidget(self.activeTasksPage)
+        self.activeTaskTab = QTabWidget(self.activeTaskPage)
+        self.activeTaskTab.setObjectName(u"activeTaskTab")
+
+        self.verticalLayout_12.addWidget(self.activeTaskTab)
+
+        self.mainContents.addWidget(self.activeTaskPage)
         self.potPage = QWidget()
         self.potPage.setObjectName(u"potPage")
         self.verticalLayout_13 = QVBoxLayout(self.potPage)
         self.verticalLayout_13.setObjectName(u"verticalLayout_13")
         self.label_5 = QLabel(self.potPage)
         self.label_5.setObjectName(u"label_5")
-        self.label_5.setFont(font)
+        self.label_5.setFont(font1)
 
         self.verticalLayout_13.addWidget(self.label_5)
+
+        self.tabWidget_2 = QTabWidget(self.potPage)
+        self.tabWidget_2.setObjectName(u"tabWidget_2")
+
+        self.verticalLayout_13.addWidget(self.tabWidget_2)
 
         self.mainContents.addWidget(self.potPage)
 
@@ -414,6 +432,8 @@ class Ui_MainWindow(object):
 
         self.menuContents.setCurrentIndex(0)
         self.mainContents.setCurrentIndex(0)
+        self.taskManagerTab.setCurrentIndex(-1)
+        self.activeTaskTab.setCurrentIndex(-1)
 
 
         QMetaObject.connectSlotsByName(MainWindow)

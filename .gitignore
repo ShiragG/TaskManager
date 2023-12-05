@@ -167,7 +167,5 @@ cython_debug/
 taskManagerSettings.json
 test.py
 taskManagerSettings.json
-
-# Всё что связано с работой базы данный
-DatabaseConnector.py
-select_to_db.*
+settings.json
+*.~sql
