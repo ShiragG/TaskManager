@@ -1,5 +1,6 @@
 <RCC>
   <qresource prefix="icons">
+    <file>src/icons/ico/light/paw.ico</file>
     <file>src/icons/png/light/action.png</file>
     <file>src/icons/png/light/add.png</file>
     <file>src/icons/png/light/bell.png</file>

@@ -4,6 +4,7 @@ import time
 
 #.qrc>py
 # pyside6-rcc resources.qrc -o resources_rc.py
+# pyside6-uic ui_taskmanager.ui -o ui_taskmanager.py
 
 def generate_all_ui2py(path: str):
     files = os.listdir(path)
@@ -16,7 +17,7 @@ def generate_all_ui2py(path: str):
     for it in ui_list:
         file_path = os.path.join(path, it)
         file_name_without_extension = file_path.split(os.sep)[-1].removesuffix('.ui')
-        cmd = f'pyside6-uic {file_path} > {path}{os.sep}{file_name_without_extension}.py'
+        cmd = f'pyside6-uic {file_path} -o {path}{os.sep}{file_name_without_extension}.py'
 
         # Даём время на формирование файлов
         time.sleep(0.5)
