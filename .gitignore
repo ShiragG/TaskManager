@@ -163,7 +163,7 @@ cython_debug/
 .vscode
 
 # My ignore
-"Рабочая директория"/
+Рабочая директория
 taskManagerSettings.json
 test.py
 taskManagerSettings.json
