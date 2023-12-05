@@ -159,7 +159,15 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+#vscode
+.vscode
+
 # My ignore
 "Рабочая директория"/
 taskManagerSettings.json
 test.py
+taskManagerSettings.json
+
+# Всё что связано с работой базы данный
+DatabaseConnector.py
+select_to_db.*
