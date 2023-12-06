@@ -55,7 +55,12 @@ class Ui_MainWindow(object):
 "}\n"
 "QPushButton:hover{\n"
 "	background-color: rgb(235, 235, 235);\n"
+"	left: -2px;\n"
 "}\n"
+"QPushButton::menu-indicator {\n"
+"	 image: none;\n"
+"}\n"
+"\n"
 "QToolTip { \n"
 "	background-color: white; \n"
 "	color: black; \n"
@@ -411,10 +416,10 @@ class Ui_MainWindow(object):
 
         self.verticalLayout_13.addWidget(self.label_5)
 
-        self.tabWidget_2 = QTabWidget(self.potPage)
-        self.tabWidget_2.setObjectName(u"tabWidget_2")
+        self.potTab = QTabWidget(self.potPage)
+        self.potTab.setObjectName(u"potTab")
 
-        self.verticalLayout_13.addWidget(self.tabWidget_2)
+        self.verticalLayout_13.addWidget(self.potTab)
 
         self.mainContents.addWidget(self.potPage)
 
