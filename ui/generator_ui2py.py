@@ -5,6 +5,8 @@ import time
 #.qrc>py
 # pyside6-rcc resources.qrc -o resources_rc.py
 # pyside6-uic ui_taskmanager.ui -o ui_taskmanager.py
+# pyside6-uic ui_task.ui -o ui_task.py
+# pyside6-uic ui_dir.ui -o ui_dir.py
 
 def generate_all_ui2py(path: str):
     files = os.listdir(path)

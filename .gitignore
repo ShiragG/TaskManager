@@ -164,6 +164,7 @@ cython_debug/
 
 # My ignore
 Рабочая директория
+Working directory
 taskManagerSettings.json
 test.py
 taskManagerSettings.json

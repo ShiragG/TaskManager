@@ -44,7 +44,12 @@ QPushButton{
 }
 QPushButton:hover{
 	background-color: rgb(235, 235, 235);
+	left: -2px;
 }
+QPushButton::menu-indicator {
+	 image: none;
+}
+
 QToolTip { 
 	background-color: white; 
 	color: black; 
@@ -762,7 +767,7 @@ QToolTip {
           <item>
            <widget class="QStackedWidget" name="mainContents">
             <property name="currentIndex">
-             <number>2</number>
+             <number>0</number>
             </property>
             <widget class="QWidget" name="taskManagerPage">
              <layout class="QVBoxLayout" name="verticalLayout_11">
