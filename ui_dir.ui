@@ -29,6 +29,11 @@
    <iconset resource="resources.qrc">
     <normaloff>:/icons/src/icons/ico/light/paw.ico</normaloff>:/icons/src/icons/ico/light/paw.ico</iconset>
   </property>
+  <property name="styleSheet">
+   <string notr="true">*{
+border-width: 1px;
+}</string>
+  </property>
   <layout class="QVBoxLayout" name="verticalLayout_2">
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout">
@@ -74,7 +79,7 @@
      <item>
       <widget class="QCheckBox" name="period">
        <property name="text">
-        <string>Срок</string>
+        <string>Срок до</string>
        </property>
       </widget>
      </item>

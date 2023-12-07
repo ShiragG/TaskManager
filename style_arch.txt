@@ -1,0 +1,37 @@
+*{
+	border:none;
+	background-color:transparent;
+	background: none;
+	padding: 0;
+	margin:0;
+}
+#leftMenuSubContainer{
+	background-color:rgb(65, 87, 122)
+}
+#leftMenu{
+	background-color: rgb(100, 135, 188)
+}
+#headerContainer{
+	background-color: rgb(65, 87, 122);
+}
+#notificationContent{
+	background-color: rgb(192, 220, 255);
+	border-radius:10px;
+	
+}
+QPushButton{
+	padding: 2px 5px;
+}
+QPushButton:hover{
+	background-color: rgb(235, 235, 235);
+	left: -2px;
+}
+QPushButton::menu-indicator {
+	 image: none;
+}
+
+QToolTip { 
+	background-color: white; 
+	color: black; 
+	border: black solid 1px
+}
