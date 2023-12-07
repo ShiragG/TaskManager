@@ -4,12 +4,13 @@ import json
 
 from ui_taskmanager import *
 from ui_task import *
-from ui_dir import * 
+from ui_dir import *
 
 from PySide6.QtWidgets import (
     QMessageBox, QTableWidget, QAbstractItemView, QHeaderView, QMenu)
 from PySide6.QtGui import (QAction, QColor)
 from PySide6 import QtGui
+
 
 class TaskManager(QMainWindow):
     def __init__(self) -> None:
@@ -115,11 +116,9 @@ class TaskManager(QMainWindow):
             return False
         return True
 
-    def printInfo(self, title: str = None, text: str = None, by_ui: bool = True):
+    def printInfo(self, title: str = None, text: str = None):
         '''Выводит информацию на экран и в консоль'''
-        if by_ui:
-            QMessageBox.information(self, title, text)
-        print(title + ': '+text)
+        QMessageBox.information(self, title, text)
 
     def initHandler(self):
         '''
@@ -250,11 +249,11 @@ class TaskManager(QMainWindow):
         btns_menu['add'].addAction('Создать директорию', self.openDirWindow)
         btns_menu['add'].addAction('Создать задачу', self.openTaskWindow)
         # Меню убрать
-        btns_menu['remove'].addAction('Удалить директорию', self.removeDir)
-        btns_menu['remove'].addAction('Убрать задачу', self.removeTask)
+        btns_menu['remove'].addAction('Удалить текущую директорию', self.removeDir)
+        btns_menu['remove'].addAction('Убрать выбранную задачу', self.removeTask)
         # Меню изменить
-        btns_menu['edit'].addAction('Редактировать директорию', self.editDir)
-        btns_menu['edit'].addAction('Редактировать задачу', self.editTask)
+        btns_menu['edit'].addAction('Редактировать текущую директорию', self.editDir)
+        btns_menu['edit'].addAction('Редактировать выбранную задачу', self.editTask)
 
         return btns_menu
 
@@ -288,7 +287,6 @@ class TaskManager(QMainWindow):
 # Модуль "Ведение задач"
 ###########################################################
 
-
     def fillTaskManagerTab(self):
         '''
         Заполняет таблицу на основании рабочей директории
@@ -299,8 +297,11 @@ class TaskManager(QMainWindow):
 
         # Читаем словарь с папками в рабочей директории и заполняем таблицу
         for dir_name in dir_list.keys():
-            if not self.setDir2Tab(dir_name, 0):
-                continue
+
+            # Получаем информацию по директории и создаём таблицу
+            dir_data = self.getDirData(dir_name)
+            self.createDir2Tab(dir_data)
+
             for task_number in dir_list[dir_name]:
                 # Исключаем папки
                 if task_number in (self.settings.get('template_name'), self.settings.get('archive_name')):
@@ -311,9 +312,6 @@ class TaskManager(QMainWindow):
                 # Проверяем что в папке есть файл с настройками
                 if not os.path.isfile(task_data_path):
                     continue
-
-                task_data = self.readJson(task_data_path)
-                self.setTask2Tab(task_data, tab_index)
 
     def readWorkDir(self) -> dict:
         '''
@@ -326,78 +324,210 @@ class TaskManager(QMainWindow):
                 self.getDirPath(dir_name))
         return dir_task_list
 
-    def getDirPath(self, dir_name: str) -> str:
+########################
+# Работа с директорией
+########################
+
+    def getDirPath(self, dir_name: str, get_dir_data_path: bool = False) -> str:
         '''
         Возвращает полный путь до рабочей директории
         '''
-        return os.path.join(self.settings.get('work_dir'), dir_name)
-
-    def getTaskPath(self, dir_name: str, task_number: str, getTaskDataPath: bool = False) -> str:
-        '''Возвращает путь до задачи или до taskData.json'''
-        if getTaskDataPath:
-            path = os.path.join(self.getDirPath(
-                dir_name), task_number, '.taskData.json')
+        if get_dir_data_path:
+            path = os.path.join(self.getDirPath(dir_name), '.dirData.json')
         else:
-            path = os.path.join(self.getDirPath(dir_name), task_number)
+            path = os.path.join(self.settings.get('work_dir'), dir_name)
         return path
-
-    def setDir2Tab(self, dir_name: str, widget_index: int) -> bool:
+    
+    def getDirData(self,dir_name) -> dict:
         '''
-        Добавляет или изменяет директорию в таблице
+        Возвращает информацию по директории
         '''
-        # Получаем столбцы для таблицы
-        column_list = []
-        match widget_index:
-            case 0:
-                column_list = self.settings.get('task_manager_columns')
-            case 1:
-                # TODO
-                pass
-            case 2:
-                # TODO
-                pass
-            case _:
-                print('Неизвестное название таблицы')
+        dir_data_path = self.getDirPath(dir_name,True)
+        # Проверяем есть файл с настройками
+        if not os.path.isfile(dir_data_path):
+            self.printInfo('Ошибка!',f'В папке {dir_name}, не найден настроечный файл .dirData.json')
+            return None
+        
+        return self.readJson(dir_data_path)
 
-        # Создаём таблицу
-        tab = QTableWidget(0, len(column_list))
 
-        # Тригер на редактирование таблицы
-        # tab.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-
-        # Задаём названия колонок
-        label_list = []
-        for label, index in column_list, len(column_list):
-            label_list.append(label[0])  # Название столбца
-            tab.setRowHidden(index, label[1])  # Признак отображения
-
-        tab.setHorizontalHeaderLabels(label_list)
-
-        # TODO понять как сделать динамически изменяемую таблицу
-        # Задаём растягивание для таблцы
-        # tab.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-
-        # Передаём таблицу на форму
-        self.ui.taskManagerTab.addTab(tab, dir_name)
-
-    def setTask2Tab(self, task_data: dict, tab_index: int) -> bool:
+    def createDir(self, dir_data: dict) -> bool:
         '''
-        Добавляет или изменяет задачу в таблице
+        Создаёт новую директорию
         '''
+        dir_path = self.getDirPath(dir_data.get('dir_name'))
+        dir_data_path = self.getDirPath(dir_data.get('dir_name'), True)
 
-    def createDir(self):
-        '''
-        Создаёт директорию
-        '''
+        # Проверка на существование директории
+        if os.path.isdir(dir_path):
+            self.printInfo(
+                title='Уведомление', text=f'Директория {dir_data.get("dir_name")} уже существует!')
+            return False
+
+        # Создаём директорию
+        try:
+            os.mkdir(dir_path)
+            # Создаём .dirData.json
+            self.writeJson(dir_data_path, dir_data)
+            return True
+        except Exception as e:
+            self.printInfo(title='Ошибка!',
+                           text=f'Не удалось создать директорию.\n{e}')
+            return False
 
     def editDir(self):
         '''
         Редактирует директорию
         '''
 
+    def createDir2Tab(self, dir_data: dict):
+        '''
+        Создаёт таблицу с названием директории и с заданными столбцами
+        '''
+        # Заполняем названия колонок
+        labels = []
+        if dir_data.get('task_number'):
+            labels.append('№ Задачи')
+        if dir_data.get('description'):
+            labels.append('Описание')
+        if dir_data.get('period'):
+            labels.append('Срок до')
+        if dir_data.get('deadline'):
+            labels.append('Конечный срок')
+        if dir_data.get('labor_costs'):
+            labels.append('ТЗ')
+        if dir_data.get('all_labor_costs'):
+            labels.append('Все ТЗ')
+        if dir_data.get('plane_labor_costs'):
+            labels.append('Плановы ТЗ')
+
+        # Создаём таблицу
+        table = QTableWidget(0, len(labels))
+        # Запрещаем редактирование
+        table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers)
+
+        table.setHorizontalHeaderLabels(labels)
+        self.ui.taskManagerTab.addTab(table, dir_data.get('dir_name'))
+
+    def editDir2Tab(self, dir_data: dict):
+        '''
+        Редактирует таблицу
+        '''
+
+    def setDir(self, dir_data: dict):
+        '''
+        Добавляет или изменяет директорию
+        '''
+        found_name_in_tab = bool(self.ui.taskManagerTab.findChild(
+            QWidget, dir_data.get('dir_name')))
+
+        if not found_name_in_tab:
+            if self.createDir(dir_data):
+                self.createDir2Tab(dir_data)
+        else:
+            if self.editDir(dir_data):
+                self.edi
+
     def removeDir(self):
         '''
         Удаляет директорию
+        '''
+
+    def openDirWindow(self, dir_data: dict = False):
+        '''
+        Открывает окно с параметрами директории
+        '''
+        self.dir_window = QDialog()
+        # self.dir_window.setModal(True)
+        self.ui_dir = Ui_Dir()
+        self.ui_dir.setupUi(self.dir_window)
+        confirmed = False
+
+        sender_name = self.sender.text()
+        # Если редактируется, то получаем данные текущей таблицы
+        if sender_name == 'Редактировать текущую директорию':
+            tab_index = self.ui.taskManagerTab.currentIndex()
+            current_dir_name = self.ui.taskManagerTab.tabText(tab_index)
+            dir_data = self.getDirData(current_dir_name)
+
+        if dir_data:
+            # Заполняем форму
+            self.ui_dir.dir_name.setText(dir_data.get('dir_name'))
+            self.ui_dir.period.setTristate(dir_data.get('period'))
+            self.ui_dir.deadline.setTristate(dir_data.get('deadline'))
+            self.ui_dir.labor_costs.setTristate(dir_data.get('labor_costs'))
+            self.ui_dir.all_labor_costs.setTristate(
+                dir_data.get('all_labor_costs'))
+            self.ui_dir.plane_labor_costs.setTristate(
+                dir_data.get('plane_labor_costs'))
+
+        while True:
+            self.dir_window.exec()
+            # Нажата кнопка отмена
+            if self.dir_window.result() == 0:
+                break
+            # Проверяем входные данные
+            if self.checkDirData():
+                confirmed = True
+                break
+
+        if confirmed:
+            # Заполняем данные
+            dir_data = {}
+            dir_data['dir_name'] = self.ui_dir.dir_name.text().strip()
+            dir_data['task_number'] = True
+            dir_data['description'] = True
+            dir_data['period'] = self.ui_dir.period.isChecked()
+            dir_data['deadline'] = self.ui_dir.deadline.isChecked()
+            dir_data['labor_costs'] = self.ui_dir.labor_costs.isChecked()
+            dir_data['all_labor_costs'] = self.ui_dir.all_labor_costs.isChecked()
+            dir_data['plane_labor_costs'] = self.ui_dir.plane_labor_costs.isChecked()
+            self.setDir(dir_data)
+
+    def checkDirData(self) -> bool:
+        '''
+        Проверяет правильность введённых данных
+        '''
+        dir_name = self.ui_dir.dir_name.text()
+
+        if dir_name.strip() == '':
+            self.printInfo('Предупреждение',
+                           'Название директории не может быть пустым')
+            return False
+
+        symbols = ['\\', '/', ':', '*', '?', '"', '<', '>', '|']
+        for symbol in symbols:
+            if symbol in dir_name:
+                self.printInfo(
+                    'Предупреждение', f'Название директории не может содержать символы\n{" ".join(symbols)}')
+                return False
+
+        # Проверка на существование директории
+        dir_path = self.getDirPath(dir_name)
+        if os.path.isdir(dir_path):
+            self.printInfo(
+                title='Уведомление', text=f'Директория {dir_name} уже существует!')
+            return False
+
+        return True
+
+########################
+# Работа с задачей
+########################
+
+    def getTaskPath(self, dir_name: str, task_number: str, get_task_data_path: bool = False) -> str:
+        '''Возвращает путь до задачи или до taskData.json'''
+        if get_task_data_path:
+            path = os.path.join(self.getDirPath(
+                dir_name), task_number, '.taskData.json')
+        else:
+            path = os.path.join(self.getDirPath(dir_name), task_number)
+        return path
+
+    def setTask2Tab(self, task_data: dict, tab_index: int) -> bool:
+        '''
+        Добавляет или изменяет задачу в таблице
         '''
 
     def createTask(self):
@@ -414,27 +544,6 @@ class TaskManager(QMainWindow):
         '''
         Удаляет задачу
         '''
-    
-    def openDirWindow(self):
-        '''
-        Открывает окно с параметрами директории
-        '''
-        
-        self.dir_window = QDialog(parent=self)
-        self.dir_window.setModal(True)
-        self.ui_dir = Ui_Dir()
-        self.ui_dir.setupUi(self.dir_window)
-
-        # sender = self.sender()
-        # match sender.text():
-        #     case 'Создать директорию':
-        #         self.ui_dir.answer.accepted.connect(self.createDir)
-        #     case 'Редактировать директорию':
-        #         self.ui_dir.answer.accepted.connect(self.editDir)
-        #     case _:
-        #         print('Неизвестный вызов окна директории')
-
-        self.dir_window.show()
 
     def openTaskWindow(self):
         '''
@@ -444,7 +553,7 @@ class TaskManager(QMainWindow):
         self.task_window.setModal(True)
         self.ui_dir = Ui_Task()
         self.ui_dir.setupUi(self.task_window)
-        
+
         self.task_window.show()
 ###########################################################
 ###########################################################
