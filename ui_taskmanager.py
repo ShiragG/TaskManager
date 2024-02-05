@@ -16,9 +16,9 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QPlainTextEdit, QPushButton, QSizePolicy,
-    QSpacerItem, QStackedWidget, QTabWidget, QVBoxLayout,
-    QWidget)
+    QListWidget, QListWidgetItem, QMainWindow, QPlainTextEdit,
+    QPushButton, QSizePolicy, QSpacerItem, QStackedWidget,
+    QTabWidget, QVBoxLayout, QWidget)
 import resources_rc
 
 class Ui_MainWindow(object):
@@ -30,11 +30,7 @@ class Ui_MainWindow(object):
         icon.addFile(u":/icons/src/icons/ico/light/paw.ico", QSize(), QIcon.Normal, QIcon.Off)
         MainWindow.setWindowIcon(icon)
         MainWindow.setStyleSheet(u"*{\n"
-"	border:none;\n"
-"	background-color:transparent;\n"
-"	background: none;\n"
-"	padding: 0;\n"
-"	margin:0;\n"
+"	\n"
 "}\n"
 "#leftMenuSubContainer{\n"
 "	background-color:rgb(65, 87, 122)\n"
@@ -52,6 +48,13 @@ class Ui_MainWindow(object):
 "}\n"
 "QPushButton{\n"
 "	padding: 2px 5px;\n"
+"\n"
+"	border:none;\n"
+"	background-color:transparent;\n"
+"	background: none;\n"
+"	padding: 0;\n"
+"	margin:0;\n"
+"	\n"
 "}\n"
 "QPushButton:hover{\n"
 "	background-color: rgb(235, 235, 235);\n"
@@ -212,6 +215,21 @@ class Ui_MainWindow(object):
         self.label_6.setObjectName(u"label_6")
 
         self.verticalLayout_14.addWidget(self.label_6)
+
+        self.generalBtn = QPushButton(self.settingsPage)
+        self.generalBtn.setObjectName(u"generalBtn")
+
+        self.verticalLayout_14.addWidget(self.generalBtn)
+
+        self.connectionBtn = QPushButton(self.settingsPage)
+        self.connectionBtn.setObjectName(u"connectionBtn")
+
+        self.verticalLayout_14.addWidget(self.connectionBtn)
+
+        self.otherBtn = QPushButton(self.settingsPage)
+        self.otherBtn.setObjectName(u"otherBtn")
+
+        self.verticalLayout_14.addWidget(self.otherBtn)
 
         self.menuContents.addWidget(self.settingsPage)
         self.page = QWidget()
@@ -422,6 +440,22 @@ class Ui_MainWindow(object):
         self.verticalLayout_13.addWidget(self.potTab)
 
         self.mainContents.addWidget(self.potPage)
+        self.page_2 = QWidget()
+        self.page_2.setObjectName(u"page_2")
+        self.verticalLayout_17 = QVBoxLayout(self.page_2)
+        self.verticalLayout_17.setObjectName(u"verticalLayout_17")
+        self.label_8 = QLabel(self.page_2)
+        self.label_8.setObjectName(u"label_8")
+        self.label_8.setFont(font1)
+
+        self.verticalLayout_17.addWidget(self.label_8)
+
+        self.listWidget = QListWidget(self.page_2)
+        self.listWidget.setObjectName(u"listWidget")
+
+        self.verticalLayout_17.addWidget(self.listWidget)
+
+        self.mainContents.addWidget(self.page_2)
 
         self.verticalLayout_9.addWidget(self.mainContents)
 
@@ -459,10 +493,13 @@ class Ui_MainWindow(object):
 #endif // QT_CONFIG(tooltip)
         self.infoBtn.setText("")
         self.label.setText(QCoreApplication.translate("MainWindow", u"\u041c\u043e\u0434\u0443\u043b\u0438", None))
-        self.showTasksBtn.setText(QCoreApplication.translate("MainWindow", u"\u0412\u0435\u0434\u0435\u043d\u0438\u0435 \u0437\u0430\u0434\u0430\u0447", None))
-        self.showActiveTasksBtn.setText(QCoreApplication.translate("MainWindow", u"\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0435 \u0437\u0430\u0434\u0430\u0447\u0438", None))
+        self.showTasksBtn.setText(QCoreApplication.translate("MainWindow", u"\u0412\u0435\u0434\u0435\u043d\u0438\u0435 \u0437\u0430\u044f\u0432\u043e\u043a", None))
+        self.showActiveTasksBtn.setText(QCoreApplication.translate("MainWindow", u"\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0435 \u0437\u0430\u044f\u0432\u043a\u0438", None))
         self.showPotBtn.setText(QCoreApplication.translate("MainWindow", u"\u041a\u043e\u0442\u0451\u043b", None))
-        self.label_6.setText(QCoreApplication.translate("MainWindow", u"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f", None))
+        self.label_6.setText(QCoreApplication.translate("MainWindow", u"\u0420\u0430\u0437\u0434\u0435\u043b\u044b \u043d\u0430\u0441\u0442\u0440\u043e\u0435\u043a", None))
+        self.generalBtn.setText(QCoreApplication.translate("MainWindow", u"\u041e\u0441\u043d\u043e\u0432\u043d\u044b\u0435", None))
+        self.connectionBtn.setText(QCoreApplication.translate("MainWindow", u"\u0421\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435", None))
+        self.otherBtn.setText(QCoreApplication.translate("MainWindow", u"\u0414\u0440\u0443\u0433\u043e\u0435", None))
         self.label_7.setText(QCoreApplication.translate("MainWindow", u"\u0418\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044f \u043e \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0438", None))
         self.plainTextEdit.setPlainText(QCoreApplication.translate("MainWindow", u"\u0412\u0435\u0440\u0441\u0438\u044f \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f: 2023_11_16", None))
 #if QT_CONFIG(tooltip)
@@ -486,8 +523,9 @@ class Ui_MainWindow(object):
 #endif // QT_CONFIG(tooltip)
         self.notificationBtn.setText("")
         self.label_2.setText(QCoreApplication.translate("MainWindow", u"\u0423\u0432\u0435\u0434\u043e\u043c\u043b\u0435\u043d\u0438\u044f", None))
-        self.label_4.setText(QCoreApplication.translate("MainWindow", u"\u0412\u0435\u0434\u0435\u043d\u0438\u0435 \u0437\u0430\u0434\u0430\u0447", None))
-        self.label_3.setText(QCoreApplication.translate("MainWindow", u"\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0435 \u0437\u0430\u0434\u0430\u0447\u0438", None))
+        self.label_4.setText(QCoreApplication.translate("MainWindow", u"\u0412\u0435\u0434\u0435\u043d\u0438\u0435 \u0437\u0430\u044f\u0432\u043e\u043a", None))
+        self.label_3.setText(QCoreApplication.translate("MainWindow", u"\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0435 \u0437\u0430\u044f\u0432\u043a\u0438", None))
         self.label_5.setText(QCoreApplication.translate("MainWindow", u"\u041a\u043e\u0442\u0451\u043b", None))
+        self.label_8.setText(QCoreApplication.translate("MainWindow", u"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", None))
     # retranslateUi
 

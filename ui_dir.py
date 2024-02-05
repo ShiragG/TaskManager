@@ -65,13 +65,14 @@ class Ui_Dir(object):
 
         self.verticalLayout.addWidget(self.label_show_columns)
 
-        self.period = QCheckBox(Dir)
-        self.period.setObjectName(u"period")
+        self.date_end = QCheckBox(Dir)
+        self.date_end.setObjectName(u"date_end")
 
-        self.verticalLayout.addWidget(self.period)
+        self.verticalLayout.addWidget(self.date_end)
 
         self.deadline = QCheckBox(Dir)
         self.deadline.setObjectName(u"deadline")
+        self.deadline.setChecked(False)
 
         self.verticalLayout.addWidget(self.deadline)
 
@@ -112,7 +113,7 @@ class Ui_Dir(object):
         Dir.setWindowTitle(QCoreApplication.translate("Dir", u"\u0414\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0438\u044f", None))
         self.label_dir_name.setText(QCoreApplication.translate("Dir", u"\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 \u0434\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0438\u0438:", None))
         self.label_show_columns.setText(QCoreApplication.translate("Dir", u"\u041e\u0442\u043e\u0431\u0440\u0430\u0436\u0430\u0442\u044c \u0434\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u043f\u043e\u043b\u044f:", None))
-        self.period.setText(QCoreApplication.translate("Dir", u"\u0421\u0440\u043e\u043a \u0434\u043e", None))
+        self.date_end.setText(QCoreApplication.translate("Dir", u"\u0421\u0440\u043e\u043a \u0434\u043e", None))
         self.deadline.setText(QCoreApplication.translate("Dir", u"\u041a\u043e\u043d\u0435\u0447\u043d\u044b\u0439 \u0441\u0440\u043e\u043a", None))
         self.labor_costs.setText(QCoreApplication.translate("Dir", u"\u0422\u0417", None))
         self.all_labor_costs.setText(QCoreApplication.translate("Dir", u"\u0412\u0441\u0435 \u0422\u0417", None))

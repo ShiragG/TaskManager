@@ -1,5 +1,6 @@
 # import getpass # pw = getpass.getpass("Enter password: ")
 import oracledb
+import datetime as dt
 
 
 class DatabaseConnector():
@@ -19,12 +20,12 @@ class DatabaseConnector():
 
     def getTasksInfo(self, user_name: str, tasks_numbers: []) -> list:
         """
-        Возвращает трудозатраты по одной или нескольким задачам
+        Возвращает трудозатраты по одной или нескольким заявкам
         """
         # TODO
-        # Принимаем список задач и имя пользователя
+        # Принимаем список заявок и имя пользователя
         # Возвращаем список словарей с данными:
-        # № заявки, Мои ТЗ, Отмечено ТЗ, Плановые ТЗ, Дедлайн
+        # № заявки, Мои ТЗ, Все ТЗ, Плановые ТЗ, Дедлайн
         tasks_str = ''
         for task in tasks_numbers:
             if len(tasks_str) > 0:
@@ -34,16 +35,16 @@ class DatabaseConnector():
 
         query = f'''
 select tab.task_number             task_number
-     , sum(tab.user_hours)         user_hours
-     , sum(tab.all_hours)          all_hours
-     , tab.plan_hours              plan_hours
+     , sum(tab.labor_costs)        labor_costs
+     , sum(tab.all_labor_costs)    all_labor_costs
+     , tab.plane_labor_costs       plane_labor_costs
      , tab.deadline                deadline
 from (
     -- Часы сотрудника
     select r.c_code                task_number
-         , sum(w.c_hours)          user_hours
-         , 0                       all_hours
-         , r.c_work_plan           plan_hours
+         , sum(w.c_hours)          labor_costs
+         , 0                       all_labor_costs
+         , r.c_work_plan           plane_labor_costs
          , r.c_dates_close#plan    deadline
     from IBS.Z#REQUEST@REPS r
        , ibs.z#TASK@REPS t
@@ -58,9 +59,9 @@ from (
     union all
     -- Все отмеченные часы
     select r.c_code                task_number
-         , 0                       user_hours
-         , sum(w.c_hours)          all_hours
-         , r.c_work_plan           plan_hours
+         , 0                       labor_costs
+         , sum(w.c_hours)          all_labor_costs
+         , r.c_work_plan           plane_labor_costs
          , r.c_dates_close#plan    deadline
     from IBS.Z#REQUEST@REPS r
        , ibs.z#TASK@REPS t
@@ -70,16 +71,16 @@ from (
       and w.collection_id = t.c_works
     group by r.c_code, r.c_work_plan, r.c_dates_close#plan
   ) tab
-group by tab.task_number, tab.plan_hours, tab.deadline
+group by tab.task_number, tab.plane_labor_costs, tab.deadline
         '''
         tasks_info_list = []
         for task_info_line in self.query(query):
             task_info = {}
             task_info['task_number'] = task_info_line[0]
-            task_info['user_hours'] = task_info_line[1]
-            task_info['all_hours'] = task_info_line[2]
-            task_info['plan_hours'] = task_info_line[3]
-            task_info['deadline'] = task_info_line[4]
+            task_info['labor_costs'] = task_info_line[1]
+            task_info['all_labor_costs'] = task_info_line[2]
+            task_info['plane_labor_costs'] = task_info_line[3]
+            task_info['deadline'] = task_info_line[4].strftime('%d.%m.%Y')
 
             tasks_info_list.append(task_info)
 
@@ -87,7 +88,7 @@ group by tab.task_number, tab.plan_hours, tab.deadline
 
     def getActiveTasks(self, user_name: str) -> list:
         """
-        Возвращает список активных задач
+        Возвращает список активных заявок
         """
         query_sup=f'''
 select      
@@ -230,7 +231,7 @@ where 1 = 1
 
     def getPot(self) -> list:
         """
-        Возвращает список задач из котла
+        Возвращает список заявок из котла
         """
         # TODO
         # Принимаем имя пользователя

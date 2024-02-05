@@ -6,12 +6,12 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>431</width>
-    <height>617</height>
+    <width>490</width>
+    <height>714</height>
    </rect>
   </property>
   <property name="windowTitle">
-   <string>Задача</string>
+   <string>Заявка</string>
   </property>
   <property name="windowIcon">
    <iconset resource="resources.qrc">
@@ -22,7 +22,7 @@
 border-width: 1px;
 }
 #Task{
-backgound-color: rgb(168, 168, 168)
+background-color: rgb(216, 233, 255)
 }
 </string>
   </property>
@@ -44,7 +44,7 @@ backgound-color: rgb(168, 168, 168)
         </size>
        </property>
        <property name="text">
-        <string>Номер задачи:</string>
+        <string>Номер заявки:</string>
        </property>
       </widget>
      </item>
@@ -114,7 +114,7 @@ backgound-color: rgb(168, 168, 168)
       </widget>
      </item>
      <item>
-      <widget class="QLineEdit" name="task_description">
+      <widget class="QLineEdit" name="description">
        <property name="minimumSize">
         <size>
          <width>0</width>
@@ -159,7 +159,7 @@ backgound-color: rgb(168, 168, 168)
       </widget>
      </item>
      <item alignment="Qt::AlignLeft">
-      <widget class="QDateEdit" name="task_date_end">
+      <widget class="QDateEdit" name="date_end">
        <property name="maximumSize">
         <size>
          <width>100</width>
@@ -210,7 +210,14 @@ backgound-color: rgb(168, 168, 168)
     </widget>
    </item>
    <item>
-    <widget class="QPlainTextEdit" name="task_text_links"/>
+    <widget class="QPlainTextEdit" name="text_links"/>
+   </item>
+   <item>
+    <widget class="QCheckBox" name="by_template">
+     <property name="text">
+      <string>Использовать шаблон при создании</string>
+     </property>
+    </widget>
    </item>
    <item>
     <widget class="QDialogButtonBox" name="answer">

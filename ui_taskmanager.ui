@@ -19,11 +19,7 @@
   </property>
   <property name="styleSheet">
    <string notr="true">*{
-	border:none;
-	background-color:transparent;
-	background: none;
-	padding: 0;
-	margin:0;
+	
 }
 #leftMenuSubContainer{
 	background-color:rgb(65, 87, 122)
@@ -41,6 +37,13 @@
 }
 QPushButton{
 	padding: 2px 5px;
+
+	border:none;
+	background-color:transparent;
+	background: none;
+	padding: 0;
+	margin:0;
+	
 }
 QPushButton:hover{
 	background-color: rgb(235, 235, 235);
@@ -357,7 +360,7 @@ QToolTip {
                       </font>
                      </property>
                      <property name="text">
-                      <string>Ведение задач</string>
+                      <string>Ведение заявок</string>
                      </property>
                     </widget>
                    </item>
@@ -375,7 +378,7 @@ QToolTip {
                       </font>
                      </property>
                      <property name="text">
-                      <string>Активные задачи</string>
+                      <string>Активные заявки</string>
                      </property>
                     </widget>
                    </item>
@@ -406,7 +409,28 @@ QToolTip {
                  <item>
                   <widget class="QLabel" name="label_6">
                    <property name="text">
-                    <string>Настройки приложения</string>
+                    <string>Разделы настроек</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QPushButton" name="generalBtn">
+                   <property name="text">
+                    <string>Основные</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QPushButton" name="connectionBtn">
+                   <property name="text">
+                    <string>Соединение</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QPushButton" name="otherBtn">
+                   <property name="text">
+                    <string>Другое</string>
                    </property>
                   </widget>
                  </item>
@@ -779,7 +803,7 @@ QToolTip {
                  </font>
                 </property>
                 <property name="text">
-                 <string>Ведение задач</string>
+                 <string>Ведение заявок</string>
                 </property>
                </widget>
               </item>
@@ -802,7 +826,7 @@ QToolTip {
                  </font>
                 </property>
                 <property name="text">
-                 <string>Активные задачи</string>
+                 <string>Активные заявки</string>
                 </property>
                </widget>
               </item>
@@ -831,6 +855,25 @@ QToolTip {
               </item>
               <item>
                <widget class="QTabWidget" name="potTab"/>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="page_2">
+             <layout class="QVBoxLayout" name="verticalLayout_17">
+              <item>
+               <widget class="QLabel" name="label_8">
+                <property name="font">
+                 <font>
+                  <pointsize>12</pointsize>
+                 </font>
+                </property>
+                <property name="text">
+                 <string>Настройки</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QListWidget" name="listWidget"/>
               </item>
              </layout>
             </widget>
