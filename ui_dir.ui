@@ -77,7 +77,7 @@ border-width: 1px;
       </widget>
      </item>
      <item>
-      <widget class="QCheckBox" name="period">
+      <widget class="QCheckBox" name="date_end">
        <property name="text">
         <string>Срок до</string>
        </property>
@@ -87,6 +87,9 @@ border-width: 1px;
       <widget class="QCheckBox" name="deadline">
        <property name="text">
         <string>Конечный срок</string>
+       </property>
+       <property name="checked">
+        <bool>false</bool>
        </property>
       </widget>
      </item>

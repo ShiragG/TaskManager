@@ -15,17 +15,17 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QComboBox, QDateEdit,
-    QDialog, QDialogButtonBox, QHBoxLayout, QLabel,
-    QLayout, QLineEdit, QPlainTextEdit, QSizePolicy,
-    QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractButton, QApplication, QCheckBox, QComboBox,
+    QDateEdit, QDialog, QDialogButtonBox, QHBoxLayout,
+    QLabel, QLayout, QLineEdit, QPlainTextEdit,
+    QSizePolicy, QVBoxLayout, QWidget)
 import resources_rc
 
 class Ui_Task(object):
     def setupUi(self, Task):
         if not Task.objectName():
             Task.setObjectName(u"Task")
-        Task.resize(431, 617)
+        Task.resize(490, 714)
         icon = QIcon()
         icon.addFile(u":/icons/src/icons/ico/light/paw.ico", QSize(), QIcon.Normal, QIcon.Off)
         Task.setWindowIcon(icon)
@@ -33,7 +33,7 @@ class Ui_Task(object):
 "border-width: 1px;\n"
 "}\n"
 "#Task{\n"
-"backgound-color: rgb(168, 168, 168)\n"
+"background-color: rgb(216, 233, 255)\n"
 "}\n"
 "")
         self.verticalLayout = QVBoxLayout(Task)
@@ -83,11 +83,11 @@ class Ui_Task(object):
 
         self.horizontalLayout_3.addWidget(self.label_task_description)
 
-        self.task_description = QLineEdit(Task)
-        self.task_description.setObjectName(u"task_description")
-        self.task_description.setMinimumSize(QSize(0, 20))
+        self.description = QLineEdit(Task)
+        self.description.setObjectName(u"description")
+        self.description.setMinimumSize(QSize(0, 20))
 
-        self.horizontalLayout_3.addWidget(self.task_description)
+        self.horizontalLayout_3.addWidget(self.description)
 
 
         self.verticalLayout.addLayout(self.horizontalLayout_3)
@@ -108,15 +108,15 @@ class Ui_Task(object):
 
         self.horizontalLayout_4.addWidget(self.label_date_end)
 
-        self.task_date_end = QDateEdit(Task)
-        self.task_date_end.setObjectName(u"task_date_end")
-        self.task_date_end.setMaximumSize(QSize(100, 25))
-        self.task_date_end.setAlignment(Qt.AlignRight|Qt.AlignTrailing|Qt.AlignVCenter)
-        self.task_date_end.setDateTime(QDateTime(QDate(2023, 1, 1), QTime(0, 0, 0)))
-        self.task_date_end.setCalendarPopup(True)
-        self.task_date_end.setTimeSpec(Qt.LocalTime)
+        self.date_end = QDateEdit(Task)
+        self.date_end.setObjectName(u"date_end")
+        self.date_end.setMaximumSize(QSize(100, 25))
+        self.date_end.setAlignment(Qt.AlignRight|Qt.AlignTrailing|Qt.AlignVCenter)
+        self.date_end.setDateTime(QDateTime(QDate(2023, 1, 1), QTime(0, 0, 0)))
+        self.date_end.setCalendarPopup(True)
+        self.date_end.setTimeSpec(Qt.LocalTime)
 
-        self.horizontalLayout_4.addWidget(self.task_date_end, 0, Qt.AlignLeft)
+        self.horizontalLayout_4.addWidget(self.date_end, 0, Qt.AlignLeft)
 
 
         self.verticalLayout.addLayout(self.horizontalLayout_4)
@@ -135,10 +135,15 @@ class Ui_Task(object):
 
         self.verticalLayout.addWidget(self.label_ref_example)
 
-        self.task_text_links = QPlainTextEdit(Task)
-        self.task_text_links.setObjectName(u"task_text_links")
+        self.text_links = QPlainTextEdit(Task)
+        self.text_links.setObjectName(u"text_links")
 
-        self.verticalLayout.addWidget(self.task_text_links)
+        self.verticalLayout.addWidget(self.text_links)
+
+        self.by_template = QCheckBox(Task)
+        self.by_template.setObjectName(u"by_template")
+
+        self.verticalLayout.addWidget(self.by_template)
 
         self.answer = QDialogButtonBox(Task)
         self.answer.setObjectName(u"answer")
@@ -156,12 +161,13 @@ class Ui_Task(object):
     # setupUi
 
     def retranslateUi(self, Task):
-        Task.setWindowTitle(QCoreApplication.translate("Task", u"\u0417\u0430\u0434\u0430\u0447\u0430", None))
-        self.label_task_number.setText(QCoreApplication.translate("Task", u"\u041d\u043e\u043c\u0435\u0440 \u0437\u0430\u0434\u0430\u0447\u0438:", None))
+        Task.setWindowTitle(QCoreApplication.translate("Task", u"\u0417\u0430\u044f\u0432\u043a\u0430", None))
+        self.label_task_number.setText(QCoreApplication.translate("Task", u"\u041d\u043e\u043c\u0435\u0440 \u0437\u0430\u044f\u0432\u043a\u0438:", None))
         self.label_task_description_2.setText(QCoreApplication.translate("Task", u"\u0414\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0438\u044f:", None))
         self.label_task_description.setText(QCoreApplication.translate("Task", u"\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435:", None))
         self.label_date_end.setText(QCoreApplication.translate("Task", u"\u0421\u0440\u043e\u043a \u0434\u043e:", None))
         self.label_ref.setText(QCoreApplication.translate("Task", u"\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0441\u0441\u044b\u043b\u043a\u0438:", None))
         self.label_ref_example.setText(QCoreApplication.translate("Task", u"\u041f\u0440\u0438\u043c\u0435\u0440 \u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f -  \u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 (>) \u0421\u0441\u044b\u043b\u043a\u0430 (;)", None))
+        self.by_template.setText(QCoreApplication.translate("Task", u"\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0440\u0438 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u0438", None))
     # retranslateUi
 
