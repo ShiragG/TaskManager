@@ -30,10 +30,14 @@ class Ui_Task(object):
         icon.addFile(u":/icons/src/icons/ico/light/paw.ico", QSize(), QIcon.Normal, QIcon.Off)
         Task.setWindowIcon(icon)
         Task.setStyleSheet(u"*{\n"
-"border-width: 1px;\n"
+"	border-width: 1px;\n"
 "}\n"
+"\n"
 "#Task{\n"
-"background-color: rgb(216, 233, 255)\n"
+"	background-color: rgb(216, 233, 255)\n"
+"}\n"
+"\n"
+"QPushButton{\n"
 "}\n"
 "")
         self.verticalLayout = QVBoxLayout(Task)
