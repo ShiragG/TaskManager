@@ -13,13 +13,13 @@ from DatabaseConnector import DatabaseConnector
 
 from PySide6.QtWidgets import (
     QMessageBox, QTableWidget, QAbstractItemView, QHeaderView, QMenu, QTableWidgetItem)
-from PySide6.QtGui import (QAction, QColor)
+from PySide6.QtGui import (QAction, QColor, QMouseEvent)
 from PySide6 import QtGui
 
 
 class TaskManager(QMainWindow):
     def __init__(self) -> None:
-        super().__init__()
+        super(TaskManager, self).__init__()
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
 
@@ -145,24 +145,9 @@ class TaskManager(QMainWindow):
         # Модульные кнопки
         # TODO
 
-        #
-
-    def showLeftMenu(self, index: int):
-        '''
-        Отображает нужную вкладку в меню слева
-        '''
-        if self.ui.leftMenu.isHidden():
-            self.ui.leftMenu.show()
-            self.ui.menuContents.setCurrentIndex(index)
-        else:
-            if self.ui.menuContents.currentIndex() == index:
-                self.ui.leftMenu.hide()
-            else:
-                self.ui.menuContents.setCurrentIndex(index)
-
     def handler(self):
         '''
-        Обработчик нажатий клавиш
+        Обработчик нажатий кнопок
         '''
         sender = self.sender()
 
@@ -194,6 +179,13 @@ class TaskManager(QMainWindow):
                 # Модульные кнопки
                 match sender.text():
                     # Модуль Ведение заявок
+                    case 'Открыть директорию':
+                        dir_name = self.getCurrentDirData().get('dir_name')
+                        task_number = self.getCurrentTaskData().get('task_number')
+                        link = self.getTaskPath(dir_name,task_number)
+                        self.openLink(link)
+                    case 'Обновить хранилище':
+                        pass#TODO
                     case 'Обновить информацию по заявкам':
                         self.updateTasksInfo()
                     case 'Создать директорию':
@@ -214,6 +206,19 @@ class TaskManager(QMainWindow):
                             self.openTaskWindow(task_data)
                     case _:
                         print('Неизвестное нажатие')
+
+    def showLeftMenu(self, index: int):
+        '''
+        Отображает нужную вкладку в меню слева
+        '''
+        if self.ui.leftMenu.isHidden():
+            self.ui.leftMenu.show()
+            self.ui.menuContents.setCurrentIndex(index)
+        else:
+            if self.ui.menuContents.currentIndex() == index:
+                self.ui.leftMenu.hide()
+            else:
+                self.ui.menuContents.setCurrentIndex(index)
 
     def initMTaskManager(self):
         '''
@@ -270,13 +275,44 @@ class TaskManager(QMainWindow):
         self.ui.removeBtn.setMenu(self.btns_menu.get('remove'))
         self.ui.editBtn.setMenu(self.btns_menu.get('edit'))
 
+    def changeBtnMenu4Mouse(self):
+        '''
+        Изменяет выпадающее меню по нажатию правой кнопки мыши для каждого случая
+        '''
+        current_module = self.ui.mainContents.currentIndex()
+
+        self.mouse_menu = QMenu()
+
+        # Получаем меню каждого модуля
+        match current_module:
+            case 0:
+                self.mouse_menu = self.getTaskManagerMouseMenu()
+            case 1:
+                self.mouse_menu = self.getAcitveTaskMouseMenu()
+            case 2:
+                self.mouse_menu = self.getPotMouseMenu()
+            case 3:
+                # TODO Реализовать меню для настроек
+                pass
+            case _:
+                print(f'Неизвестный модуль: {current_module}')
+
+        # Задаём полученное меню для
+
     def getTaskManagerBtnsMenu(self, btns_menu: dict) -> dict:
         '''
         Задаёт кнопкам меню модуля "Ведение заявок" 
         '''
 
-        # Меню действие
-        btns_menu['action'].addAction('Обновить информацию по заявкам', self.handler)
+        # Меню действия
+        btns_menu['action'].addAction('Открыть директорию', self.handler)
+
+        # Меню для данного действия реализуется в updateTaskLinksMenu
+        self.task_links_menu = btns_menu['action'].addMenu('Открыть ссылку')
+        btns_menu['action'].addAction('Обновить хранилище', self.handler)
+        btns_menu['action'].addSeparator()
+        btns_menu['action'].addAction(
+            'Обновить информацию по заявкам', self.handler)
         # Меню добавить
         btns_menu['add'].addAction('Создать директорию', self.handler)
         btns_menu['add'].addAction('Создать заявку', self.handler)
@@ -316,6 +352,29 @@ class TaskManager(QMainWindow):
         # Меню изменить
 
         return btns_menu
+
+    def getTaskManagerMouseMenu(self) -> QMenu:
+        '''
+        Задаёт меню правой кнопки для модуля "Ведение заявок" 
+        '''
+
+        menu = QMenu()
+
+        menu.addAction('Открыть директорию', self.handler)
+
+        return menu
+
+    def getAcitveTaskMouseMenu(self) -> QMenu:
+        '''
+        Задаёт меню правой кнопки для модуля "Ведение заявок" 
+        '''
+        pass
+
+    def getPotMouseMenu(self) -> QMenu:
+        '''
+        Задаёт меню правой кнопки для модуля "Ведение заявок" 
+        '''
+        pass
 
     def clearTable(self, tab_index, clear_headers: bool = False):
         '''
@@ -420,7 +479,7 @@ class TaskManager(QMainWindow):
 
         if len(tasks_numbers) > 0:
             # Получаем ответ от сервера
-            answer = self.db_con.getTasksInfo(user_name,tasks_numbers)
+            answer = self.db_con.getTasksInfo(user_name, tasks_numbers)
 
             # Подставляем значения
             # TODO придумать более производительный алгоритм обхода
@@ -432,20 +491,22 @@ class TaskManager(QMainWindow):
 
                 # Находим данные заявки
                 task_data_path = self.getTaskPath(dir_name, task_number, True)
-                task_data = self.getTaskData(dir_name,task_number)
+                task_data = self.getTaskData(dir_name, task_number)
 
                 # Заполняем информаицию из ответа
                 for task_info in answer:
                     # Если не та заявка
                     if task_number != task_info.get('task_number'):
                         continue
-                    
+
                     # Записываем новую информацию
                     task_data['labor_costs'] = task_info.get('labor_costs')
-                    task_data['all_labor_costs'] = task_info.get('all_labor_costs')
-                    task_data['plane_labor_costs'] = task_info.get('plane_labor_costs')
+                    task_data['all_labor_costs'] = task_info.get(
+                        'all_labor_costs')
+                    task_data['plane_labor_costs'] = task_info.get(
+                        'plane_labor_costs')
                     task_data['deadline'] = task_info.get('deadline')
-                    self.writeJson(task_data_path,task_data)
+                    self.writeJson(task_data_path, task_data)
 
             for dir_name in set_dir:
                 self.clearTable(self.getIndexTabByName(dir_name))
@@ -595,6 +656,9 @@ class TaskManager(QMainWindow):
                 QAbstractItemView.EditTrigger.NoEditTriggers)
             # Задаём названия колонок
             table.setHorizontalHeaderLabels(labels)
+            # Добавялем обработку сигнала выделения ячейки
+            table.currentItemChanged.connect(self.changedTask)
+            # Добавляем таблицу
             self.ui.taskManagerTab.addTab(table, dir_data.get('dir_name'))
         else:
             # Иначе изменяем таблицу и данные в ней
@@ -720,7 +784,7 @@ class TaskManager(QMainWindow):
         # Проверяем наличие директории с введённым именем в случае создания новой
         # директории или при изменении имени старой
         if (not dir_data_old and os.path.isdir(dir_path)) or (
-            dir_data_old and dir_data_old.get('dir_name') != dir_name and os.path.isdir(dir_path)):
+                dir_data_old and dir_data_old.get('dir_name') != dir_name and os.path.isdir(dir_path)):
             self.printInfo(
                 title='Уведомление', text=f'Директория {dir_name} уже существует!')
             return False
@@ -742,6 +806,55 @@ class TaskManager(QMainWindow):
 ########################
 # Работа с заявкой
 ########################
+
+    def changedTask(self):
+        '''Действия при выделении заявки'''
+        self.updateTaskLinksMenu()
+
+    def updateTaskLinksMenu(self):
+        '''Обновляет меню ссылок для заявки'''
+        self.task_links_menu.clear()
+
+        row = self.ui.taskManagerTab.currentWidget().selectionModel().currentIndex().row()
+        if row == -1:
+            return
+        current_task_data = self.getCurrentTaskData()
+        if current_task_data is None:
+            return
+
+        # Берём ссылки из заявки
+        links = self.getDictLinks(current_task_data.get('text_links'))
+        if not links:
+            return
+
+        for link_name in links:
+            action = QAction(link_name, self)
+            action.triggered.connect(self.openLinkFromMenu)
+            self.task_links_menu.addAction(action)
+
+    def openLink(self, link:str):
+        '''Открывает передаваемые ссылки'''
+
+        # Проверка ссылок
+        if link.startswith('http'):
+            webbrowser.open(link)
+        elif os.path.isdir(link):
+            os.startfile(link)
+        else:
+            self.printInfo(title='Предупреждение',
+                           text=f'Не удаётся открыть ссылку: {link}')
+            
+    def openLinkFromMenu(self):
+        '''Открываем выбранную ссылку'''
+        # Получаем имя ссылки
+        sender = self.sender()
+        link_name = sender.text()
+
+        # Получем ссылку из задачи
+        current_task_data = self.getCurrentTaskData()
+        dict_links = self.getDictLinks(current_task_data.get('text_links'))
+        link = dict_links.get(link_name)
+        self.openLink(link=link)
 
     def getTaskPath(self, dir_name: str, task_number: str, get_task_data_path: bool = False) -> str:
         '''
@@ -777,7 +890,7 @@ class TaskManager(QMainWindow):
 
         return self.getTaskData(dir_name, task_number)
 
-    def putTask2Tab(self, task_data: dict, task_data_old:dict = False) -> bool:
+    def putTask2Tab(self, task_data: dict, task_data_old: dict = False) -> bool:
         '''
         Добавляет или изменяет заявку в таблице
         '''
@@ -868,13 +981,13 @@ class TaskManager(QMainWindow):
         '''
         Редактирует заявку
         '''
-        
+
         task_number_old = task_data_old.get('task_number')
         task_number_new = task_data_new.get('task_number')
         dir_name_old = task_data_old.get('dir_name')
         dir_name_new = task_data_new.get('dir_name')
-        task_number_path_old = self.getTaskPath(dir_name_old,task_number_old)
-        task_number_path_new = self.getTaskPath(dir_name_new,task_number_new)
+        task_number_path_old = self.getTaskPath(dir_name_old, task_number_old)
+        task_number_path_new = self.getTaskPath(dir_name_new, task_number_new)
 
         # Если переименовали заявку
         if task_number_path_old != task_number_path_new:
@@ -888,12 +1001,12 @@ class TaskManager(QMainWindow):
                     \nПеред переименованием необходимо закрыть все файлы, если таковые имеются.
                     \n{e}''')
                 return
-        
-        # Перезаписываем .taskData.json
-        task_data_path = self.getTaskPath(dir_name_new,task_number_new,True)
-        self.writeJson(task_data_path,task_data_new)
 
-        self.putTask2Tab(task_data_new,task_data_old)
+        # Перезаписываем .taskData.json
+        task_data_path = self.getTaskPath(dir_name_new, task_number_new, True)
+        self.writeJson(task_data_path, task_data_new)
+
+        self.putTask2Tab(task_data_new, task_data_old)
 
     def removeTask(self):
         '''
@@ -989,7 +1102,8 @@ class TaskManager(QMainWindow):
                 QDate(date.year, date.month, date.day))
             self.ui_task.text_links.setPlainText(
                 task_data_old.get('text_links'))
-            self.ui_task.by_template.setChecked(task_data_old.get('by_template'))
+            self.ui_task.by_template.setChecked(
+                task_data_old.get('by_template'))
 
             # При редактировании отключаем возможность выбрать элементы
             self.ui_task.by_template.setDisabled(True)
@@ -1027,7 +1141,7 @@ class TaskManager(QMainWindow):
             if confirmed:
                 self.putTask2Tab(task_data_new)
 
-    def checkTaskData(self, task_data_old: dict =  False) -> bool:
+    def checkTaskData(self, task_data_old: dict = False) -> bool:
         '''
         Проверяет заполненные данные по заявке
         '''
@@ -1046,8 +1160,9 @@ class TaskManager(QMainWindow):
             return False
 
         # Если заявка существует или при редактировании указали имя существующей заявки
-        if (not task_data_old and os.path.isdir(task_path)) or(
-            task_data_old and task_path_old != task_path and os.path.isdir(task_path)
+        if (not task_data_old and os.path.isdir(task_path)) or (
+            task_data_old and task_path_old != task_path and os.path.isdir(
+                task_path)
         ):
             self.printInfo(
                 title='Уведомление', text=f'Заявка: {task_number} или директория {task_path} уже существует!')

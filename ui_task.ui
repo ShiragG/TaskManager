@@ -19,10 +19,14 @@
   </property>
   <property name="styleSheet">
    <string notr="true">*{
-border-width: 1px;
+	border-width: 1px;
 }
+
 #Task{
-background-color: rgb(216, 233, 255)
+	background-color: rgb(216, 233, 255)
+}
+
+QPushButton{
 }
 </string>
   </property>
