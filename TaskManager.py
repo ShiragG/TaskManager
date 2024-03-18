@@ -74,25 +74,8 @@ class TaskManager(QMainWindow):
             'template_name': '.template',
             'archive_name': '.archive',
             'explorer': 'explorer',
-            'color_range': {'min': 5, 'max': 25},
-            'task_manager_columns': [['№ заявки', True],
-                                     ['Описание', True],
-                                     ['Срок', True],
-                                     ['Конечный срок', True],
-                                     ['ТЗ', True],
-                                     ['Все ТЗ', True],
-                                     ['Плановые ТЗ', True]],
-            'active_task_columns': {
-                'support': [],
-                'project': [],
-                'other': [],
-                'code_review': []
-            },
-            'pot_columns': {
-                'code_review': [],
-                'support': [],
-                'project': []
-            }
+            "user_name": '',
+            'color_range': {'min': 5, 'max': 25}
         }
         # Если не создана папка с рабочей директорий
         if not os.path.isdir(self.settings.get('work_dir')):
@@ -182,10 +165,10 @@ class TaskManager(QMainWindow):
                     case 'Открыть директорию':
                         dir_name = self.getCurrentDirData().get('dir_name')
                         task_number = self.getCurrentTaskData().get('task_number')
-                        link = self.getTaskPath(dir_name,task_number)
+                        link = self.getTaskPath(dir_name, task_number)
                         self.openLink(link)
                     case 'Обновить хранилище':
-                        pass#TODO
+                        pass  # TODO
                     case 'Обновить информацию по заявкам':
                         self.updateTasksInfo()
                     case 'Создать директорию':
@@ -458,6 +441,10 @@ class TaskManager(QMainWindow):
         Обновляет информацию по заявкам
         '''
         user_name = self.settings.get('user_name')
+
+        if not user_name:
+            self.printInfo('Предупреждение','Не задано имя пользовалтеля. Укажите его в настройках')
+            return
 
         # Собираем список заявок
         work_dir_dict = self.readWorkDir()
@@ -832,7 +819,7 @@ class TaskManager(QMainWindow):
             action.triggered.connect(self.openLinkFromMenu)
             self.task_links_menu.addAction(action)
 
-    def openLink(self, link:str):
+    def openLink(self, link: str):
         '''Открывает передаваемые ссылки'''
 
         # Проверка ссылок
@@ -843,7 +830,7 @@ class TaskManager(QMainWindow):
         else:
             self.printInfo(title='Предупреждение',
                            text=f'Не удаётся открыть ссылку: {link}')
-            
+
     def openLinkFromMenu(self):
         '''Открываем выбранную ссылку'''
         # Получаем имя ссылки
@@ -968,7 +955,7 @@ class TaskManager(QMainWindow):
                 os.mkdir(task_path)
 
             # Создаём файл с информацией по заявке
-                self.writeJson(file_path=task_data_path, data=task_data)
+            self.writeJson(file_path=task_data_path, data=task_data)
 
         except Exception as e:
             self.printInfo(title='Предупреждение',
