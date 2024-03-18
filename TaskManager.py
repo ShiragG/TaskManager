@@ -164,7 +164,9 @@ class TaskManager(QMainWindow):
                     # Модуль Ведение заявок
                     case 'Открыть директорию':
                         dir_name = self.getCurrentDirData().get('dir_name')
-                        task_number = self.getCurrentTaskData().get('task_number')
+                        task_number = ''
+                        if self.selectedRow() != -1:
+                            task_number = self.getCurrentTaskData().get('task_number')
                         link = self.getTaskPath(dir_name, task_number)
                         self.openLink(link)
                     case 'Обновить хранилище':
@@ -224,6 +226,7 @@ class TaskManager(QMainWindow):
         Инициализирует сигналы
         '''
         self.ui.mainContents.currentChanged.connect(self.changeBtnMenu)
+        self.ui.taskManagerTab.currentChanged.connect(self.changedDir)
 
     def changeBtnMenu(self):
         '''
@@ -502,6 +505,10 @@ class TaskManager(QMainWindow):
 ########################
 # Работа с директорией
 ########################
+    def changedDir(self):
+        '''Действия при смене директории'''
+        self.ui.taskManagerTab.currentWidget().setCurrentCell(-1,-1)
+
 
     def getDirPath(self, dir_name: str, get_dir_data_path: bool = False) -> str:
         '''
@@ -645,6 +652,8 @@ class TaskManager(QMainWindow):
             table.setHorizontalHeaderLabels(labels)
             # Добавялем обработку сигнала выделения ячейки
             table.currentItemChanged.connect(self.changedTask)
+            # Выделение всей строки одновременно
+            table.setSelectionBehavior(QAbstractItemView.SelectRows)
             # Добавляем таблицу
             self.ui.taskManagerTab.addTab(table, dir_data.get('dir_name'))
         else:
@@ -794,6 +803,10 @@ class TaskManager(QMainWindow):
 # Работа с заявкой
 ########################
 
+    def selectedRow(self) -> int:
+        '''Возвращает номер выбранной строки'''
+        return self.ui.taskManagerTab.currentWidget().selectionModel().currentIndex().row()
+
     def changedTask(self):
         '''Действия при выделении заявки'''
         self.updateTaskLinksMenu()
@@ -802,8 +815,7 @@ class TaskManager(QMainWindow):
         '''Обновляет меню ссылок для заявки'''
         self.task_links_menu.clear()
 
-        row = self.ui.taskManagerTab.currentWidget().selectionModel().currentIndex().row()
-        if row == -1:
+        if self.selectedRow() == -1:
             return
         current_task_data = self.getCurrentTaskData()
         if current_task_data is None:
@@ -869,7 +881,7 @@ class TaskManager(QMainWindow):
             self.printInfo('Уведомление', 'Не выбрана директория')
             return None
         dir_name = self.ui.taskManagerTab.tabText(tab_index)
-        row = self.ui.taskManagerTab.currentWidget().selectionModel().currentIndex().row()
+        row = self.selectedRow()
         if row == -1:
             self.printInfo('Уведомление', 'Необходимо выбрать заявку')
             return None
