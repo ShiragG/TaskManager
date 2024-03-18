@@ -18,7 +18,7 @@ class DatabaseConnector():
         self.user = 'IBS'
         self.password = 'IBS'
 
-    def getTasksInfo(self, user_name: str, tasks_numbers: []) -> list:
+    def getTasksInfo(self, user_name: str, tasks_numbers: list) -> list:
         """
         Возвращает трудозатраты по одной или нескольким заявкам
         """
@@ -80,7 +80,10 @@ group by tab.task_number, tab.plane_labor_costs, tab.deadline
             task_info['labor_costs'] = task_info_line[1]
             task_info['all_labor_costs'] = task_info_line[2]
             task_info['plane_labor_costs'] = task_info_line[3]
-            task_info['deadline'] = task_info_line[4].strftime('%d.%m.%Y')
+            if task_info_line[4]:
+                task_info['deadline'] = task_info_line[4].strftime('%d.%m.%Y')
+            else:
+                task_info['deadline'] = None
 
             tasks_info_list.append(task_info)
 
@@ -253,9 +256,10 @@ where 1 = 1
 
 
 if __name__ == '__main__':
-    db = DatabaseConnector()
+    # db = DatabaseConnector()
 
-    tasks = ['RP0674481', 'RP0673090']
-    user_name = 'aguljaev'
+    # tasks = ['RP0674481', 'RP0673090']
+    # user_name = 'aguljaev'
 
-    print(db.getTasksInfo(user_name, tasks))
+    # print(db.getTasksInfo(user_name, tasks))
+    pass

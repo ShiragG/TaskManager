@@ -4,3 +4,4 @@
     getpass
     ssl
     uuid
+    cryptography.hazmat.primitives.kdf.pbkdf2
