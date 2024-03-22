@@ -164,6 +164,7 @@ cython_debug/
 
 # My ignore
 Рабочая директория
+Настройки сервера.txt
 Working directory
 taskManagerSettings.json
 test.py
