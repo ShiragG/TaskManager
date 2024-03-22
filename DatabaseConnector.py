@@ -4,7 +4,7 @@ import datetime as dt
 
 
 class DatabaseConnector():
-    def __init__(self, params: {} = None):
+    def __init__(self):
         """
         Инициализация параметров подключения
         """
@@ -18,14 +18,10 @@ class DatabaseConnector():
         self.user = 'IBS'
         self.password = 'IBS'
 
-    def getTasksInfo(self, user_name: str, tasks_numbers: list) -> list:
+    def getTasksInfo(self, tasks_numbers: list, settings: dict) -> list:
         """
         Возвращает трудозатраты по одной или нескольким заявкам
         """
-        # TODO
-        # Принимаем список заявок и имя пользователя
-        # Возвращаем список словарей с данными:
-        # № заявки, Мои ТЗ, Все ТЗ, Плановые ТЗ, Дедлайн
         tasks_str = ''
         for task in tasks_numbers:
             if len(tasks_str) > 0:
@@ -53,7 +49,7 @@ from (
     where r.c_code in ({tasks_str})
       and t.c_request = r.id
       and w.collection_id = t.c_works
-      and p.c_user_name = upper('{user_name}')
+      and p.c_user_name = upper('{settings['user_name']}')
       and p.id = w.c_person
     group by r.c_code, r.c_work_plan, r.c_dates_close#plan
     union all
@@ -74,7 +70,7 @@ from (
 group by tab.task_number, tab.plane_labor_costs, tab.deadline
         '''
         tasks_info_list = []
-        for task_info_line in self.query(query):
+        for task_info_line in self.query(query,settings):
             task_info = {}
             task_info['task_number'] = task_info_line[0]
             task_info['labor_costs'] = task_info_line[1]
@@ -89,7 +85,7 @@ group by tab.task_number, tab.plane_labor_costs, tab.deadline
 
         return tasks_info_list
 
-    def getActiveTasks(self, user_name: str) -> list:
+    def getActiveTasks(self, settings: dict) -> list:
         """
         Возвращает список активных заявок
         """
@@ -141,7 +137,7 @@ FROM ibs.Z#PHYS_PERSON@REPS p
   , IBS.Z#cm_point@REPS task_point
   , IBS.Z#f_groups@REPS groupf
   , IBS.Z#SUPPORT_TYPE@REPS req_type
-where p.c_user_name = upper('aguljaev')
+where p.c_user_name = upper('{settings['user_name']}')
   and task.C_PERFORMER = p.id
   and task.c_request = req.id
   and task.class_id = 'T_SUPPORT'
@@ -212,7 +208,7 @@ from ibs.Z#PHYS_PERSON@REPS p
   , IBS.Z#TECH_PROC@REPS  tech_proc
   , ibs.Z#F_GROUPS@reps   group_user
 where 1 = 1
-  and p.c_user_name = upper('aguljaev')
+  and p.c_user_name = upper('{settings['user_name']}')
   and task.C_PERFORMER = p.id
   and task.C_CHECKPOINT = task_checkpoint.id
   and task_checkpoint.C_POINT = task_point.id 
@@ -241,25 +237,18 @@ where 1 = 1
         # Возвращаем список словарей с данными:
         # № заявки, приоритет, тип заявки, наименование заявки, Дата окончания, ревьюер, заказчик, описание, мп
 
-    def query(self, sql: str) -> list:
+    def query(self, sql: str, settings: dict) -> list:
         """
         Делает запрос к базе данных
         """
 
-        with oracledb.connect(dsn=self.dsn,
-                              config_dir=self.config_dir,
-                              user=self.user,
-                              password=self.password,) as con:
+        with oracledb.connect(dsn=settings['dsn'],
+                              config_dir=settings['oracle_config_dir'],
+                              user=settings['user_to_db'],
+                              password=settings['password_to_db'],) as con:
             with con.cursor() as cur:
                 cur.execute(sql)
                 return cur.fetchall()
 
-
 if __name__ == '__main__':
-    # db = DatabaseConnector()
-
-    # tasks = ['RP0674481', 'RP0673090']
-    # user_name = 'aguljaev'
-
-    # print(db.getTasksInfo(user_name, tasks))
     pass

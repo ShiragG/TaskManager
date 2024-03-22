@@ -26,8 +26,8 @@ class TaskManager(QMainWindow):
         # Чтение настроек
         self.readSettingsApp()
 
-        # Инициализируем соединение
-        self.db_con = DatabaseConnector()
+        # Инициализируем класс для соединения с БД
+        self.initDB()
 
         # Скрываем лишние окна
         self.ui.leftMenu.hide()
@@ -61,11 +61,15 @@ class TaskManager(QMainWindow):
         json_data = json.loads(jsonData)
         return json_data
 
-    def writeJson(self, file_path, data: dict):
+    def writeJson(self, file_path, data: dict, hidden: bool = False):
         '''Записывает json файл'''
         json_string = json.dumps(data, ensure_ascii=False)
         with open(file_path, 'w', encoding='utf-8') as file:
             file.write(json_string)
+
+        # Делаем файл скрытым
+        if hidden:
+            subprocess.call(['attrib', '+h', file_path])
 
     def setDefaultSettings(self):
         '''Создаёт стандартный файл настроек'''
@@ -73,8 +77,11 @@ class TaskManager(QMainWindow):
             'work_dir': 'Working directory',
             'template_name': '.template',
             'archive_name': '.archive',
-            'explorer': 'explorer',
-            "user_name": '',
+            'user_name': '',
+            'oracle_config_dir': '',
+            'dsn': '',
+            'user_to_db': '',
+            'password_to_db': '',
             'color_range': {'min': 5, 'max': 25}
         }
         # Если не создана папка с рабочей директорий
@@ -228,6 +235,52 @@ class TaskManager(QMainWindow):
         self.ui.mainContents.currentChanged.connect(self.changeBtnMenu)
         self.ui.taskManagerTab.currentChanged.connect(self.changedDir)
 
+    def initDB(self):
+        '''Инициализируем подключение к БД'''
+        db_settings = dict()
+        self.db_con = DatabaseConnector()
+
+    def checkDBSetting(self) -> bool:
+        '''Проверка настроек БД'''
+        if not self.settings.get('user_name'):
+            self.printInfo('Предупреждение', 'Не задано имя пользователя')
+            return False
+
+        if not self.settings.get('oracle_config_dir'):
+            self.printInfo('Предупреждение', 'Не задана директория с Oracle')
+            return False
+        elif not os.path.isdir(self.settings.get('oracle_config_dir')):
+            self.printInfo('Предупреждение', 'Не найдена директория с Oracle')
+            return False
+
+        if not self.settings.get('dsn'):
+            self.printInfo('Предупреждение', 'Не задан сервер')
+            return False
+
+        if not self.settings.get('user_to_db'):
+            self.printInfo('Предупреждение',
+                           'Не задано имя пользователя базы данных')
+            return False
+
+        if not self.settings.get('password_to_db'):
+            self.printInfo('Предупреждение',
+                           'Не задан пароль пользователя базы данных')
+            return False
+
+        return True
+
+    def getDBSetting(self) -> dict:
+        '''Возвращает словарь настроек'''
+        settings = dict()
+
+        settings['user_name'] = self.settings.get('user_name')
+        settings['oracle_config_dir'] = self.settings.get('oracle_config_dir')
+        settings['dsn'] = self.settings.get('dsn')
+        settings['user_to_db'] = self.settings.get('user_to_db')
+        settings['password_to_db'] = self.settings.get('password_to_db')
+
+        return settings
+
     def changeBtnMenu(self):
         '''
         Создаёт меню для кнопок взависимости от текущего модуля
@@ -309,10 +362,10 @@ class TaskManager(QMainWindow):
             'Удалить выбранную заявку', self.handler)
         # Меню изменить
         btns_menu['edit'].addAction(
-            'Редактировать текущую директорию', self.handler)
-        btns_menu['edit'].addAction(
             'Редактировать выбранную заявку', self.handler)
-
+        btns_menu['edit'].addAction(
+            'Редактировать текущую директорию', self.handler)
+        
         return btns_menu
 
     def getAcitveTaskBtnsMenu(self, btns_menu: dict) -> dict:
@@ -443,10 +496,7 @@ class TaskManager(QMainWindow):
         '''
         Обновляет информацию по заявкам
         '''
-        user_name = self.settings.get('user_name')
-
-        if not user_name:
-            self.printInfo('Предупреждение','Не задано имя пользовалтеля. Укажите его в настройках')
+        if not self.checkDBSetting():
             return
 
         # Собираем список заявок
@@ -469,7 +519,8 @@ class TaskManager(QMainWindow):
 
         if len(tasks_numbers) > 0:
             # Получаем ответ от сервера
-            answer = self.db_con.getTasksInfo(user_name, tasks_numbers)
+            answer = self.db_con.getTasksInfo(
+                tasks_numbers, self.getDBSetting())
 
             # Подставляем значения
             # TODO придумать более производительный алгоритм обхода
@@ -507,8 +558,7 @@ class TaskManager(QMainWindow):
 ########################
     def changedDir(self):
         '''Действия при смене директории'''
-        self.ui.taskManagerTab.currentWidget().setCurrentCell(-1,-1)
-
+        self.ui.taskManagerTab.currentWidget().setCurrentCell(-1, -1)
 
     def getDirPath(self, dir_name: str, get_dir_data_path: bool = False) -> str:
         '''
@@ -1205,32 +1255,52 @@ class TaskManager(QMainWindow):
                            f'Не удалось прочитать ссылки, проверьте правильность заполнения.\n{e}')
             return None
 
+########################
+# Работа с хранилищем
+########################
+
 ###########################################################
 ###########################################################
 # Модуль "Активные заявки"
 ###########################################################
 
-    def fillActiveTaskTab():
+    def fillActiveTaskTab(self):
         '''
         Заполняет таблицу на основании запроса по активным заявкам
         '''
+
+    def getActiveTasks(self) -> list:
+        '''Получает информацию по активным заявкам'''
+        user_name = self.settings.get('user_name')
+
+        if not user_name:
+            self.printInfo(
+                'Предупреждение', 'Не задано имя пользовалтеля. Укажите его в настройках')
+            return
+
+        list_active_tasks = self.db_con.getActiveTasks(user_name)
+
+        if not list_active_tasks:
+            pass
+
 
 ###########################################################
 ###########################################################
 # Модуль "Котёл"
 ###########################################################
 
-    def fillPowTab():
+    def fillPowTab(self):
         '''
         Заполняет таблицу на основании запроса по заявкам в котле
         '''
 
+    def getPow(self) -> list:
+        '''Возвращает котёл с заявками'''
 
 ############################################################
 # Запуск в окне
 ############################################################
 if __name__ == '__main__':
-    print('run MTaskManager')
     app = QApplication()
 
     window = TaskManager()
