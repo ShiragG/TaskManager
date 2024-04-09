@@ -177,6 +177,22 @@ class Ui_Task(object):
 
         self.verticalLayout.addWidget(self.by_template)
 
+        self.horizontalLayout_6 = QHBoxLayout()
+        self.horizontalLayout_6.setObjectName(u"horizontalLayout_6")
+        self.label_date_create_local = QLabel(Task)
+        self.label_date_create_local.setObjectName(u"label_date_create_local")
+        self.label_date_create_local.setMaximumSize(QSize(105, 200))
+
+        self.horizontalLayout_6.addWidget(self.label_date_create_local)
+
+        self.date_create_local = QLabel(Task)
+        self.date_create_local.setObjectName(u"date_create_local")
+
+        self.horizontalLayout_6.addWidget(self.date_create_local)
+
+
+        self.verticalLayout.addLayout(self.horizontalLayout_6)
+
         self.answer = QDialogButtonBox(Task)
         self.answer.setObjectName(u"answer")
         self.answer.setOrientation(Qt.Horizontal)
@@ -202,5 +218,7 @@ class Ui_Task(object):
         self.label_ref.setText(QCoreApplication.translate("Task", u"\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0441\u0441\u044b\u043b\u043a\u0438:", None))
         self.label_ref_example.setText(QCoreApplication.translate("Task", u"\u041f\u0440\u0438\u043c\u0435\u0440 \u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f -  \u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 (>) \u0421\u0441\u044b\u043b\u043a\u0430 (;)", None))
         self.by_template.setText(QCoreApplication.translate("Task", u"\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0440\u0438 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u0438", None))
+        self.label_date_create_local.setText(QCoreApplication.translate("Task", u"\u0421\u043e\u0437\u0434\u0430\u043d\u0430 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e:", None))
+        self.date_create_local.setText("")
     # retranslateUi
 

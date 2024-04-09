@@ -451,7 +451,7 @@ QToolTip {
                     <bool>false</bool>
                    </property>
                    <property name="plainText">
-                    <string>Версия приложения: 2024_03_17</string>
+                    <string>Версия приложения: 2024_04_10</string>
                    </property>
                   </widget>
                  </item>

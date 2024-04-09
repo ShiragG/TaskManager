@@ -376,7 +376,7 @@ class TaskManager(QMainWindow):
 
     def getAcitveTaskBtnsMenu(self, btns_menu: dict) -> dict:
         '''
-        Задаёт кнопкам меню модуля "Ведение заявок" 
+        Задаёт кнопкам меню модуля "Активные заявки" 
         '''
         # TODO
         # Меню действие
@@ -388,7 +388,7 @@ class TaskManager(QMainWindow):
 
     def getPotBtnsMenu(self, btns_menu: dict) -> dict:
         '''
-        Задаёт кнопкам меню модуля "Ведение заявок" 
+        Задаёт кнопкам меню модуля "Котел" 
         '''
         # TODO
         # Меню действие
@@ -1244,11 +1244,16 @@ class TaskManager(QMainWindow):
                 task_data_old.get('text_links'))
             self.ui_task.by_template.setChecked(
                 task_data_old.get('by_template'))
+            self.ui_task.date_create_local.setText(task_data_old.get('date_create_local'))
 
             # При редактировании отключаем возможность выбрать элементы
             self.ui_task.by_template.setDisabled(True)
         else:
             task_data_new = {}
+            
+            date_create_local = dt.datetime.today().strftime('%m.%d.%Y')
+            # Дата локального создания
+            self.ui_task.date_create_local.setText(date_create_local)
 
         # Запускаем окно
         while True:
@@ -1270,6 +1275,7 @@ class TaskManager(QMainWindow):
             task_data_new['my_plane_labor_costs'] = self.ui_task.my_plane_labor_costs.value()
             task_data_new['text_links'] = self.ui_task.text_links.toPlainText()
             task_data_new['by_template'] = self.ui_task.by_template.isChecked()
+            task_data_new['date_create_local'] = self.ui_task.date_create_local.text()
 
             confirmed = False
             if task_data_old:
