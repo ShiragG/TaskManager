@@ -501,7 +501,7 @@ class Ui_MainWindow(object):
         self.connectionBtn.setText(QCoreApplication.translate("MainWindow", u"\u0421\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u0435", None))
         self.otherBtn.setText(QCoreApplication.translate("MainWindow", u"\u0414\u0440\u0443\u0433\u043e\u0435", None))
         self.label_7.setText(QCoreApplication.translate("MainWindow", u"\u0418\u043d\u0444\u043e\u0440\u043c\u0430\u0446\u0438\u044f \u043e \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0438", None))
-        self.plainTextEdit.setPlainText(QCoreApplication.translate("MainWindow", u"\u0412\u0435\u0440\u0441\u0438\u044f \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f: 2024_03_17", None))
+        self.plainTextEdit.setPlainText(QCoreApplication.translate("MainWindow", u"\u0412\u0435\u0440\u0441\u0438\u044f \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f: 2024_04_10", None))
 #if QT_CONFIG(tooltip)
         self.actionBtn.setToolTip(QCoreApplication.translate("MainWindow", u"\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044f", None))
 #endif // QT_CONFIG(tooltip)
