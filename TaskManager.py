@@ -1270,7 +1270,8 @@ class TaskManager(QMainWindow):
             # Заполняем данные заявки
             task_data_new['task_number'] = self.ui_task.task_number.text()
             task_data_new['dir_name'] = self.ui_task.dir_name.currentText()
-            task_data_new['description'] = self.ui_task.description.text()
+            # Записываем описание и заменяем символ " на '
+            task_data_new['description'] = self.ui_task.description.text().replace('"',"'")
             task_data_new['date_end'] = self.ui_task.date_end.text()
             task_data_new['my_plane_labor_costs'] = self.ui_task.my_plane_labor_costs.value()
             task_data_new['text_links'] = self.ui_task.text_links.toPlainText()
@@ -1294,14 +1295,15 @@ class TaskManager(QMainWindow):
         '''
         dir_name = self.ui_task.dir_name.currentText()
         task_number = self.ui_task.task_number.text().strip()
-        description = self.shortDescription(self.ui_task.description.text().strip())
+        description = self.ui_task.description.text().strip()
+        description_short = self.shortDescription(description)
 
-        task_path = self.createTaskPath(dir_name, task_number+description)
+        task_path = self.createTaskPath(dir_name, task_number+description_short)
 
         # Проверка на зарезервированные символы
-        symbols = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '_(']
+        symbols = ['\\', '/', ':', '*', '?', '<', '>', '|', '_(']
         for symbol in symbols:
-            if symbol in task_number:
+            if symbol in task_number + description:
                 text_error = "'"+ "',  '".join(str(element) for element in symbols)+ "'"
 
                 self.printInfo(
