@@ -15,10 +15,11 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QAbstractButton, QApplication, QCheckBox, QComboBox,
-    QDateEdit, QDialog, QDialogButtonBox, QHBoxLayout,
-    QLabel, QLayout, QLineEdit, QPlainTextEdit,
-    QSizePolicy, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox,
+    QComboBox, QDateEdit, QDialog, QDialogButtonBox,
+    QDoubleSpinBox, QHBoxLayout, QLabel, QLayout,
+    QLineEdit, QPlainTextEdit, QSizePolicy, QSpacerItem,
+    QVBoxLayout, QWidget)
 import resources_rc
 
 class Ui_Task(object):
@@ -42,6 +43,23 @@ class Ui_Task(object):
 "")
         self.verticalLayout = QVBoxLayout(Task)
         self.verticalLayout.setObjectName(u"verticalLayout")
+        self.horizontalLayout_5 = QHBoxLayout()
+        self.horizontalLayout_5.setObjectName(u"horizontalLayout_5")
+        self.label_task_description_2 = QLabel(Task)
+        self.label_task_description_2.setObjectName(u"label_task_description_2")
+        self.label_task_description_2.setMinimumSize(QSize(80, 0))
+        self.label_task_description_2.setMaximumSize(QSize(80, 16777215))
+
+        self.horizontalLayout_5.addWidget(self.label_task_description_2)
+
+        self.dir_name = QComboBox(Task)
+        self.dir_name.setObjectName(u"dir_name")
+
+        self.horizontalLayout_5.addWidget(self.dir_name)
+
+
+        self.verticalLayout.addLayout(self.horizontalLayout_5)
+
         self.horizontalLayout = QHBoxLayout()
         self.horizontalLayout.setObjectName(u"horizontalLayout")
         self.label_task_number = QLabel(Task)
@@ -61,23 +79,6 @@ class Ui_Task(object):
 
         self.verticalLayout.addLayout(self.horizontalLayout)
 
-        self.horizontalLayout_5 = QHBoxLayout()
-        self.horizontalLayout_5.setObjectName(u"horizontalLayout_5")
-        self.label_task_description_2 = QLabel(Task)
-        self.label_task_description_2.setObjectName(u"label_task_description_2")
-        self.label_task_description_2.setMinimumSize(QSize(80, 0))
-        self.label_task_description_2.setMaximumSize(QSize(80, 16777215))
-
-        self.horizontalLayout_5.addWidget(self.label_task_description_2)
-
-        self.dir_name = QComboBox(Task)
-        self.dir_name.setObjectName(u"dir_name")
-
-        self.horizontalLayout_5.addWidget(self.dir_name)
-
-
-        self.verticalLayout.addLayout(self.horizontalLayout_5)
-
         self.horizontalLayout_3 = QHBoxLayout()
         self.horizontalLayout_3.setObjectName(u"horizontalLayout_3")
         self.label_task_description = QLabel(Task)
@@ -90,6 +91,8 @@ class Ui_Task(object):
         self.description = QLineEdit(Task)
         self.description.setObjectName(u"description")
         self.description.setMinimumSize(QSize(0, 20))
+        self.description.setInputMethodHints(Qt.ImhNone)
+        self.description.setClearButtonEnabled(False)
 
         self.horizontalLayout_3.addWidget(self.description)
 
@@ -124,6 +127,31 @@ class Ui_Task(object):
 
 
         self.verticalLayout.addLayout(self.horizontalLayout_4)
+
+        self.horizontalLayout_2 = QHBoxLayout()
+        self.horizontalLayout_2.setObjectName(u"horizontalLayout_2")
+        self.label_my_plane_labor_costs = QLabel(Task)
+        self.label_my_plane_labor_costs.setObjectName(u"label_my_plane_labor_costs")
+
+        self.horizontalLayout_2.addWidget(self.label_my_plane_labor_costs)
+
+        self.my_plane_labor_costs = QDoubleSpinBox(Task)
+        self.my_plane_labor_costs.setObjectName(u"my_plane_labor_costs")
+        self.my_plane_labor_costs.setMinimumSize(QSize(100, 0))
+        self.my_plane_labor_costs.setAlignment(Qt.AlignRight|Qt.AlignTrailing|Qt.AlignVCenter)
+        self.my_plane_labor_costs.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.my_plane_labor_costs.setKeyboardTracking(False)
+        self.my_plane_labor_costs.setDecimals(1)
+        self.my_plane_labor_costs.setMaximum(99999999.000000000000000)
+
+        self.horizontalLayout_2.addWidget(self.my_plane_labor_costs)
+
+        self.horizontalSpacer = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.horizontalLayout_2.addItem(self.horizontalSpacer)
+
+
+        self.verticalLayout.addLayout(self.horizontalLayout_2)
 
         self.label_ref = QLabel(Task)
         self.label_ref.setObjectName(u"label_ref")
@@ -166,10 +194,11 @@ class Ui_Task(object):
 
     def retranslateUi(self, Task):
         Task.setWindowTitle(QCoreApplication.translate("Task", u"\u0417\u0430\u044f\u0432\u043a\u0430", None))
-        self.label_task_number.setText(QCoreApplication.translate("Task", u"\u041d\u043e\u043c\u0435\u0440 \u0437\u0430\u044f\u0432\u043a\u0438:", None))
         self.label_task_description_2.setText(QCoreApplication.translate("Task", u"\u0414\u0438\u0440\u0435\u043a\u0442\u043e\u0440\u0438\u044f:", None))
+        self.label_task_number.setText(QCoreApplication.translate("Task", u"\u041d\u043e\u043c\u0435\u0440 \u0437\u0430\u044f\u0432\u043a\u0438:", None))
         self.label_task_description.setText(QCoreApplication.translate("Task", u"\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435:", None))
         self.label_date_end.setText(QCoreApplication.translate("Task", u"\u0421\u0440\u043e\u043a \u0434\u043e:", None))
+        self.label_my_plane_labor_costs.setText(QCoreApplication.translate("Task", u"\u041f\u043b\u0430\u043d\u0438\u0440\u0443\u0435\u043c\u044b\u0435 \u0422\u0417:", None))
         self.label_ref.setText(QCoreApplication.translate("Task", u"\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0441\u0441\u044b\u043b\u043a\u0438:", None))
         self.label_ref_example.setText(QCoreApplication.translate("Task", u"\u041f\u0440\u0438\u043c\u0435\u0440 \u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f -  \u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 (>) \u0421\u0441\u044b\u043b\u043a\u0430 (;)", None))
         self.by_template.setText(QCoreApplication.translate("Task", u"\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0440\u0438 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u0438", None))

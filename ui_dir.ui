@@ -7,19 +7,19 @@
     <x>0</x>
     <y>0</y>
     <width>400</width>
-    <height>230</height>
+    <height>270</height>
    </rect>
   </property>
   <property name="minimumSize">
    <size>
     <width>400</width>
-    <height>230</height>
+    <height>270</height>
    </size>
   </property>
   <property name="maximumSize">
    <size>
     <width>400</width>
-    <height>230</height>
+    <height>270</height>
    </size>
   </property>
   <property name="windowTitle">
@@ -79,7 +79,7 @@ border-width: 1px;
      <item>
       <widget class="QCheckBox" name="date_end">
        <property name="text">
-        <string>Срок до</string>
+        <string>Планируемый срок</string>
        </property>
       </widget>
      </item>
@@ -94,9 +94,16 @@ border-width: 1px;
       </widget>
      </item>
      <item>
+      <widget class="QCheckBox" name="my_plane_labor_costs">
+       <property name="text">
+        <string>Планируемые ТЗ</string>
+       </property>
+      </widget>
+     </item>
+     <item>
       <widget class="QCheckBox" name="labor_costs">
        <property name="text">
-        <string>ТЗ</string>
+        <string>Текущие ТЗ</string>
        </property>
       </widget>
      </item>
@@ -110,7 +117,7 @@ border-width: 1px;
      <item>
       <widget class="QCheckBox" name="plane_labor_costs">
        <property name="text">
-        <string>Плановые ТЗ</string>
+        <string>Общие, плановые ТЗ</string>
        </property>
       </widget>
      </item>
