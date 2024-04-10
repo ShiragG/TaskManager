@@ -8,10 +8,11 @@ import webbrowser
 from ui_taskmanager import *
 from ui_task import *
 from ui_dir import *
+from ui_storage import *
 from DatabaseConnector import DatabaseConnector
 
 from PySide6.QtWidgets import (
-    QMessageBox, QTableWidget, QAbstractItemView, QHeaderView, QMenu, QTableWidgetItem)
+    QMessageBox, QTableWidget, QAbstractItemView, QHeaderView, QMenu, QTableWidgetItem, QFileDialog)
 from PySide6.QtGui import (QAction, QColor, QMouseEvent)
 from PySide6 import QtGui
 
@@ -49,6 +50,7 @@ class TaskManager(QMainWindow):
 ###########################################################
 # Основные методы
 ###########################################################
+
     def testAction(self):
         '''
         Тестовое действие
@@ -206,7 +208,7 @@ class TaskManager(QMainWindow):
                             link = self.getDirPath(dir_name)
                         self.openLink(link)
                     case 'Обновить хранилище':
-                        pass  # TODO
+                        self.openStorageWindow()
                     case 'Обновить информацию по заявкам':
                         self.updateTasksInfo()
                     case 'Создать директорию':
@@ -378,7 +380,7 @@ class TaskManager(QMainWindow):
         Задаёт кнопкам меню модуля "Ведение заявок" 
         '''
         # Тестовое действие
-        #btns_menu['action'].addAction('Тестовое действие', self.handler)
+        # btns_menu['action'].addAction('Тестовое действие', self.handler)
 
         # Меню действия
         btns_menu['action'].addAction('Открыть директорию', self.handler)
@@ -497,7 +499,7 @@ class TaskManager(QMainWindow):
         # Записываем значения
         self.ui.label_action_now.setText(text)
         self.ui.progressBar.setValue(state_now)
-        
+
         # Скрываем если всё выполнилось
         if state_now >= stat_last:
             self.ui.label_action_now.hide()
@@ -507,7 +509,6 @@ class TaskManager(QMainWindow):
 ###########################################################
 # Модуль "Ведение заявок"
 ###########################################################
-
 
     def fillTaskManagerTab(self, current_dir_name: str = None, first_fill: bool = False):
         '''
@@ -597,7 +598,7 @@ class TaskManager(QMainWindow):
         if not self.checkDBSetting():
             return
 
-        self.progressBar(1,6,'Обновление информации по заявкам')
+        self.progressBar(1, 6, 'Обновление информации по заявкам')
 
         # Собираем список заявок
         work_dir_dict = self.readWorkDir()
@@ -624,15 +625,15 @@ class TaskManager(QMainWindow):
                         tasks_numbers.append(task_number)
                         dict_to_update.append(f'{dir_name}:{task_number}')
 
-        self.progressBar(2,6,'Обновление информации по заявкам')
+        self.progressBar(2, 6, 'Обновление информации по заявкам')
 
         if len(tasks_numbers) > 0:
-            self.progressBar(3,6,'Запрос к серверу')
+            self.progressBar(3, 6, 'Запрос к серверу')
             # Получаем ответ от сервера
             answer = self.db_con.getTasksInfo(
                 tasks_numbers, self.getDBSetting())
-            
-            self.progressBar(4,6,'Разбираем ответ')
+
+            self.progressBar(4, 6, 'Разбираем ответ')
 
             # Подставляем значения
             # TODO придумать более производительный алгоритм обхода
@@ -662,11 +663,11 @@ class TaskManager(QMainWindow):
                     task_data['deadline'] = task_info.get('deadline')
                     self.writeJson(task_data_path, task_data)
 
-            self.progressBar(5,6,'Заполняем таблицы')
+            self.progressBar(5, 6, 'Заполняем таблицы')
             for dir_name in set_dir:
                 self.fillTaskManagerTab(dir_name)
 
-            self.progressBar(6,6,'Выполнено')
+            self.progressBar(6, 6, 'Выполнено')
 
 ########################
 # Работа с директорией
@@ -1631,11 +1632,75 @@ class TaskManager(QMainWindow):
 # Работа с хранилищем
 ########################
 
+
+    def openStorageWindow(self, storage_data_old: dict = False):
+        '''
+        Открывает окно с параметрами обновления хранилища
+        '''
+        self.storage_window = QDialog(parent=self)
+        self.ui_storage = Ui_Storage()
+        self.ui_storage.setupUi(self.storage_window)
+        confirmed = False
+
+        # Соединяем сигналы кнопок с обработчиком
+        self.ui_storage.patchBtn.clicked.connect(self.storageHandler)
+
+        # Получаем данные выделенной заявки
+        task_data = self.getCurrentTaskData()
+        if not task_data:
+            return
+
+        # Заполняем входными данными если имеются
+        if storage_data_old:
+            pass
+        else:
+            # Ищем путь до patch.pck
+            pass
+
+        while True:
+            self.storage_window.exec()
+            # Нажата кнопка отмена
+            if self.storage_window.result() == 0:
+                break
+            # Проверяем входные данные
+            if self.checkStorageData(storage_data_old):
+                confirmed = True
+                break
+
+    def storageHandler(self):
+        '''
+        Обрабатывает запросы от окна с хранилищем
+        '''
+        # Получаем путь выбранной заявки
+        task_data = self.getCurrentTaskData()
+        task_path = self.getTaskPath(task_data.get(
+            'dir_name'), task_data.get('task_number'))
+
+        dialog = QFileDialog(parent=self, directory=task_path)
+        dialogSuccesful = dialog.exec()
+
+        if dialogSuccesful:
+            selectedFiles = dialog.selectedFiles()
+            if selectedFiles:
+                self.ui_storage.patchPath.setText(selectedFiles[0])
+
+    def checkStorageData(self, storage_data: dict) -> bool:
+        '''
+        Проверяет данные хранилища
+        '''
+        return True
+
+    def findPatchPckFile(self, path) -> str:
+        '''
+        Ищет путь до patch.pck в переданной директории
+        '''
+        path = None
+
+        return path
 ###########################################################
 ###########################################################
 # Модуль "Активные заявки"
 ###########################################################
-
 
     def fillActiveTaskTab(self):
         '''
