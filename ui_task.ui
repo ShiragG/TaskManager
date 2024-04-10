@@ -262,14 +262,49 @@ QPushButton{
     </widget>
    </item>
    <item>
-    <widget class="QLabel" name="label_ref_example">
-     <property name="text">
-      <string>Пример заполнения -  Название (&gt;) Ссылка (;)</string>
-     </property>
-    </widget>
+    <layout class="QHBoxLayout" name="horizontalLayout_8">
+     <item>
+      <widget class="QPushButton" name="addLinksBtn">
+       <property name="text">
+        <string>Добавить</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer_4">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>10</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="delLinksBtn">
+       <property name="text">
+        <string>Удалить</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
    </item>
    <item>
-    <widget class="QPlainTextEdit" name="text_links"/>
+    <widget class="QTableWidget" name="tabLinks">
+     <column>
+      <property name="text">
+       <string>Название</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Ссылка</string>
+      </property>
+     </column>
+    </widget>
    </item>
    <item>
     <widget class="QCheckBox" name="by_template">

@@ -17,9 +17,10 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QPalette, QPixmap, QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QAbstractButton, QAbstractSpinBox, QApplication, QCheckBox,
     QComboBox, QDateEdit, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QHBoxLayout, QLabel, QLayout,
-    QLineEdit, QPlainTextEdit, QSizePolicy, QSpacerItem,
-    QVBoxLayout, QWidget)
+    QDoubleSpinBox, QHBoxLayout, QHeaderView, QLabel,
+    QLayout, QLineEdit, QPushButton, QSizePolicy,
+    QSpacerItem, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget)
 import resources_rc
 
 class Ui_Task(object):
@@ -162,15 +163,35 @@ class Ui_Task(object):
 
         self.verticalLayout.addWidget(self.label_ref)
 
-        self.label_ref_example = QLabel(Task)
-        self.label_ref_example.setObjectName(u"label_ref_example")
+        self.horizontalLayout_8 = QHBoxLayout()
+        self.horizontalLayout_8.setObjectName(u"horizontalLayout_8")
+        self.addLinksBtn = QPushButton(Task)
+        self.addLinksBtn.setObjectName(u"addLinksBtn")
 
-        self.verticalLayout.addWidget(self.label_ref_example)
+        self.horizontalLayout_8.addWidget(self.addLinksBtn)
 
-        self.text_links = QPlainTextEdit(Task)
-        self.text_links.setObjectName(u"text_links")
+        self.horizontalSpacer_4 = QSpacerItem(10, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
 
-        self.verticalLayout.addWidget(self.text_links)
+        self.horizontalLayout_8.addItem(self.horizontalSpacer_4)
+
+        self.delLinksBtn = QPushButton(Task)
+        self.delLinksBtn.setObjectName(u"delLinksBtn")
+
+        self.horizontalLayout_8.addWidget(self.delLinksBtn)
+
+
+        self.verticalLayout.addLayout(self.horizontalLayout_8)
+
+        self.tabLinks = QTableWidget(Task)
+        if (self.tabLinks.columnCount() < 2):
+            self.tabLinks.setColumnCount(2)
+        __qtablewidgetitem = QTableWidgetItem()
+        self.tabLinks.setHorizontalHeaderItem(0, __qtablewidgetitem)
+        __qtablewidgetitem1 = QTableWidgetItem()
+        self.tabLinks.setHorizontalHeaderItem(1, __qtablewidgetitem1)
+        self.tabLinks.setObjectName(u"tabLinks")
+
+        self.verticalLayout.addWidget(self.tabLinks)
 
         self.by_template = QCheckBox(Task)
         self.by_template.setObjectName(u"by_template")
@@ -238,7 +259,12 @@ class Ui_Task(object):
         self.label_date_end.setText(QCoreApplication.translate("Task", u"\u0421\u0440\u043e\u043a \u0434\u043e:", None))
         self.label_my_plane_labor_costs.setText(QCoreApplication.translate("Task", u"\u041f\u043b\u0430\u043d\u0438\u0440\u0443\u0435\u043c\u044b\u0435 \u0422\u0417:", None))
         self.label_ref.setText(QCoreApplication.translate("Task", u"\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0441\u0441\u044b\u043b\u043a\u0438:", None))
-        self.label_ref_example.setText(QCoreApplication.translate("Task", u"\u041f\u0440\u0438\u043c\u0435\u0440 \u0437\u0430\u043f\u043e\u043b\u043d\u0435\u043d\u0438\u044f -  \u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435 (>) \u0421\u0441\u044b\u043b\u043a\u0430 (;)", None))
+        self.addLinksBtn.setText(QCoreApplication.translate("Task", u"\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c", None))
+        self.delLinksBtn.setText(QCoreApplication.translate("Task", u"\u0423\u0434\u0430\u043b\u0438\u0442\u044c", None))
+        ___qtablewidgetitem = self.tabLinks.horizontalHeaderItem(0)
+        ___qtablewidgetitem.setText(QCoreApplication.translate("Task", u"\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435", None));
+        ___qtablewidgetitem1 = self.tabLinks.horizontalHeaderItem(1)
+        ___qtablewidgetitem1.setText(QCoreApplication.translate("Task", u"\u0421\u0441\u044b\u043b\u043a\u0430", None));
         self.by_template.setText(QCoreApplication.translate("Task", u"\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0440\u0438 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u0438", None))
         self.label_color.setText(QCoreApplication.translate("Task", u"\u0426\u0432\u0435\u0442:", None))
         self.label_date_create_local.setText(QCoreApplication.translate("Task", u"\u0421\u043e\u0437\u0434\u0430\u043d\u0430 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e:", None))

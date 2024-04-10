@@ -79,7 +79,7 @@ class TaskManager(QMainWindow):
             'user_to_db': '',
             'password_to_db': '',
             'color_range': {'min': 5, 'max': 25},
-            'colors': {'Белый': '#ffffff', 'Красный': '#ff0000', 'Зелёный': '#99ff66'}
+            'colors': {'Белый': '#ffffff', 'Красный': '#ff0000', 'Зелёный': '#99ff66','Жёлтый':'#ffff00'}
         }
         # Если не создана папка с рабочей директорий
         if not os.path.isdir(self.settings.get('work_dir')):
@@ -160,6 +160,15 @@ class TaskManager(QMainWindow):
                 self.ui.mainContents.setCurrentIndex(1)
             case 'showPotBtn':
                 self.ui.mainContents.setCurrentIndex(2)
+            
+            # Кнопки создания заявки
+            case 'addLinksBtn':
+                row_count = self.ui_task.tabLinks.rowCount()
+                self.ui_task.tabLinks.insertRow(row_count)
+            case 'delLinksBtn':
+                row_index = self.ui_task.tabLinks.currentRow()
+                if row_index > -1:
+                    self.ui_task.tabLinks.removeRow(row_index)
 
             # Прочее
             case _:
@@ -942,7 +951,7 @@ class TaskManager(QMainWindow):
             return
 
         # Берём ссылки из заявки
-        links = self.getDictLinks(current_task_data.get('text_links'))
+        links = current_task_data.get('links')
         if not links:
             return
 
@@ -971,7 +980,7 @@ class TaskManager(QMainWindow):
 
         # Получем ссылку из задачи
         current_task_data = self.getCurrentTaskData()
-        dict_links = self.getDictLinks(current_task_data.get('text_links'))
+        dict_links = current_task_data.get('links')
         link = dict_links.get(link_name)
         self.openLink(link=link)
 
@@ -1254,6 +1263,11 @@ class TaskManager(QMainWindow):
         self.task_window = QDialog(parent=self)
         self.ui_task = Ui_Task()
         self.ui_task.setupUi(self.task_window)
+
+        # Кнопки создания заявки
+        self.ui_task.addLinksBtn.clicked.connect(self.handler)
+        self.ui_task.delLinksBtn.clicked.connect(self.handler)
+
         confirmed = False
 
         # Получаем список директорий и заполняем выпадающий список
@@ -1312,8 +1326,22 @@ class TaskManager(QMainWindow):
                 QDate(date.year, date.month, date.day))
             self.ui_task.my_plane_labor_costs.setValue(
                 task_data_old.get('my_plane_labor_costs'))
-            self.ui_task.text_links.setPlainText(
-                task_data_old.get('text_links'))
+            
+            # Заполняем таблицу ссылок
+            links_dict = {}
+            links_dict = task_data_old.get('links')
+            if links_dict:
+                # Устанавливаем растяжение для стоблцов таблицы
+                self.ui_task.tabLinks.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+                self.ui_task.tabLinks.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+                # Записываем данные
+                row = 0
+                for name_link in links_dict:
+                    self.ui_task.tabLinks.insertRow(row)
+                    self.ui_task.tabLinks.setItem(row,0,QTableWidgetItem(name_link))
+                    self.ui_task.tabLinks.setItem(row,1,QTableWidgetItem(links_dict.get(name_link)))
+                    row += 1
+
             self.ui_task.by_template.setChecked(
                 task_data_old.get('by_template'))
 
@@ -1364,7 +1392,17 @@ class TaskManager(QMainWindow):
             task_data_new['date_end'] = self.ui_task.date_end.text()
             task_data_new['my_plane_labor_costs'] = self.ui_task.my_plane_labor_costs.value(
             )
-            task_data_new['text_links'] = self.ui_task.text_links.toPlainText()
+            # Получаем словарь ссылок и заполняем данные
+            links_dict = {}
+            for row in range(0, self.ui_task.tabLinks.rowCount()):
+                # Получаем название и ссылку и убираем пустые символы по бокам
+                name_link = QTableWidgetItem(self.ui_task.tabLinks.item(row, 0)).text().strip()
+                link = QTableWidgetItem(self.ui_task.tabLinks.item(row, 1)).text().strip()
+                # Если заполнено наименование и ссылка
+                if name_link and link:
+                    links_dict[name_link] = link
+            task_data_new['links'] = links_dict
+
             task_data_new['by_template'] = self.ui_task.by_template.isChecked()
             task_data_new['color'] = self.findColorByName(
                 self.ui_task.color.currentText())
@@ -1430,43 +1468,7 @@ class TaskManager(QMainWindow):
                 title='Уведомление', text=f'Заявка: {task_number} или директория {task_path} уже существует!')
             return False
 
-        # Проверяем корректность введённых ссылок
-        task_text_links = self.ui_task.text_links.toPlainText().strip()
-        if task_text_links != '' and not self.getDictLinks(task_text_links):
-            return False
-
         return True
-
-    def getDictLinks(self, task_text_links: str) -> dict:
-        '''
-        Создаёт список ссылок по заявке
-        '''
-        links = {}
-        # Разбиваем на строки
-        try:
-            for line in task_text_links.split(';'):
-                # Разбиваем на ключ:значение
-                link = line.split('>')
-                # Выходим если пустая строка
-                if line.strip() == '':
-                    break
-
-                if link[0].strip() == '':
-                    self.printInfo('Предупреждение',
-                                   'Название ссылки не может быть пустым')
-                    return None
-
-                if link[1].strip() == '':
-                    self.printInfo('Предупреждение',
-                                   'Ссылка не может быть пустой')
-                    return None
-
-                links[link[0].strip()] = link[1].strip()
-            return links
-        except Exception as e:
-            self.printInfo('Предупреждение',
-                           f'Не удалось прочитать ссылки, проверьте правильность заполнения.\n{e}')
-            return None
 
 ########################
 # Работа с хранилищем
