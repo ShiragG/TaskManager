@@ -17,8 +17,9 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QPalette, QPixmap, QRadialGradient, QTransform)
 from PySide6.QtWidgets import (QApplication, QComboBox, QFrame, QHBoxLayout,
     QLabel, QListWidget, QListWidgetItem, QMainWindow,
-    QPlainTextEdit, QPushButton, QSizePolicy, QSpacerItem,
-    QStackedWidget, QTabWidget, QVBoxLayout, QWidget)
+    QPlainTextEdit, QProgressBar, QPushButton, QSizePolicy,
+    QSpacerItem, QStackedWidget, QTabWidget, QVBoxLayout,
+    QWidget)
 import resources_rc
 
 class Ui_MainWindow(object):
@@ -268,9 +269,7 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.mainBodyContainer.sizePolicy().hasHeightForWidth())
         self.mainBodyContainer.setSizePolicy(sizePolicy)
         self.verticalLayout_5 = QVBoxLayout(self.mainBodyContainer)
-        self.verticalLayout_5.setSpacing(0)
         self.verticalLayout_5.setObjectName(u"verticalLayout_5")
-        self.verticalLayout_5.setContentsMargins(0, 0, 0, 0)
         self.headerContainer = QWidget(self.mainBodyContainer)
         self.headerContainer.setObjectName(u"headerContainer")
         self.horizontalLayout_5 = QHBoxLayout(self.headerContainer)
@@ -358,7 +357,7 @@ class Ui_MainWindow(object):
         self.horizontalLayout_5.addWidget(self.frame_5)
 
 
-        self.verticalLayout_5.addWidget(self.headerContainer, 0, Qt.AlignTop)
+        self.verticalLayout_5.addWidget(self.headerContainer)
 
         self.notificationContent = QWidget(self.mainBodyContainer)
         self.notificationContent.setObjectName(u"notificationContent")
@@ -489,6 +488,24 @@ class Ui_MainWindow(object):
 
         self.verticalLayout_5.addWidget(self.mainBodyContent)
 
+        self.horizontalLayout_8 = QHBoxLayout()
+        self.horizontalLayout_8.setObjectName(u"horizontalLayout_8")
+        self.label_action_now = QLabel(self.mainBodyContainer)
+        self.label_action_now.setObjectName(u"label_action_now")
+        self.label_action_now.setAlignment(Qt.AlignRight|Qt.AlignTrailing|Qt.AlignVCenter)
+
+        self.horizontalLayout_8.addWidget(self.label_action_now)
+
+        self.progressBar = QProgressBar(self.mainBodyContainer)
+        self.progressBar.setObjectName(u"progressBar")
+        self.progressBar.setMaximumSize(QSize(150, 16777215))
+        self.progressBar.setValue(24)
+
+        self.horizontalLayout_8.addWidget(self.progressBar)
+
+
+        self.verticalLayout_5.addLayout(self.horizontalLayout_8)
+
 
         self.horizontalLayout.addWidget(self.mainBodyContainer)
 
@@ -559,5 +576,6 @@ class Ui_MainWindow(object):
         self.label_3.setText(QCoreApplication.translate("MainWindow", u"\u0410\u043a\u0442\u0438\u0432\u043d\u044b\u0435 \u0437\u0430\u044f\u0432\u043a\u0438", None))
         self.label_5.setText(QCoreApplication.translate("MainWindow", u"\u041a\u043e\u0442\u0451\u043b", None))
         self.label_8.setText(QCoreApplication.translate("MainWindow", u"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", None))
+        self.label_action_now.setText(QCoreApplication.translate("MainWindow", u"\u0422\u0435\u043a\u0443\u0449\u0435\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435", None))
     # retranslateUi
 

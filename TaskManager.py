@@ -28,9 +28,11 @@ class TaskManager(QMainWindow):
         # Инициализируем класс для соединения с БД
         self.initDB()
 
-        # Скрываем лишние окна
+        # Скрываем окна и элементы
         self.ui.leftMenu.hide()
         self.ui.notificationContent.hide()
+        self.ui.label_action_now.hide()
+        self.ui.progressBar.hide()
 
         # Инициализация элементов приложения
         self.initHandler()
@@ -43,9 +45,14 @@ class TaskManager(QMainWindow):
         self.initMActiveTask()
         self.initMPow()
 
+
 ###########################################################
 # Основные методы
 ###########################################################
+    def testAction(self):
+        '''
+        Тестовое действие
+        '''
 
     def readJson(self, file_path: str) -> dict:
         '''Читает json файл и возвращает словарь'''
@@ -181,6 +188,8 @@ class TaskManager(QMainWindow):
             case _:
                 # Модульные кнопки
                 match sender.text():
+                    case 'Тестовое действие':
+                        self.testAction()
                     # Модуль Ведение заявок
                     case 'Открыть директорию':
                         dir_data = self.getCurrentDirData()
@@ -368,6 +377,8 @@ class TaskManager(QMainWindow):
         '''
         Задаёт кнопкам меню модуля "Ведение заявок" 
         '''
+        # Тестовое действие
+        #btns_menu['action'].addAction('Тестовое действие', self.handler)
 
         # Меню действия
         btns_menu['action'].addAction('Открыть директорию', self.handler)
@@ -457,7 +468,7 @@ class TaskManager(QMainWindow):
                 self.ui.taskManagerTab.widget(
                     tab_index).removeColumn(column_num)
 
-    def countElementsInDir(self, path:str) -> int:
+    def countElementsInDir(self, path: str) -> int:
         '''
         Считает количество элементов в директории
         '''
@@ -468,15 +479,35 @@ class TaskManager(QMainWindow):
         count_elements = 0
         for root, dirs, files in os.walk(path):
             for name in files:
-                count_elements +=1
-        
+                count_elements += 1
+
         return count_elements
 
+    def progressBar(self, state_now: int, stat_last: int, text):
+        '''
+        Задаёт состояние для прогресс бара
+        '''
+        # Инициализируем если скрыты
+        if self.ui.label_action_now.isHidden() or self.ui.progressBar.isHidden():
+            self.ui.label_action_now.show()
+            self.ui.progressBar.show()
+            self.ui.progressBar.setMinimum(0)
+            self.ui.progressBar.setMaximum(stat_last)
+
+        # Записываем значения
+        self.ui.label_action_now.setText(text)
+        self.ui.progressBar.setValue(state_now)
+        
+        # Скрываем если всё выполнилось
+        if state_now >= stat_last:
+            self.ui.label_action_now.hide()
+            self.ui.progressBar.hide()
 
 ###########################################################
 ###########################################################
 # Модуль "Ведение заявок"
 ###########################################################
+
 
     def fillTaskManagerTab(self, current_dir_name: str = None, first_fill: bool = False):
         '''
@@ -566,6 +597,8 @@ class TaskManager(QMainWindow):
         if not self.checkDBSetting():
             return
 
+        self.progressBar(1,6,'Обновление информации по заявкам')
+
         # Собираем список заявок
         work_dir_dict = self.readWorkDir()
         tasks_numbers = []
@@ -591,10 +624,15 @@ class TaskManager(QMainWindow):
                         tasks_numbers.append(task_number)
                         dict_to_update.append(f'{dir_name}:{task_number}')
 
+        self.progressBar(2,6,'Обновление информации по заявкам')
+
         if len(tasks_numbers) > 0:
+            self.progressBar(3,6,'Запрос к серверу')
             # Получаем ответ от сервера
             answer = self.db_con.getTasksInfo(
                 tasks_numbers, self.getDBSetting())
+            
+            self.progressBar(4,6,'Разбираем ответ')
 
             # Подставляем значения
             # TODO придумать более производительный алгоритм обхода
@@ -624,8 +662,11 @@ class TaskManager(QMainWindow):
                     task_data['deadline'] = task_info.get('deadline')
                     self.writeJson(task_data_path, task_data)
 
+            self.progressBar(5,6,'Заполняем таблицы')
             for dir_name in set_dir:
                 self.fillTaskManagerTab(dir_name)
+
+            self.progressBar(6,6,'Выполнено')
 
 ########################
 # Работа с директорией
@@ -1546,7 +1587,7 @@ class TaskManager(QMainWindow):
         task_data = self.getTaskData(dir_name, task_number)
         if not task_data:
             return
-        
+
         answer = QMessageBox.question(self, 'Предупреждение',
                                       f'Перед переносом заявки: "{task_number}", убедитесь, что все файлы закрыты.\nПродолжить?',
                                       QMessageBox.StandardButton.Yes,
@@ -1595,6 +1636,7 @@ class TaskManager(QMainWindow):
 # Модуль "Активные заявки"
 ###########################################################
 
+
     def fillActiveTaskTab(self):
         '''
         Заполняет таблицу на основании запроса по активным заявкам
@@ -1619,6 +1661,7 @@ class TaskManager(QMainWindow):
 ###########################################################
 # Модуль "Котёл"
 ###########################################################
+
 
     def fillPowTab(self):
         '''
