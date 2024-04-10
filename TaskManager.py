@@ -61,15 +61,11 @@ class TaskManager(QMainWindow):
         json_data = json.loads(jsonData)
         return json_data
 
-    def writeJson(self, file_path, data: dict, hidden: bool = False):
+    def writeJson(self, file_path, data: dict):
         '''Записывает json файл'''
         json_string = json.dumps(data, ensure_ascii=False)
         with open(file_path, 'w', encoding='utf-8') as file:
             file.write(json_string)
-
-        # Делаем файл скрытым
-        if hidden:
-            subprocess.call(['attrib', '+h', file_path])
 
     def setDefaultSettings(self):
         '''Создаёт стандартный файл настроек'''
@@ -82,7 +78,8 @@ class TaskManager(QMainWindow):
             'dsn': '',
             'user_to_db': '',
             'password_to_db': '',
-            'color_range': {'min': 5, 'max': 25}
+            'color_range': {'min': 5, 'max': 25},
+            'colors': {'Белый': '#ffffff', 'Красный': '#ff0000', 'Зелёный': '#99ff66'}
         }
         # Если не создана папка с рабочей директорий
         if not os.path.isdir(self.settings.get('work_dir')):
@@ -178,7 +175,8 @@ class TaskManager(QMainWindow):
                         # Если выбрана заявка иначе открываем общую
                         if self.selectedRow() != -1:
                             task_data = self.getCurrentTaskData()
-                            link = self.getTaskPath(dir_name, task_data.get('task_number'),task_data.get('description'))
+                            link = self.getTaskPath(dir_name, task_data.get(
+                                'task_number'), task_data.get('description'))
                         else:
                             link = self.getDirPath(dir_name)
                         self.openLink(link)
@@ -371,7 +369,7 @@ class TaskManager(QMainWindow):
             'Редактировать выбранную заявку', self.handler)
         btns_menu['edit'].addAction(
             'Редактировать текущую директорию', self.handler)
-        
+
         return btns_menu
 
     def getAcitveTaskBtnsMenu(self, btns_menu: dict) -> dict:
@@ -449,6 +447,10 @@ class TaskManager(QMainWindow):
 
         # Читаем словарь с папками в рабочей директории и заполняем таблицу
         for dir_name in dir_list.keys():
+            # Проверяем что есть файл .dirData.json
+            if not os.path.isfile(self.getDirPath(dir_name, True)):
+                continue
+
             # Если необходимо заполнить только одну диреткорию, не создавая таблицу
             if current_dir_name != None and current_dir_name != dir_name:
                 continue
@@ -460,8 +462,8 @@ class TaskManager(QMainWindow):
 
             # Создаём заявки в таблице
             for task_path in dir_list[dir_name]:
-                task_number = task_path.split('_(',1)[0]
-                task_data = self.getTaskData(dir_name,task_number)
+                task_number = task_path.split('_(', 1)[0]
+                task_data = self.getTaskData(dir_name, task_number)
                 self.putTask2Tab(task_data)
 
     def readWorkDir(self, current_dir_name: str = None) -> dict:
@@ -472,6 +474,10 @@ class TaskManager(QMainWindow):
         dir_task_list = {}
         for dir_name in os.listdir(self.settings.get('work_dir')):
 
+            # Проверяем что есть файл .dirData.json
+            if not os.path.isfile(self.getDirPath(dir_name, True)):
+                continue
+
             # Если нужна конкретная директория, то пропускаем все остальные
             if current_dir_name != None and dir_name != current_dir_name:
                 continue
@@ -479,13 +485,14 @@ class TaskManager(QMainWindow):
             # Записываем название директории в которую помещяем список заявок
             list_tasks = []
             for task_path in os.listdir(self.getDirPath(dir_name)):
-                task_number = task_path.split('_(',1)[0]
+                task_number = task_path.split('_(', 1)[0]
                 # Исключаем зарезервированные папки
                 if task_number in (self.settings.get('template_name'), self.settings.get('archive_name')):
                     continue
-                
+
                 # Получаем файл с информацией по заявке
-                task_data_path = self.createPath(self.createPath(self.getDirPath(dir_name),task_path),'.taskData.json')
+                task_data_path = self.createPath(self.createPath(
+                    self.getDirPath(dir_name), task_path), '.taskData.json')
                 # Проверяем что в папке есть файл с настройками
                 if not os.path.isfile(task_data_path):
                     continue
@@ -512,10 +519,10 @@ class TaskManager(QMainWindow):
 
         for dir_name in work_dir_dict.keys():
             for task_path in work_dir_dict[dir_name]:
-                task_number = task_path.split('_(',1)[0]
-                
+                task_number = task_path.split('_(', 1)[0]
+
                 # Получаем файл с информацией по заявке
-                task_data = self.getTaskData(dir_name,task_number)
+                task_data = self.getTaskData(dir_name, task_number)
 
                 # Выбираем только те заявки которые начинаются с RP или SUP
                 task_number = task_data.get('task_number')
@@ -537,7 +544,8 @@ class TaskManager(QMainWindow):
                 task_number = dir_task.split(':')[1]
 
                 # Находим данные заявки
-                task_data_path = self.getTaskPath(dir_name, task_number, get_task_data_path=True)
+                task_data_path = self.getTaskPath(
+                    dir_name, task_number, get_task_data_path=True)
                 task_data = self.getTaskData(dir_name, task_number)
 
                 # Заполняем информаицию из ответа
@@ -576,10 +584,10 @@ class TaskManager(QMainWindow):
         Возвращает полный путь до рабочей директории
         '''
         if get_dir_data_path:
-            path = self.createPath(self.getDirPath(dir_name),'.dirData.json')
+            path = self.createPath(self.getDirPath(dir_name), '.dirData.json')
         else:
             work_dir = self.settings.get('work_dir')
-            path = self.createPath(work_dir,dir_name)
+            path = self.createPath(work_dir, dir_name)
         return path
 
     def getDirData(self, dir_name) -> dict:
@@ -669,7 +677,7 @@ class TaskManager(QMainWindow):
             # Заменяем имя директории во всех вложенных заявках
             task_list = self.readWorkDir(dir_name_new)[dir_name_new].copy()
             for task_path in task_list:
-                task_number = task_path.split('_(',1)[0]
+                task_number = task_path.split('_(', 1)[0]
                 task_data_path = self.getTaskPath(
                     dir_name_new, task_number, get_task_data_path=True)
                 task_data = self.readJson(task_data_path)
@@ -781,8 +789,10 @@ class TaskManager(QMainWindow):
             self.ui_dir.dir_name.setText(dir_data_old.get('dir_name'))
             self.ui_dir.date_end.setChecked(bool(dir_data_old.get('date_end')))
             self.ui_dir.deadline.setChecked(bool(dir_data_old.get('deadline')))
-            self.ui_dir.my_plane_labor_costs.setChecked(bool(dir_data_old.get('my_plane_labor_costs')))
-            self.ui_dir.labor_costs.setChecked(bool(dir_data_old.get('labor_costs')))
+            self.ui_dir.my_plane_labor_costs.setChecked(
+                bool(dir_data_old.get('my_plane_labor_costs')))
+            self.ui_dir.labor_costs.setChecked(
+                bool(dir_data_old.get('labor_costs')))
             self.ui_dir.all_labor_costs.setChecked(bool(
                 dir_data_old.get('all_labor_costs')))
             self.ui_dir.plane_labor_costs.setChecked(bool(
@@ -807,7 +817,8 @@ class TaskManager(QMainWindow):
             dir_data_new['description'] = True
             dir_data_new['date_end'] = self.ui_dir.date_end.isChecked()
             dir_data_new['deadline'] = self.ui_dir.deadline.isChecked()
-            dir_data_new['my_plane_labor_costs'] = self.ui_dir.my_plane_labor_costs.isChecked()
+            dir_data_new['my_plane_labor_costs'] = self.ui_dir.my_plane_labor_costs.isChecked(
+            )
             dir_data_new['labor_costs'] = self.ui_dir.labor_costs.isChecked()
             dir_data_new['all_labor_costs'] = self.ui_dir.all_labor_costs.isChecked()
             dir_data_new['plane_labor_costs'] = self.ui_dir.plane_labor_costs.isChecked()
@@ -869,7 +880,8 @@ class TaskManager(QMainWindow):
 ########################
 # Работа с заявкой
 ########################
-    def isThereTask(self,dir_name: str, task_number: str) -> bool:
+
+    def isThereTask(self, dir_name: str, task_number: str) -> bool:
         '''
         Возвращает True Если существует папка с заявкой
         '''
@@ -878,8 +890,38 @@ class TaskManager(QMainWindow):
         for task_path in os.listdir(dir_path):
             if task_path.split('_(')[0] == task_number:
                 return True
-        
+
         return False
+
+    def findColorByName(self, name) -> str:
+        '''
+        Возвращает цвет по имени
+        '''
+        color = ''
+        color_dict = {}
+        color_dict = self.settings.get('colors')
+        if color_dict:
+            color = color_dict.get(name)
+
+        # Если не нашли или длина меньше или больше 7 или текст не начинается с символа #, то возвращаем белый
+        if not color or len(str(color)) != 7 or color[0] != '#':
+            color = '#ffffff'
+
+        return color
+
+    def findNameByColor(self, color) -> str:
+        '''
+        Возвращает имя по цвету
+        '''
+        color_dict = {}
+        color_dict = self.settings.get('colors')
+        name_color = None
+        if color_dict:
+            for name in color_dict.keys():
+                if color_dict[name] == color:
+                    name_color = name
+                    break
+        return name_color
 
     def selectedRow(self) -> int:
         '''Возвращает номер выбранной строки'''
@@ -945,31 +987,35 @@ class TaskManager(QMainWindow):
             task_dir_name = task_number + self.shortDescription(description)
             # Если нужен путь до данных
             if get_task_data_path:
-                path = self.createPath(self.createPath(dir_path, task_dir_name),'.taskData.json')
+                path = self.createPath(self.createPath(
+                    dir_path, task_dir_name), '.taskData.json')
             else:
                 path = self.createPath(dir_path, task_dir_name)
         else:
             # Ищем путь до заявки по номеру
             for task_dir_name in os.listdir(dir_path):
                 # Разделяем наименование на две части: номер заявки и описание
-                part = task_dir_name.split('_(',1)[0]
+                part = task_dir_name.split('_(', 1)[0]
                 # Если нашли
                 if part == task_number:
-                    # Если нужен путь до данных 
+                    # Если нужен путь до данных
                     if get_task_data_path:
-                        path = self.createPath(self.createPath(dir_path, task_dir_name), '.taskData.json')
+                        path = self.createPath(self.createPath(
+                            dir_path, task_dir_name), '.taskData.json')
                         break
                     else:
                         path = self.createPath(dir_path, task_dir_name)
                         break
             if path == None:
                 if get_task_data_path:
-                    self.printInfo('Ошибка!',f'Не удалось получить путь до заявки:{task_number}')
+                    self.printInfo(
+                        'Ошибка!', f'Не удалось получить путь до заявки:{task_number}')
                 else:
-                    self.printInfo('Ошибка!',f'Не удалось получить путь до данных заявки:{task_number}')
-                
+                    self.printInfo(
+                        'Ошибка!', f'Не удалось получить путь до данных заявки:{task_number}')
+
         return path
-    
+
     def createTaskPath(self, dir_name: str, task_name_full: str, get_task_data_path: bool = False) -> str:
         '''
         Создаёт путь для заявки или до taskData.json
@@ -987,7 +1033,7 @@ class TaskManager(QMainWindow):
         '''
         Возвращает информацию по заявке
         '''
-        return self.readJson(self.getTaskPath(dir_name, task_number, get_task_data_path = True))
+        return self.readJson(self.getTaskPath(dir_name, task_number, get_task_data_path=True))
 
     def getCurrentTaskData(self) -> dict:
         '''
@@ -1029,6 +1075,8 @@ class TaskManager(QMainWindow):
             # Вставляем строки в зависимости от настроек полей директории
             column = 0
             dir_data = self.getDirData(task_data.get('dir_name'))
+            color = task_data.get('color')
+            found_color_name = bool(self.findNameByColor(color))
 
             for column_name in dir_data.keys():
                 if column_name == 'dir_name':
@@ -1037,8 +1085,16 @@ class TaskManager(QMainWindow):
                 if dir_data.get(column_name):
                     content = task_data.get(column_name)
                     if content != None:
-                        self.ui.taskManagerTab.widget(tab_index).setItem(
-                            row, column, QTableWidgetItem(str(content)))
+                        item = QTableWidgetItem(str(content))
+                    else:
+                        item = QTableWidgetItem(str(''))
+
+                    self.ui.taskManagerTab.widget(tab_index).setItem(
+                        row, column, item)
+
+                    if color and found_color_name:
+                        # Устанавливаем цвет
+                        item.setBackground(QColor(color))
                     column += 1
         else:
             # Обновляем таблицу
@@ -1053,7 +1109,7 @@ class TaskManager(QMainWindow):
                 self.clearTable(tab_index)
                 self.fillTaskManagerTab(dir_name_old)
 
-    def shortDescription(self,description:str) -> str:
+    def shortDescription(self, description: str) -> str:
         '''
         Возвращает сокращённое описание для наименования папок с заявками
         '''
@@ -1080,12 +1136,13 @@ class TaskManager(QMainWindow):
         description = self.shortDescription(task_data.get('description'))
 
         # Получаем необходимые пути к файлам и папкам
-        template_path = self.createPath(self.getDirPath(dir_name), self.settings.get('template_name'))
-        
+        template_path = self.createPath(self.getDirPath(
+            dir_name), self.settings.get('template_name'))
+
         # Добавляем описание к номеру заявки
         task_path = task_number + description
-        task_dir_name = self.createPath(self.getDirPath(dir_name),task_path)
-        task_data_path = self.createPath(task_dir_name,'.taskData.json')
+        task_dir_name = self.createPath(self.getDirPath(dir_name), task_path)
+        task_data_path = self.createPath(task_dir_name, '.taskData.json')
 
         try:
             if task_data.get('by_template'):
@@ -1126,7 +1183,8 @@ class TaskManager(QMainWindow):
         description_new = task_data_new.get('description')
         description_new_short = self.shortDescription(description_new)
         task_number_path_old = self.getTaskPath(dir_name_old, task_number_old)
-        task_number_path_new = self.createTaskPath(dir_name_new, task_number_new + description_new_short)
+        task_number_path_new = self.createTaskPath(
+            dir_name_new, task_number_new + description_new_short)
 
         # Если переименовали заявку
         if task_number_path_old != task_number_path_new:
@@ -1142,7 +1200,8 @@ class TaskManager(QMainWindow):
                 return
 
         # Перезаписываем .taskData.json
-        task_data_path = self.getTaskPath(dir_name_new, task_number_new, description_new, True)
+        task_data_path = self.getTaskPath(
+            dir_name_new, task_number_new, description_new, True)
         self.writeJson(task_data_path, task_data_new)
 
         self.putTask2Tab(task_data_new, task_data_old)
@@ -1208,6 +1267,17 @@ class TaskManager(QMainWindow):
             return
         self.ui_task.dir_name.addItems(dir_list)
 
+        # Получаем цвета из настроек и заполняем список
+        color_dict = self.settings.get('colors')
+        color_list = []
+        if color_dict:
+            color_list = color_dict.keys()
+        # Если есть цвета иначе ставим белый
+        if color_list:
+            self.ui_task.color.addItems(color_list)
+        else:
+            self.ui_task.color.addItem('Белый')
+
         # Устанавливаем директорию в которой находится пользователь
         index_current_dir = self.ui.taskManagerTab.currentIndex()
         self.ui_task.dir_name.setCurrentText(
@@ -1224,7 +1294,6 @@ class TaskManager(QMainWindow):
             # Переносим старые данные
             task_data_new = task_data_old.copy()
 
-            self.ui_task.task_number.setText(task_data_old.get('task_number'))
             # Поиск директории в выпадающем списке
             dir_index = self.ui_task.dir_name.findText(
                 task_data_old.get('dir_name'))
@@ -1232,6 +1301,8 @@ class TaskManager(QMainWindow):
                 self.printInfo(
                     'Уведомление', f'Не найдена директория {task_data_old.get("dir_name")}')
             self.ui_task.dir_name.setCurrentIndex(dir_index)
+
+            self.ui_task.task_number.setText(task_data_old.get('task_number'))
             self.ui_task.description.setText(
                 task_data_old.get('description'))
             # Парсим дату
@@ -1239,18 +1310,35 @@ class TaskManager(QMainWindow):
                 task_data_old.get('date_end'), '%d.%m.%Y')
             self.ui_task.date_end.setDate(
                 QDate(date.year, date.month, date.day))
-            self.ui_task.my_plane_labor_costs.setValue(task_data_old.get('my_plane_labor_costs'))
+            self.ui_task.my_plane_labor_costs.setValue(
+                task_data_old.get('my_plane_labor_costs'))
             self.ui_task.text_links.setPlainText(
                 task_data_old.get('text_links'))
             self.ui_task.by_template.setChecked(
                 task_data_old.get('by_template'))
-            self.ui_task.date_create_local.setText(task_data_old.get('date_create_local'))
+
+            # Ищем цвет в настройках
+            color_name = self.findNameByColor(task_data_old.get('color'))
+            color_index = -1
+            if color_name:
+                # Ищем цвет в выпадающем списке
+                color_index = self.ui_task.color.findText(color_name)
+
+            # Если найден цвет
+            if color_index > -1:
+                self.ui_task.color.setCurrentIndex(color_index)
+            else:
+                # Инчае ставим белый
+                self.ui_task.color.setCurrentText('Белый')
+
+            self.ui_task.date_create_local.setText(
+                task_data_old.get('date_create_local'))
 
             # При редактировании отключаем возможность выбрать элементы
             self.ui_task.by_template.setDisabled(True)
         else:
             task_data_new = {}
-            
+
             date_create_local = dt.datetime.today().strftime('%m.%d.%Y')
             # Дата локального создания
             self.ui_task.date_create_local.setText(date_create_local)
@@ -1271,11 +1359,15 @@ class TaskManager(QMainWindow):
             task_data_new['task_number'] = self.ui_task.task_number.text()
             task_data_new['dir_name'] = self.ui_task.dir_name.currentText()
             # Записываем описание и заменяем символ " на '
-            task_data_new['description'] = self.ui_task.description.text().replace('"',"'")
+            task_data_new['description'] = self.ui_task.description.text().replace(
+                '"', "'")
             task_data_new['date_end'] = self.ui_task.date_end.text()
-            task_data_new['my_plane_labor_costs'] = self.ui_task.my_plane_labor_costs.value()
+            task_data_new['my_plane_labor_costs'] = self.ui_task.my_plane_labor_costs.value(
+            )
             task_data_new['text_links'] = self.ui_task.text_links.toPlainText()
             task_data_new['by_template'] = self.ui_task.by_template.isChecked()
+            task_data_new['color'] = self.findColorByName(
+                self.ui_task.color.currentText())
             task_data_new['date_create_local'] = self.ui_task.date_create_local.text()
 
             confirmed = False
@@ -1298,13 +1390,15 @@ class TaskManager(QMainWindow):
         description = self.ui_task.description.text().strip()
         description_short = self.shortDescription(description)
 
-        task_path = self.createTaskPath(dir_name, task_number+description_short)
+        task_path = self.createTaskPath(
+            dir_name, task_number+description_short)
 
         # Проверка на зарезервированные символы
         symbols = ['\\', '/', ':', '*', '?', '<', '>', '|', '_(']
         for symbol in symbols:
             if symbol in task_number + description:
-                text_error = "'"+ "',  '".join(str(element) for element in symbols)+ "'"
+                text_error = "'" + "',  '".join(str(element)
+                                                for element in symbols) + "'"
 
                 self.printInfo(
                     'Предупреждение', f'Название заявки не может содержать символы\n{text_error}')
@@ -1321,9 +1415,9 @@ class TaskManager(QMainWindow):
             return False
 
         # Если заявка существует или при редактировании указали имя существующей заявки
-        
-        if (# Если нету старых данных (не редактирование)
-            not task_data_old                                   
+
+        if (  # Если нету старых данных (не редактирование)
+            not task_data_old
             and self.isThereTask(dir_name, task_number)) or (
             # Если есть старые данные, меняется название папки и уже есть такая папка или такая заявка
             task_data_old and
@@ -1331,7 +1425,7 @@ class TaskManager(QMainWindow):
             (os.path.isdir(task_path) or
              task_number_old != task_number and
              self.isThereTask(dir_name, task_number))
-            ):
+        ):
             self.printInfo(
                 title='Уведомление', text=f'Заявка: {task_number} или директория {task_path} уже существует!')
             return False
@@ -1402,7 +1496,6 @@ class TaskManager(QMainWindow):
         if not list_active_tasks:
             pass
 
-
 ###########################################################
 ###########################################################
 # Модуль "Котёл"
@@ -1415,6 +1508,7 @@ class TaskManager(QMainWindow):
 
     def getPow(self) -> list:
         '''Возвращает котёл с заявками'''
+
 
 ############################################################
 # Запуск в окне
