@@ -4,7 +4,6 @@ import json
 import shutil
 import datetime as dt
 import webbrowser
-import subprocess
 
 from ui_taskmanager import *
 from ui_task import *
@@ -107,6 +106,7 @@ class TaskManager(QMainWindow):
         if not os.path.isdir(self.settings.get('work_dir')):
             self.printInfo('Ошибка', 'Укажите корректную, рабочую директорию')
             return False
+        # TODO Добавить проверки
         return True
 
     def printInfo(self, title: str = None, text: str = None):
@@ -204,6 +204,12 @@ class TaskManager(QMainWindow):
                         self.openDirWindow()
                     case 'Создать заявку':
                         self.openTaskWindow()
+                    case 'Перенести выбранную заявку в архив':
+                        task_data = self.getCurrentTaskData()
+                        if not task_data:
+                            return
+                        self.moveTask2Arch(task_data.get(
+                            'dir_name'), task_data.get('task_number'))
                     case 'Удалить текущую директорию':
                         self.removeDir()
                     case 'Удалить выбранную заявку':
@@ -377,6 +383,9 @@ class TaskManager(QMainWindow):
         btns_menu['add'].addAction('Создать заявку', self.handler)
         # Меню убрать
         btns_menu['remove'].addAction(
+            'Перенести выбранную заявку в архив', self.handler)
+        btns_menu['remove'].addSeparator()
+        btns_menu['remove'].addAction(
             'Удалить текущую директорию', self.handler)
         btns_menu['remove'].addAction(
             'Удалить выбранную заявку', self.handler)
@@ -447,6 +456,22 @@ class TaskManager(QMainWindow):
             for column_num in range(self.ui.taskManagerTab.widget(tab_index).columnCount(), -1, -1):
                 self.ui.taskManagerTab.widget(
                     tab_index).removeColumn(column_num)
+
+    def countElementsInDir(self, path:str) -> int:
+        '''
+        Считает количество элементов в директории
+        '''
+        # count_elements = len(os.listdir(path))
+        # for elements in os.listdir(path):
+        #     # Если есть вложенные директории, то рекурсивно считаем
+        #     if os.path.isdir(self.createPath(path, elements)):
+        count_elements = 0
+        for root, dirs, files in os.walk(path):
+            for name in files:
+                count_elements +=1
+        
+        return count_elements
+
 
 ###########################################################
 ###########################################################
@@ -789,7 +814,7 @@ class TaskManager(QMainWindow):
 
         # Вопрос об удалении директории
         answer = QMessageBox.question(self, 'Предупреждение',
-                                      f'Вы уверены, что хотите удалить директорию "{dir_name}" и все файлы?\nТакже будет удалён архив.',
+                                      f'Перед удалением директории: "{dir_name}", убедитесь, что все файлы закрыты.\nПродолжить?',
                                       QMessageBox.StandardButton.Yes,
                                       QMessageBox.StandardButton.No
                                       )
@@ -1266,7 +1291,7 @@ class TaskManager(QMainWindow):
         task_number = self.ui.taskManagerTab.widget(
             tab_index).item(row, 0).text()
         answer = QMessageBox.question(self, 'Предупреждение',
-                                      f'Вы уверены, что хотите удалить {task_number}?',
+                                      f'Перед удалением заявки: "{task_number}", убедитесь, что все файлы закрыты.\nПродолжить?',
                                       QMessageBox.StandardButton.Yes,
                                       QMessageBox.StandardButton.No
                                       )
@@ -1406,7 +1431,7 @@ class TaskManager(QMainWindow):
         else:
             task_data_new = {}
 
-            date_create_local = dt.datetime.today().strftime('%m.%d.%Y')
+            date_create_local = dt.datetime.today().strftime('%d.%m.%Y')
             # Дата локального создания
             self.ui_task.date_create_local.setText(date_create_local)
 
@@ -1514,6 +1539,53 @@ class TaskManager(QMainWindow):
 
         return True
 
+    def moveTask2Arch(self, dir_name, task_number):
+        '''
+        Переносит заявку в архив
+        '''
+        task_data = self.getTaskData(dir_name, task_number)
+        if not task_data:
+            return
+        
+        answer = QMessageBox.question(self, 'Предупреждение',
+                                      f'Перед переносом заявки: "{task_number}", убедитесь, что все файлы закрыты.\nПродолжить?',
+                                      QMessageBox.StandardButton.Yes,
+                                      QMessageBox.StandardButton.No
+                                      )
+        if answer == QMessageBox.StandardButton.No:
+            return
+
+        try:
+            arch_path = self.createPath(self.settings.get(
+                'work_dir'), self.settings.get('archive_name'))
+
+            # Если нету папки с архивом
+            if not os.path.isdir(arch_path):
+                os.mkdir(arch_path)
+
+            # Получаем текущий месяц для создания подпапок
+            current_month = dt.datetime.now().strftime('%Y_%m')
+            arch_path_current_month = os.path.join(arch_path, current_month)
+
+            # Если в архиве нету папки с текущим месяцом
+            if not os.path.isdir(arch_path_current_month):
+                os.mkdir(arch_path_current_month)
+
+            task_path = self.getTaskPath(task_data.get(
+                'dir_name'), task_data.get('task_number'))
+
+            # Переносим задачу в архив в нужный месяц
+            shutil.move(task_path, arch_path_current_month)
+
+        except Exception as e:
+            self.printInfo(title='Предупреждение',
+                           text=f'Не удалось перенести заявку.\n{e}')
+            return
+
+        # Обновляем таблицу
+        self.fillTaskManagerTab(dir_name)
+
+
 ########################
 # Работа с хранилищем
 ########################
@@ -1540,7 +1612,8 @@ class TaskManager(QMainWindow):
         list_active_tasks = self.db_con.getActiveTasks(user_name)
 
         if not list_active_tasks:
-            pass
+            return
+
 
 ###########################################################
 ###########################################################
