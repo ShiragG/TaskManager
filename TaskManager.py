@@ -78,8 +78,7 @@ class TaskManager(QMainWindow):
             'dsn': '',
             'user_to_db': '',
             'password_to_db': '',
-            'color_range': {'min': 5, 'max': 25},
-            'colors': {'Белый': '#ffffff', 'Красный': '#ff0000', 'Зелёный': '#99ff66','Жёлтый':'#ffff00'}
+            'colors': {'Белый': '#ffffff', 'Красный': '#ff0000', 'Зелёный': '#99ff66', 'Жёлтый': '#ffff00'}
         }
         # Если не создана папка с рабочей директорий
         if not os.path.isdir(self.settings.get('work_dir')):
@@ -129,6 +128,9 @@ class TaskManager(QMainWindow):
         self.ui.showActiveTasksBtn.clicked.connect(self.handler)
         self.ui.showPotBtn.clicked.connect(self.handler)
 
+        # Изменение состояния
+        self.ui.task_status.currentIndexChanged.connect(self.handler)
+
         # Модульные кнопки
         # TODO
 
@@ -160,7 +162,7 @@ class TaskManager(QMainWindow):
                 self.ui.mainContents.setCurrentIndex(1)
             case 'showPotBtn':
                 self.ui.mainContents.setCurrentIndex(2)
-            
+
             # Кнопки создания заявки
             case 'addLinksBtn':
                 row_count = self.ui_task.tabLinks.rowCount()
@@ -169,6 +171,11 @@ class TaskManager(QMainWindow):
                 row_index = self.ui_task.tabLinks.currentRow()
                 if row_index > -1:
                     self.ui_task.tabLinks.removeRow(row_index)
+
+            # Состояние заявок
+            case 'task_status':
+
+                self.fillTaskManagerTab()
 
             # Прочее
             case _:
@@ -229,7 +236,7 @@ class TaskManager(QMainWindow):
         '''
         Инициализирует модуль "Ведение заявок"
         '''
-        self.fillTaskManagerTab()
+        self.fillTaskManagerTab(first_fill=True)
 
     def initMActiveTask(self):
         '''
@@ -446,13 +453,16 @@ class TaskManager(QMainWindow):
 # Модуль "Ведение заявок"
 ###########################################################
 
-    def fillTaskManagerTab(self, current_dir_name: str = None):
+    def fillTaskManagerTab(self, current_dir_name: str = None, first_fill: bool = False):
         '''
         Заполняет таблицу на основании рабочей директории
         Если указана текущая директория то обновляет её содержимое
         '''
         # Получаем список директорий и заявок
         dir_list = self.readWorkDir()
+
+        # Смотрим какие заявки надо отображать Не скрытые, Скрытые, Все
+        status_text = self.ui.task_status.currentText()
 
         # Читаем словарь с папками в рабочей директории и заполняем таблицу
         for dir_name in dir_list.keys():
@@ -464,16 +474,27 @@ class TaskManager(QMainWindow):
             if current_dir_name != None and current_dir_name != dir_name:
                 continue
 
-            if current_dir_name == None:
+            if current_dir_name == None and first_fill:
                 # Получаем информацию по директории и создаём таблицу
                 dir_data = self.getDirData(dir_name)
                 self.putDir2Tab(dir_data)
+
+            if not first_fill:
+                # Очищаем таблицу
+                tab_index = self.getIndexTabByName(dir_name)
+                self.clearTable(tab_index)
 
             # Создаём заявки в таблице
             for task_path in dir_list[dir_name]:
                 task_number = task_path.split('_(', 1)[0]
                 task_data = self.getTaskData(dir_name, task_number)
-                self.putTask2Tab(task_data)
+
+                # Проверка статуса
+                if (task_data.get('hidden') and status_text == 'Скрытые') or (
+                    not task_data.get('hidden') and status_text == 'Не скрытые') or (
+                    status_text == 'Все'
+                ):
+                    self.putTask2Tab(task_data)
 
     def readWorkDir(self, current_dir_name: str = None) -> dict:
         '''
@@ -533,11 +554,17 @@ class TaskManager(QMainWindow):
                 # Получаем файл с информацией по заявке
                 task_data = self.getTaskData(dir_name, task_number)
 
-                # Выбираем только те заявки которые начинаются с RP или SUP
-                task_number = task_data.get('task_number')
-                if task_number.startswith('RP') or task_number.startswith('SUP'):
-                    tasks_numbers.append(task_number)
-                    dict_to_update.append(f'{dir_name}:{task_number}')
+                # Проверяем какой статус у заявки
+                status_text = self.ui.task_status.currentText()
+                if (task_data.get('hidden') and status_text == 'Скрытые') or (
+                    not task_data.get('hidden') and status_text == 'Не скрытые') or (
+                        status_text == 'Все'
+                ):
+                    # Выбираем только те заявки которые начинаются с RP или SUP
+                    task_number = task_data.get('task_number')
+                    if task_number.startswith('RP') or task_number.startswith('SUP'):
+                        tasks_numbers.append(task_number)
+                        dict_to_update.append(f'{dir_name}:{task_number}')
 
         if len(tasks_numbers) > 0:
             # Получаем ответ от сервера
@@ -573,7 +600,6 @@ class TaskManager(QMainWindow):
                     self.writeJson(task_data_path, task_data)
 
             for dir_name in set_dir:
-                self.clearTable(self.getIndexTabByName(dir_name))
                 self.fillTaskManagerTab(dir_name)
 
 ########################
@@ -743,7 +769,6 @@ class TaskManager(QMainWindow):
             tab_index = self.getIndexTabByName(dir_data_old.get('dir_name'))
             self.ui.taskManagerTab.setTabText(
                 tab_index, dir_data.get('dir_name'))
-            self.clearTable(tab_index)
             self.ui.taskManagerTab.widget(
                 tab_index).setColumnCount(len(labels))
             self.ui.taskManagerTab.widget(
@@ -1077,7 +1102,14 @@ class TaskManager(QMainWindow):
 
         # Если не редактируем заявку
         if not task_data_old:
-            # Получаем номер новой строки и создаём её
+            # Проверяем статус
+            # Смотрим какие заявки надо отображать Не скрытые, Скрытые, Все
+            status_text = self.ui.task_status.currentText()
+            if (not task_data.get('hidden') and status_text == 'Скрытые') or (
+                    task_data.get('hidden') and status_text == 'Не скрытые'):
+                return
+
+            # Получаем номер новой строки
             row = self.ui.taskManagerTab.widget(tab_index).rowCount()
             self.ui.taskManagerTab.widget(tab_index).insertRow(row)
 
@@ -1098,8 +1130,15 @@ class TaskManager(QMainWindow):
                     else:
                         item = QTableWidgetItem(str(''))
 
-                    self.ui.taskManagerTab.widget(tab_index).setItem(
-                        row, column, item)
+                    # Смотрим какие заявки надо отображать Не скрытые, Скрытые, Все
+                    status_text = self.ui.task_status.currentText()
+                    # Проверка статуса и добавление в таблицу
+                    if task_data.get('hidden') and status_text == 'Скрытые' or status_text == 'Все':
+                        self.ui.taskManagerTab.widget(tab_index).setItem(
+                            row, column, item)
+                    elif not task_data.get('hidden') and status_text == 'Не скрытые':
+                        self.ui.taskManagerTab.widget(tab_index).setItem(
+                            row, column, item)
 
                     if color and found_color_name:
                         # Устанавливаем цвет
@@ -1107,15 +1146,10 @@ class TaskManager(QMainWindow):
                     column += 1
         else:
             # Обновляем таблицу
-            tab_index = self.getIndexTabByName(dir_name)
-            self.clearTable(tab_index)
             self.fillTaskManagerTab(dir_name)
-
             dir_name_old = task_data_old.get('dir_name')
             # Если поменялась директория, то обновляем и её
             if dir_name_old != dir_name:
-                tab_index = self.getIndexTabByName(dir_name_old)
-                self.clearTable(tab_index)
                 self.fillTaskManagerTab(dir_name_old)
 
     def shortDescription(self, description: str) -> str:
@@ -1326,7 +1360,10 @@ class TaskManager(QMainWindow):
                 QDate(date.year, date.month, date.day))
             self.ui_task.my_plane_labor_costs.setValue(
                 task_data_old.get('my_plane_labor_costs'))
-            
+
+            self.ui_task.by_template.setChecked(bool(
+                task_data_old.get('by_template')))
+
             # Заполняем таблицу ссылок
             links_dict = {}
             links_dict = task_data_old.get('links')
@@ -1338,12 +1375,11 @@ class TaskManager(QMainWindow):
                 row = 0
                 for name_link in links_dict:
                     self.ui_task.tabLinks.insertRow(row)
-                    self.ui_task.tabLinks.setItem(row,0,QTableWidgetItem(name_link))
-                    self.ui_task.tabLinks.setItem(row,1,QTableWidgetItem(links_dict.get(name_link)))
+                    self.ui_task.tabLinks.setItem(
+                        row, 0, QTableWidgetItem(name_link))
+                    self.ui_task.tabLinks.setItem(
+                        row, 1, QTableWidgetItem(links_dict.get(name_link)))
                     row += 1
-
-            self.ui_task.by_template.setChecked(
-                task_data_old.get('by_template'))
 
             # Ищем цвет в настройках
             color_name = self.findNameByColor(task_data_old.get('color'))
@@ -1358,6 +1394,9 @@ class TaskManager(QMainWindow):
             else:
                 # Инчае ставим белый
                 self.ui_task.color.setCurrentText('Белый')
+
+            # Задаём состояние заявки
+            self.ui_task.hidden.setChecked(bool(task_data_old.get('hidden')))
 
             self.ui_task.date_create_local.setText(
                 task_data_old.get('date_create_local'))
@@ -1392,20 +1431,25 @@ class TaskManager(QMainWindow):
             task_data_new['date_end'] = self.ui_task.date_end.text()
             task_data_new['my_plane_labor_costs'] = self.ui_task.my_plane_labor_costs.value(
             )
+            task_data_new['by_template'] = self.ui_task.by_template.isChecked()
+
             # Получаем словарь ссылок и заполняем данные
             links_dict = {}
             for row in range(0, self.ui_task.tabLinks.rowCount()):
                 # Получаем название и ссылку и убираем пустые символы по бокам
-                name_link = QTableWidgetItem(self.ui_task.tabLinks.item(row, 0)).text().strip()
-                link = QTableWidgetItem(self.ui_task.tabLinks.item(row, 1)).text().strip()
+                name_link = QTableWidgetItem(
+                    self.ui_task.tabLinks.item(row, 0)).text().strip()
+                link = QTableWidgetItem(
+                    self.ui_task.tabLinks.item(row, 1)).text().strip()
                 # Если заполнено наименование и ссылка
                 if name_link and link:
                     links_dict[name_link] = link
             task_data_new['links'] = links_dict
 
-            task_data_new['by_template'] = self.ui_task.by_template.isChecked()
             task_data_new['color'] = self.findColorByName(
                 self.ui_task.color.currentText())
+
+            task_data_new['hidden'] = self.ui_task.hidden.isChecked()
             task_data_new['date_create_local'] = self.ui_task.date_create_local.text()
 
             confirmed = False

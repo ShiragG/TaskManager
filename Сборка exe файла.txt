@@ -1,7 +1,0 @@
-Запускаем auto-py-to-exe
-В hidden-import добавляем модули для oracledb:
-    secrets
-    getpass
-    ssl
-    uuid
-    cryptography.hazmat.primitives.kdf.pbkdf2
