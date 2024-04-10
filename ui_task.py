@@ -27,7 +27,7 @@ class Ui_Task(object):
     def setupUi(self, Task):
         if not Task.objectName():
             Task.setObjectName(u"Task")
-        Task.resize(490, 714)
+        Task.resize(490, 636)
         icon = QIcon()
         icon.addFile(u":/icons/src/icons/ico/light/paw.ico", QSize(), QIcon.Normal, QIcon.Off)
         Task.setWindowIcon(icon)
@@ -154,6 +154,11 @@ class Ui_Task(object):
 
         self.verticalLayout.addLayout(self.horizontalLayout_2)
 
+        self.by_template = QCheckBox(Task)
+        self.by_template.setObjectName(u"by_template")
+
+        self.verticalLayout.addWidget(self.by_template)
+
         self.label_ref = QLabel(Task)
         self.label_ref.setObjectName(u"label_ref")
         font = QFont()
@@ -193,11 +198,6 @@ class Ui_Task(object):
 
         self.verticalLayout.addWidget(self.tabLinks)
 
-        self.by_template = QCheckBox(Task)
-        self.by_template.setObjectName(u"by_template")
-
-        self.verticalLayout.addWidget(self.by_template)
-
         self.horizontalLayout_7 = QHBoxLayout()
         self.horizontalLayout_7.setObjectName(u"horizontalLayout_7")
         self.label_color = QLabel(Task)
@@ -219,6 +219,11 @@ class Ui_Task(object):
 
 
         self.verticalLayout.addLayout(self.horizontalLayout_7)
+
+        self.hidden = QCheckBox(Task)
+        self.hidden.setObjectName(u"hidden")
+
+        self.verticalLayout.addWidget(self.hidden)
 
         self.horizontalLayout_6 = QHBoxLayout()
         self.horizontalLayout_6.setObjectName(u"horizontalLayout_6")
@@ -258,6 +263,7 @@ class Ui_Task(object):
         self.label_task_description.setText(QCoreApplication.translate("Task", u"\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435:", None))
         self.label_date_end.setText(QCoreApplication.translate("Task", u"\u0421\u0440\u043e\u043a \u0434\u043e:", None))
         self.label_my_plane_labor_costs.setText(QCoreApplication.translate("Task", u"\u041f\u043b\u0430\u043d\u0438\u0440\u0443\u0435\u043c\u044b\u0435 \u0422\u0417:", None))
+        self.by_template.setText(QCoreApplication.translate("Task", u"\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0440\u0438 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u0438", None))
         self.label_ref.setText(QCoreApplication.translate("Task", u"\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0441\u0441\u044b\u043b\u043a\u0438:", None))
         self.addLinksBtn.setText(QCoreApplication.translate("Task", u"\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c", None))
         self.delLinksBtn.setText(QCoreApplication.translate("Task", u"\u0423\u0434\u0430\u043b\u0438\u0442\u044c", None))
@@ -265,8 +271,8 @@ class Ui_Task(object):
         ___qtablewidgetitem.setText(QCoreApplication.translate("Task", u"\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435", None));
         ___qtablewidgetitem1 = self.tabLinks.horizontalHeaderItem(1)
         ___qtablewidgetitem1.setText(QCoreApplication.translate("Task", u"\u0421\u0441\u044b\u043b\u043a\u0430", None));
-        self.by_template.setText(QCoreApplication.translate("Task", u"\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0440\u0438 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u0438", None))
         self.label_color.setText(QCoreApplication.translate("Task", u"\u0426\u0432\u0435\u0442:", None))
+        self.hidden.setText(QCoreApplication.translate("Task", u"\u0421\u043a\u0440\u044b\u0442\u044c \u0437\u0430\u044f\u0432\u043a\u0443", None))
         self.label_date_create_local.setText(QCoreApplication.translate("Task", u"\u0421\u043e\u0437\u0434\u0430\u043d\u0430 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e:", None))
         self.date_create_local.setText("")
     # retranslateUi

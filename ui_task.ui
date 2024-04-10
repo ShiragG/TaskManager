@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>490</width>
-    <height>714</height>
+    <height>636</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -249,6 +249,13 @@ QPushButton{
     </layout>
    </item>
    <item>
+    <widget class="QCheckBox" name="by_template">
+     <property name="text">
+      <string>Использовать шаблон при создании</string>
+     </property>
+    </widget>
+   </item>
+   <item>
     <widget class="QLabel" name="label_ref">
      <property name="font">
       <font>
@@ -307,13 +314,6 @@ QPushButton{
     </widget>
    </item>
    <item>
-    <widget class="QCheckBox" name="by_template">
-     <property name="text">
-      <string>Использовать шаблон при создании</string>
-     </property>
-    </widget>
-   </item>
-   <item>
     <layout class="QHBoxLayout" name="horizontalLayout_7">
      <item>
       <widget class="QLabel" name="label_color">
@@ -358,6 +358,13 @@ QPushButton{
       </spacer>
      </item>
     </layout>
+   </item>
+   <item>
+    <widget class="QCheckBox" name="hidden">
+     <property name="text">
+      <string>Скрыть заявку</string>
+     </property>
+    </widget>
    </item>
    <item>
     <layout class="QHBoxLayout" name="horizontalLayout_6">
