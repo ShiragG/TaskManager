@@ -56,6 +56,8 @@ class TaskManager(QMainWindow):
         Тестовое действие
         '''
 
+        print(self.openFileDialog())
+
     def readJson(self, file_path: str) -> dict:
         '''Читает json файл и возвращает словарь'''
         json_data = []
@@ -75,9 +77,11 @@ class TaskManager(QMainWindow):
         with open(file_path, 'w', encoding='utf-8') as file:
             file.write(json_string)
 
-    def setDefaultSettings(self):
-        '''Создаёт стандартный файл настроек'''
-        self.settings = {
+    def getDefaultSettings(self) -> dict:
+        '''
+        Возвращает словарь со стандартными настройками
+        '''
+        return {
             'work_dir': 'Working directory',
             'template_name': '.template',
             'archive_name': '.archive',
@@ -86,8 +90,13 @@ class TaskManager(QMainWindow):
             'dsn': '',
             'user_to_db': '',
             'password_to_db': '',
-            'colors': {'Белый': '#ffffff', 'Красный': '#ff0000', 'Зелёный': '#99ff66', 'Жёлтый': '#ffff00'}
+            'colors': {'Белый': '#ffffff', 'Красный': '#ff0000', 'Зелёный': '#99ff66', 'Жёлтый': '#ffff00'},
+            'scheme_list': ['57_DISTR', '57_DEV', '57_DISTR_DAILY', '57_TEST_REP_NSK1', '57_TEST_REP_NSK2', '57_TEST_REP_OMSK', '57_TEST_REP_TOMSK']
         }
+
+    def setDefaultSettings(self):
+        '''Создаёт стандартный файл настроек'''
+        self.settings = self.getDefaultSettings()
         # Если не создана папка с рабочей директорий
         if not os.path.isdir(self.settings.get('work_dir')):
             os.mkdir(self.settings.get('work_dir'))
@@ -108,10 +117,29 @@ class TaskManager(QMainWindow):
         '''
         Записывает настройки приложения
         '''
-        self.writeJson('settings.json', self.settings)
+        self.writeJson('settings.json', settings)
 
     def checkSettings(self) -> bool:
         '''Проверяем настройки'''
+        # Проверяем, что все поля настроек есть, а лишние убраны
+        settings_default = self.getDefaultSettings()
+        settings = self.settings.copy()
+
+        # Добавляем если нету
+        for setting_name in settings_default.keys():
+            if setting_name not in settings.keys():
+                settings[setting_name] = settings_default.get(
+                    setting_name)
+
+        # Удаляем если старая настройка
+        for setting_name in list(settings.keys()):
+            if setting_name not in settings_default.keys():
+                settings.pop(setting_name, None)
+
+        if settings != self.settings:
+            self.writeSettingsApp(settings)
+            self.settings = settings.copy()
+
         if not os.path.isdir(self.settings.get('work_dir')):
             self.printInfo('Ошибка', 'Укажите корректную, рабочую директорию')
             return False
@@ -380,13 +408,14 @@ class TaskManager(QMainWindow):
         Задаёт кнопкам меню модуля "Ведение заявок" 
         '''
         # Тестовое действие
-        # btns_menu['action'].addAction('Тестовое действие', self.handler)
+        btns_menu['action'].addAction('Тестовое действие', self.handler)
 
         # Меню действия
         btns_menu['action'].addAction('Открыть директорию', self.handler)
 
         # Меню для данного действия реализуется в updateTaskLinksMenu
         self.task_links_menu = btns_menu['action'].addMenu('Открыть ссылку')
+        btns_menu['action'].addSeparator()
         btns_menu['action'].addAction('Обновить хранилище', self.handler)
         btns_menu['action'].addSeparator()
         btns_menu['action'].addAction(
@@ -504,6 +533,34 @@ class TaskManager(QMainWindow):
         if state_now >= stat_last:
             self.ui.label_action_now.hide()
             self.ui.progressBar.hide()
+
+    def openFileDialog(self, path: str = None, filter: str = None) -> str:
+        '''
+        Открывает диалог с выбором файла, возвращает путь до файла
+        '''
+        file_path = None
+
+        dialog = QFileDialog(parent=self, directory=path, filter='*.pck')
+        dialog.setFileMode(QFileDialog.ExistingFile)
+        dialogSuccesful = dialog.exec()
+
+        if dialogSuccesful:
+            selectedFiles = dialog.selectedFiles()
+            if selectedFiles:
+                file_path = selectedFiles[0]
+
+        return file_path
+
+    def openDirDialog(self, path: str = None) -> str:
+        '''
+        Открывает диалог с выбором директории, возвращает путь до файла
+        '''
+        dir_path = None
+        path = str(QFileDialog.getExistingDirectory(parent=self, dir=path))
+        if path:
+            dir_path = path
+
+        return dir_path
 
 ###########################################################
 ###########################################################
@@ -1490,7 +1547,7 @@ class TaskManager(QMainWindow):
 
         if confirmed:
             # Заполняем данные заявки
-            task_data_new['task_number'] = self.ui_task.task_number.text()
+            task_data_new['task_number'] = self.ui_task.task_number.text().strip()
             task_data_new['dir_name'] = self.ui_task.dir_name.currentText()
             # Записываем описание и заменяем символ " на '
             task_data_new['description'] = self.ui_task.description.text().replace(
@@ -1627,13 +1684,23 @@ class TaskManager(QMainWindow):
         # Обновляем таблицу
         self.fillTaskManagerTab(dir_name)
 
+    def getCurrentTaskPath(self) -> str:
+        '''
+        Возвращает путь до текущей заявки
+        '''
+        task_data = self.getCurrentTaskData()
+        task_path = self.getTaskPath(task_data.get(
+            'dir_name'), task_data.get('task_number'))
+
+        return task_path
+
 
 ########################
 # Работа с хранилищем
 ########################
 
 
-    def openStorageWindow(self, storage_data_old: dict = False):
+    def openStorageWindow(self):
         '''
         Открывает окно с параметрами обновления хранилища
         '''
@@ -1642,52 +1709,180 @@ class TaskManager(QMainWindow):
         self.ui_storage.setupUi(self.storage_window)
         confirmed = False
 
-        # Соединяем сигналы кнопок с обработчиком
+        # Соединяем сигналы кнопок и чек боксов с обработчиком
         self.ui_storage.patchBtn.clicked.connect(self.storageHandler)
+        self.ui_storage.toPathBtn.clicked.connect(self.storageHandler)
+        self.ui_storage.copyFilesTo.clicked.connect(self.storageHandler)
+        self.ui_storage.rename.clicked.connect(self.storageHandler)
+        self.ui_storage.moveToDirCompareOld.clicked.connect(
+            self.storageHandler)
+        self.ui_storage.schemeTwo.clicked.connect(self.storageHandler)
 
         # Получаем данные выделенной заявки
         task_data = self.getCurrentTaskData()
+        task_path = self.getTaskPath(task_data.get(
+            'dir_name'), task_data.get('task_number'))
+        task_data_path = self.getTaskPath(task_data.get(
+            'dir_name'), task_data.get('task_number'), get_task_data_path=True)
         if not task_data:
             return
 
+        storage_data = task_data.get('storage_data')
+        if not storage_data:
+            storage_data = {}
+
+        # Заполняем выпадающие списки для схем
+        scheme_list = list(self.settings.get('scheme_list'))
+        if scheme_list:
+            self.ui_storage.schemeOne_text.addItems(scheme_list)
+            self.ui_storage.schemeTwo_text.addItems(scheme_list)
+
+        # Заполняем выпадающие списки путей для копирования
+        links = dict(task_data.get('links'))
+        # Если есть ссылки
+        if links:
+            path_to_copy_list = list(links.values())
+            # Проверяем, что путь является директорией
+            for path in path_to_copy_list:
+                if not os.path.isdir(path):
+                    path_to_copy_list.remove(path)
+            self.ui_storage.toCopyPath.addItems(path_to_copy_list)
+
         # Заполняем входными данными если имеются
-        if storage_data_old:
-            pass
-        else:
-            # Ищем путь до patch.pck
-            pass
+        if storage_data:
+            self.ui_storage.pckPath.setText(storage_data.get('pck_path'))
+            self.ui_storage.insertTwoWhitespace.setChecked(
+                storage_data.get('insert_two_whitespace'))
+            self.ui_storage.schemeOne_text.setCurrentText(
+                storage_data.get('scheme_one_text'))
+
+            enabled = storage_data.get('scheme_two')
+            self.ui_storage.schemeTwo.setChecked(enabled)
+            self.ui_storage.schemeTwo_text.setEnabled(enabled)
+            self.ui_storage.schemeTwo_text.setCurrentText(
+                storage_data.get('scheme_two_text'))
+
+            self.ui_storage.runCompare.setChecked(
+                storage_data.get('run_compare'))
+
+            enabled = storage_data.get('rename')
+            self.ui_storage.rename.setChecked(enabled)
+            self.ui_storage.rename_text.setEnabled(enabled)
+            self.ui_storage.rename_text.setText(
+                storage_data.get('rename_text'))
+
+            enabled = storage_data.get('move_to_dir_compare')
+            self.ui_storage.moveToDirCompare.setChecked(enabled)
+            self.ui_storage.putDownSerialNum.setEnabled(enabled)
+            self.ui_storage.putDownDateTime.setEnabled(enabled)
+            self.ui_storage.putDownSerialNum.setChecked(
+                storage_data.get('put_down_serial_num'))
+            self.ui_storage.putDownDateTime.setChecked(
+                storage_data.get('put_down_date_time'))
+
+            self.ui_storage.moveLog.setChecked(storage_data.get('move_log'))
+            self.ui_storage.dontTouchLog.setChecked(
+                storage_data.get('dont_touch_log'))
+            self.ui_storage.removeLog.setChecked(
+                storage_data.get('remove_log'))
+
+            enabled = storage_data.get('copy_files_to')
+            self.ui_storage.copyFilesTo.setChecked(enabled)
+            self.ui_storage.label_toCopyPath.setEnabled(enabled)
+            self.ui_storage.toCopyPath.setEnabled(enabled)
+            self.ui_storage.toCopyPath.setCurrentText(
+                storage_data.get('to_copy_path'))
 
         while True:
             self.storage_window.exec()
             # Нажата кнопка отмена
             if self.storage_window.result() == 0:
                 break
+            elif self.storage_window.result() == 1:
+                # Записываем данные
+                storage_data['pck_path'] = self.ui_storage.pckPath.text().strip()
+                storage_data['insert_two_whitespace'] = self.ui_storage.insertTwoWhitespace.isChecked()
+                storage_data['scheme_one_text'] = self.ui_storage.schemeOne_text.currentText().strip()
+                storage_data['scheme_two'] = self.ui_storage.schemeTwo.isChecked()
+                storage_data['scheme_two_text'] = self.ui_storage.schemeTwo_text.currentText().strip()
+                storage_data['run_compare'] = self.ui_storage.runCompare.isChecked()
+                storage_data['rename'] = self.ui_storage.rename.isChecked()
+                storage_data['rename_text'] = self.ui_storage.rename_text.text().strip()
+                storage_data['move_to_dir_compare'] = self.ui_storage.moveToDirCompare.isChecked()
+                storage_data['put_down_serial_num'] = self.ui_storage.putDownSerialNum.isChecked()
+                storage_data['put_down_date_time'] = self.ui_storage.putDownDateTime.isChecked()
+                storage_data['move_log'] = self.ui_storage.moveLog.isChecked()
+                storage_data['dont_touch_log'] = self.ui_storage.dontTouchLog.isChecked()
+                storage_data['remove_log'] = self.ui_storage.removeLog.isChecked()
+                storage_data['copy_files_to'] = self.ui_storage.copyFilesTo.isChecked()
+                storage_data['to_copy_path'] = self.ui_storage.toCopyPath.currentText().strip()
+
             # Проверяем входные данные
-            if self.checkStorageData(storage_data_old):
+            if self.checkStorageData(storage_data):
                 confirmed = True
                 break
+
+        if confirmed:
+            if self.ui_storage.saveInputData.isChecked():
+                # Сохраняем введёные данные
+                task_data['storage_data'] = storage_data
+                self.writeJson(task_data_path, task_data)
+            
+            # Запускаем расчет
 
     def storageHandler(self):
         '''
         Обрабатывает запросы от окна с хранилищем
         '''
-        # Получаем путь выбранной заявки
-        task_data = self.getCurrentTaskData()
-        task_path = self.getTaskPath(task_data.get(
-            'dir_name'), task_data.get('task_number'))
+        sender = self.sender()
 
-        dialog = QFileDialog(parent=self, directory=task_path)
-        dialogSuccesful = dialog.exec()
-
-        if dialogSuccesful:
-            selectedFiles = dialog.selectedFiles()
-            if selectedFiles:
-                self.ui_storage.patchPath.setText(selectedFiles[0])
+        match sender.objectName():
+            case 'patchBtn':
+                path = self.getCurrentTaskPath()
+                pck_path = self.openFileDialog(path)
+                if not pck_path:
+                    return
+                self.ui_storage.pckPath.setText(pck_path)
+            case 'schemeTwo':
+                enabled = self.ui_storage.schemeTwo.isChecked()
+                self.ui_storage.schemeTwo_text.setEnabled(enabled)
+            case 'toPathBtn':
+                path = self.getCurrentTaskPath()
+                dir_path = self.openDirDialog(path)
+                if not dir_path:
+                    return
+                self.ui_storage.toCopyPath.setCurrentText(dir_path)
+            case 'copyFilesTo':
+                enabled = self.ui_storage.copyFilesTo.isChecked()
+                self.ui_storage.label_toCopyPath.setEnabled(enabled)
+                self.ui_storage.toCopyPath.setEnabled(enabled)
+                self.ui_storage.toPathBtn.setEnabled(enabled)
+            case 'rename':
+                enabled = self.ui_storage.rename.isChecked()
+                self.ui_storage.rename_text.setEnabled(enabled)
+            case 'moveToDirCompareOld':
+                enabled = self.ui_storage.moveToDirCompareOld.isChecked()
+                self.ui_storage.putDownSerialNum.setEnabled(enabled)
+                self.ui_storage.putDownDateTime.setEnabled(enabled)
 
     def checkStorageData(self, storage_data: dict) -> bool:
         '''
         Проверяет данные хранилища
         '''
+        # Проверки pck
+        pck_path = storage_data.get('pck_path')
+        # Добавляем пробел 
+        if '.pck' not in pck_path[-4:]:
+            self.printInfo(
+                'Предупреждение', 'В пути до pck должен быть указан файл с расширением .pck')
+            return False
+
+        if not os.path.isfile(pck_path):
+            self.printInfo('Предупреждение', 'Не найден файл .pck')
+            return False
+        
+        # Проверяем 
+
         return True
 
     def findPatchPckFile(self, path) -> str:
