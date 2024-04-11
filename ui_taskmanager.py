@@ -47,23 +47,6 @@ class Ui_MainWindow(object):
 "	border-radius:10px;\n"
 "	\n"
 "}\n"
-"QPushButton{\n"
-"	padding: 2px 5px;\n"
-"\n"
-"	border:none;\n"
-"	background-color:transparent;\n"
-"	background: none;\n"
-"	padding: 0;\n"
-"	margin:0;\n"
-"	\n"
-"}\n"
-"QPushButton:hover{\n"
-"	background-color: rgb(235, 235, 235);\n"
-"	left: -2px;\n"
-"}\n"
-"QPushButton::menu-indicator {\n"
-"	 image: none;\n"
-"}\n"
 "\n"
 "QToolTip { \n"
 "	background-color: white; \n"
@@ -78,6 +61,20 @@ class Ui_MainWindow(object):
         self.horizontalLayout.setContentsMargins(0, 0, 0, 0)
         self.leftMenuContainer = QWidget(self.centralwidget)
         self.leftMenuContainer.setObjectName(u"leftMenuContainer")
+        self.leftMenuContainer.setStyleSheet(u"QPushButton{\n"
+"	padding: 2px 5px;\n"
+"\n"
+"	\n"
+"	background-color:transparent;\n"
+"	padding: 0;\n"
+"	margin:0;\n"
+"	\n"
+"}\n"
+"QPushButton:hover{\n"
+"	background-color: rgb(235, 235, 235);\n"
+"	left: -2px;\n"
+"}\n"
+"")
         self.horizontalLayout_2 = QHBoxLayout(self.leftMenuContainer)
         self.horizontalLayout_2.setSpacing(0)
         self.horizontalLayout_2.setObjectName(u"horizontalLayout_2")
@@ -270,8 +267,24 @@ class Ui_MainWindow(object):
         self.mainBodyContainer.setSizePolicy(sizePolicy)
         self.verticalLayout_5 = QVBoxLayout(self.mainBodyContainer)
         self.verticalLayout_5.setObjectName(u"verticalLayout_5")
+        self.verticalLayout_5.setContentsMargins(0, 0, 0, 3)
         self.headerContainer = QWidget(self.mainBodyContainer)
         self.headerContainer.setObjectName(u"headerContainer")
+        self.headerContainer.setStyleSheet(u"QPushButton{\n"
+"	padding: 2px 5px;\n"
+"\n"
+"	background-color:transparent;\n"
+"	padding: 0;\n"
+"	margin:0;\n"
+"	\n"
+"}\n"
+"QPushButton:hover{\n"
+"	background-color: rgb(235, 235, 235);\n"
+"	left: -2px;\n"
+"}\n"
+"QPushButton::menu-indicator {\n"
+"	 image: none;\n"
+"}")
         self.horizontalLayout_5 = QHBoxLayout(self.headerContainer)
         self.horizontalLayout_5.setSpacing(0)
         self.horizontalLayout_5.setObjectName(u"horizontalLayout_5")
@@ -489,7 +502,9 @@ class Ui_MainWindow(object):
         self.verticalLayout_5.addWidget(self.mainBodyContent)
 
         self.horizontalLayout_8 = QHBoxLayout()
+        self.horizontalLayout_8.setSpacing(6)
         self.horizontalLayout_8.setObjectName(u"horizontalLayout_8")
+        self.horizontalLayout_8.setContentsMargins(-1, -1, -1, 5)
         self.label_action_now = QLabel(self.mainBodyContainer)
         self.label_action_now.setObjectName(u"label_action_now")
         self.label_action_now.setAlignment(Qt.AlignRight|Qt.AlignTrailing|Qt.AlignVCenter)

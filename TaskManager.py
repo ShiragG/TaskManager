@@ -408,7 +408,7 @@ class TaskManager(QMainWindow):
         Задаёт кнопкам меню модуля "Ведение заявок" 
         '''
         # Тестовое действие
-        btns_menu['action'].addAction('Тестовое действие', self.handler)
+        #btns_menu['action'].addAction('Тестовое действие', self.handler)
 
         # Меню действия
         btns_menu['action'].addAction('Открыть директорию', self.handler)
@@ -1720,12 +1720,12 @@ class TaskManager(QMainWindow):
 
         # Получаем данные выделенной заявки
         task_data = self.getCurrentTaskData()
+        if not task_data:
+            return
         task_path = self.getTaskPath(task_data.get(
             'dir_name'), task_data.get('task_number'))
         task_data_path = self.getTaskPath(task_data.get(
             'dir_name'), task_data.get('task_number'), get_task_data_path=True)
-        if not task_data:
-            return
 
         storage_data = task_data.get('storage_data')
         if not storage_data:
@@ -1871,7 +1871,6 @@ class TaskManager(QMainWindow):
         '''
         # Проверки pck
         pck_path = storage_data.get('pck_path')
-        # Добавляем пробел 
         if '.pck' not in pck_path[-4:]:
             self.printInfo(
                 'Предупреждение', 'В пути до pck должен быть указан файл с расширением .pck')
@@ -1881,8 +1880,9 @@ class TaskManager(QMainWindow):
             self.printInfo('Предупреждение', 'Не найден файл .pck')
             return False
         
-        # Проверяем 
+        # Проверяем путь до Compare
 
+        # Проверяем
         return True
 
     def findPatchPckFile(self, path) -> str:
