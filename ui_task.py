@@ -198,11 +198,54 @@ class Ui_Task(object):
 
         self.verticalLayout.addWidget(self.tabLinks)
 
+        self.horizontalLayout_9 = QHBoxLayout()
+        self.horizontalLayout_9.setObjectName(u"horizontalLayout_9")
+        self.label = QLabel(Task)
+        self.label.setObjectName(u"label")
+        self.label.setMaximumSize(QSize(160, 16777215))
+
+        self.horizontalLayout_9.addWidget(self.label)
+
+        self.percent_to_warning = QComboBox(Task)
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.addItem("")
+        self.percent_to_warning.setObjectName(u"percent_to_warning")
+        self.percent_to_warning.setMinimumSize(QSize(100, 0))
+        self.percent_to_warning.setMaximumSize(QSize(100, 16777215))
+
+        self.horizontalLayout_9.addWidget(self.percent_to_warning)
+
+        self.label_2 = QLabel(Task)
+        self.label_2.setObjectName(u"label_2")
+        self.label_2.setMaximumSize(QSize(90, 16777215))
+
+        self.horizontalLayout_9.addWidget(self.label_2)
+
+        self.horizontalSpacer_3 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.horizontalLayout_9.addItem(self.horizontalSpacer_3)
+
+
+        self.verticalLayout.addLayout(self.horizontalLayout_9)
+
         self.horizontalLayout_7 = QHBoxLayout()
         self.horizontalLayout_7.setObjectName(u"horizontalLayout_7")
         self.label_color = QLabel(Task)
         self.label_color.setObjectName(u"label_color")
-        self.label_color.setMaximumSize(QSize(30, 16777215))
+        self.label_color.setMaximumSize(QSize(75, 16777215))
 
         self.horizontalLayout_7.addWidget(self.label_color)
 
@@ -262,6 +305,7 @@ class Ui_Task(object):
         self.label_task_number.setText(QCoreApplication.translate("Task", u"\u041d\u043e\u043c\u0435\u0440 \u0437\u0430\u044f\u0432\u043a\u0438:", None))
         self.label_task_description.setText(QCoreApplication.translate("Task", u"\u041e\u043f\u0438\u0441\u0430\u043d\u0438\u0435:", None))
         self.label_date_end.setText(QCoreApplication.translate("Task", u"\u0421\u0440\u043e\u043a \u0434\u043e:", None))
+        self.date_end.setDisplayFormat(QCoreApplication.translate("Task", u"dd.MM.yyyy", None))
         self.label_my_plane_labor_costs.setText(QCoreApplication.translate("Task", u"\u041f\u043b\u0430\u043d\u0438\u0440\u0443\u0435\u043c\u044b\u0435 \u0422\u0417:", None))
         self.by_template.setText(QCoreApplication.translate("Task", u"\u0418\u0441\u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u044c \u0448\u0430\u0431\u043b\u043e\u043d \u043f\u0440\u0438 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u0438", None))
         self.label_ref.setText(QCoreApplication.translate("Task", u"\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u044b\u0435 \u0441\u0441\u044b\u043b\u043a\u0438:", None))
@@ -271,7 +315,25 @@ class Ui_Task(object):
         ___qtablewidgetitem.setText(QCoreApplication.translate("Task", u"\u041d\u0430\u0437\u0432\u0430\u043d\u0438\u0435", None));
         ___qtablewidgetitem1 = self.tabLinks.horizontalHeaderItem(1)
         ___qtablewidgetitem1.setText(QCoreApplication.translate("Task", u"\u0421\u0441\u044b\u043b\u043a\u0430", None));
-        self.label_color.setText(QCoreApplication.translate("Task", u"\u0426\u0432\u0435\u0442:", None))
+        self.label.setText(QCoreApplication.translate("Task", u"\u041f\u043e\u0434\u0441\u0432\u0435\u0447\u0438\u0432\u0430\u0442\u044c \u0441\u0440\u043e\u043a \u0438 \u0422\u0417 \u043f\u0440\u0438", None))
+        self.percent_to_warning.setItemText(0, "")
+        self.percent_to_warning.setItemText(1, QCoreApplication.translate("Task", u"95", None))
+        self.percent_to_warning.setItemText(2, QCoreApplication.translate("Task", u"90", None))
+        self.percent_to_warning.setItemText(3, QCoreApplication.translate("Task", u"85", None))
+        self.percent_to_warning.setItemText(4, QCoreApplication.translate("Task", u"80", None))
+        self.percent_to_warning.setItemText(5, QCoreApplication.translate("Task", u"75", None))
+        self.percent_to_warning.setItemText(6, QCoreApplication.translate("Task", u"70", None))
+        self.percent_to_warning.setItemText(7, QCoreApplication.translate("Task", u"65", None))
+        self.percent_to_warning.setItemText(8, QCoreApplication.translate("Task", u"60", None))
+        self.percent_to_warning.setItemText(9, QCoreApplication.translate("Task", u"55", None))
+        self.percent_to_warning.setItemText(10, QCoreApplication.translate("Task", u"50", None))
+        self.percent_to_warning.setItemText(11, QCoreApplication.translate("Task", u"45", None))
+        self.percent_to_warning.setItemText(12, QCoreApplication.translate("Task", u"40", None))
+        self.percent_to_warning.setItemText(13, QCoreApplication.translate("Task", u"35", None))
+        self.percent_to_warning.setItemText(14, QCoreApplication.translate("Task", u"30", None))
+
+        self.label_2.setText(QCoreApplication.translate("Task", u"% \u043e\u0442 \u0437\u0430\u0434\u0430\u043d\u043d\u043e\u0433\u043e ", None))
+        self.label_color.setText(QCoreApplication.translate("Task", u"\u0426\u0432\u0435\u0442 \u0437\u0430\u044f\u0432\u043a\u0438:", None))
         self.hidden.setText(QCoreApplication.translate("Task", u"\u0421\u043a\u0440\u044b\u0442\u044c \u0437\u0430\u044f\u0432\u043a\u0443", None))
         self.label_date_create_local.setText(QCoreApplication.translate("Task", u"\u0421\u043e\u0437\u0434\u0430\u043d\u0430 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u043e:", None))
         self.date_create_local.setText("")

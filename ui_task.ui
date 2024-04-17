@@ -189,6 +189,9 @@ QPushButton{
          <day>1</day>
         </datetime>
        </property>
+       <property name="displayFormat">
+        <string>dd.MM.yyyy</string>
+       </property>
        <property name="calendarPopup">
         <bool>true</bool>
        </property>
@@ -314,17 +317,151 @@ QPushButton{
     </widget>
    </item>
    <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_9">
+     <item>
+      <widget class="QLabel" name="label">
+       <property name="maximumSize">
+        <size>
+         <width>160</width>
+         <height>16777215</height>
+        </size>
+       </property>
+       <property name="text">
+        <string>Подсвечивать срок и ТЗ при</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="percent_to_warning">
+       <property name="minimumSize">
+        <size>
+         <width>100</width>
+         <height>0</height>
+        </size>
+       </property>
+       <property name="maximumSize">
+        <size>
+         <width>100</width>
+         <height>16777215</height>
+        </size>
+       </property>
+       <item>
+        <property name="text">
+         <string/>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>95</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>90</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>85</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>80</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>75</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>70</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>65</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>60</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>55</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>50</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>45</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>40</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>35</string>
+        </property>
+       </item>
+       <item>
+        <property name="text">
+         <string>30</string>
+        </property>
+       </item>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="label_2">
+       <property name="maximumSize">
+        <size>
+         <width>90</width>
+         <height>16777215</height>
+        </size>
+       </property>
+       <property name="text">
+        <string>% от заданного </string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer_3">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+   <item>
     <layout class="QHBoxLayout" name="horizontalLayout_7">
      <item>
       <widget class="QLabel" name="label_color">
        <property name="maximumSize">
         <size>
-         <width>30</width>
+         <width>75</width>
          <height>16777215</height>
         </size>
        </property>
        <property name="text">
-        <string>Цвет:</string>
+        <string>Цвет заявки:</string>
        </property>
       </widget>
      </item>
