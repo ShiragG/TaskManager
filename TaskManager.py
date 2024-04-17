@@ -4,17 +4,21 @@ import json
 import shutil
 import datetime as dt
 import webbrowser
+import subprocess
 
 from ui_taskmanager import *
 from ui_task import *
 from ui_dir import *
 from ui_storage import *
 from DatabaseConnector import DatabaseConnector
+from threading import Thread
 
 from PySide6.QtWidgets import (
     QMessageBox, QTableWidget, QAbstractItemView, QHeaderView, QMenu, QTableWidgetItem, QFileDialog)
-from PySide6.QtGui import (QAction, QColor, QMouseEvent)
-from PySide6 import QtGui
+from PySide6.QtGui import (QAction, QColor, QMouseEvent, QFont)
+from PySide6.QtCore import (QThread)
+
+
 
 
 class TaskManager(QMainWindow):
@@ -56,7 +60,58 @@ class TaskManager(QMainWindow):
         Тестовое действие
         '''
 
-        print(self.openFileDialog())
+
+    def openIn(self, explorer: str, path: str):
+        '''
+        Открывает директорию в  в Far Manager
+        '''
+        path_to_explorer = ''
+        name_explorer = ''
+        match explorer:
+            case 'explorer':
+                name_explorer = 'Explorer'
+            case 'far':
+                path_to_explorer = self.settings.get('far')
+                name_explorer = 'Far Manager'
+            case 'doublecmd':
+                path_to_explorer = self.settings.get('doublecmd')
+                name_explorer = 'Double Commander'
+            case 'totalcmd':
+                path_to_explorer = self.settings.get('totalcmd')
+                name_explorer = 'Total Commander'
+            case _:
+                self.printInfo('Предупреждение',
+                               f'Неизвестный проводник {explorer}')
+                return
+
+        if not path_to_explorer and explorer != 'explorer':
+            self.printInfo('Предупреждение',
+                           f'Не задан путь до {name_explorer}')
+            return
+
+        if not os.path.isfile(path_to_explorer) and explorer != 'explorer':
+            self.printInfo(
+                'Предупреждение', f'Не удалось открыть {name_explorer} по заданному пути:{path_to_explorer}')
+            return
+
+        try:
+            match explorer:
+                case 'explorer':
+                    os.startfile(path)
+                case 'far':
+                    path = f'"{os.path.realpath(path)}"'
+                    os.startfile(path_to_explorer, arguments=path)
+                case 'doublecmd':
+                    path = f'-C -T -P -L "{os.path.realpath(path)}"'
+                    os.startfile(path_to_explorer, arguments=path)
+                case 'totalcmd':
+                    path = f'/O /T /L="{os.path.realpath(path)}"'
+                    os.startfile(path_to_explorer, arguments=path)
+
+        except Exception as e:
+            self.printInfo(title='Ошибка!',
+                           text=f'Не удалось открыть директорию в {name_explorer}.\n{e}')
+            return
 
     def readJson(self, file_path: str) -> dict:
         '''Читает json файл и возвращает словарь'''
@@ -90,8 +145,16 @@ class TaskManager(QMainWindow):
             'dsn': '',
             'user_to_db': '',
             'password_to_db': '',
+            'far': 'C:\\Program Files (x86)\\Far Manager\\Far.exe',
+            'doublecmd': 'C:\\Program Files\\Double Commander\\doublecmd.exe',
+            'totalcmd': '',
+            'default_explorer':'explorer',
+            'highlight_warnings': True,
+            'warning_color': '#8B0000',
             'colors': {'Белый': '#ffffff', 'Красный': '#ff0000', 'Зелёный': '#99ff66', 'Жёлтый': '#ffff00'},
-            'scheme_list': ['57_DISTR', '57_DEV', '57_DISTR_DAILY', '57_TEST_REP_NSK1', '57_TEST_REP_NSK2', '57_TEST_REP_OMSK', '57_TEST_REP_TOMSK']
+            'scheme_list': ['57_DISTR', '57_DEV', '57_DISTR_DAILY', '57_TEST_REP_NSK1', '57_TEST_REP_NSK2', '57_TEST_REP_OMSK', '57_TEST_REP_TOMSK'],
+            'patch_pck_encoding' : 'cp1251',
+            'path_scripts_dir': 'C:\\usr\\bin'
         }
 
     def setDefaultSettings(self):
@@ -235,7 +298,25 @@ class TaskManager(QMainWindow):
                         else:
                             link = self.getDirPath(dir_name)
                         self.openLink(link)
-                    case 'Обновить хранилище':
+
+                    # Открытие директорий в проводниках
+                    case 'Far Manager':
+                        task_path = self.getCurrentTaskPath()
+                        if not task_path:
+                            return
+                        self.openIn('far', task_path)
+                    case 'Double Commander':
+                        task_path = self.getCurrentTaskPath()
+                        if not task_path:
+                            return
+                        self.openIn('doublecmd', task_path)
+                    case 'Total Commander':
+                        task_path = self.getCurrentTaskPath()
+                        if not task_path:
+                            return
+                        self.openIn('totalcmd', task_path)
+
+                    case 'Собрать хранилище':
                         self.openStorageWindow()
                     case 'Обновить информацию по заявкам':
                         self.updateTasksInfo()
@@ -408,15 +489,24 @@ class TaskManager(QMainWindow):
         Задаёт кнопкам меню модуля "Ведение заявок" 
         '''
         # Тестовое действие
-        #btns_menu['action'].addAction('Тестовое действие', self.handler)
+        # btns_menu['action'].addAction('Тестовое действие', self.handler)
 
         # Меню действия
         btns_menu['action'].addAction('Открыть директорию', self.handler)
 
+        openIn = btns_menu['action'].addMenu('Открыть директорию в...')
+
+        for name_explorer in ('Far Manager', 'Double Commander', 'Total Commander'):
+            action = QAction(name_explorer, self)
+            action.triggered.connect(self.handler)
+            openIn.addAction(action)
+
         # Меню для данного действия реализуется в updateTaskLinksMenu
         self.task_links_menu = btns_menu['action'].addMenu('Открыть ссылку')
         btns_menu['action'].addSeparator()
-        btns_menu['action'].addAction('Обновить хранилище', self.handler)
+        btns_menu['action'].addAction('Собрать хранилище', self.handler)
+        btns_menu['action'].addAction('Выгрузить хранилище', self.handler)
+        btns_menu['action'].addAction('Загрузить хранилище', self.handler)
         btns_menu['action'].addSeparator()
         btns_menu['action'].addAction(
             'Обновить информацию по заявкам', self.handler)
@@ -600,7 +690,7 @@ class TaskManager(QMainWindow):
 
             # Создаём заявки в таблице
             for task_path in dir_list[dir_name]:
-                task_number = task_path.split('_(', 1)[0]
+                task_number = task_path.split('___', 1)[0]
                 task_data = self.getTaskData(dir_name, task_number)
 
                 # Проверка статуса
@@ -629,7 +719,7 @@ class TaskManager(QMainWindow):
             # Записываем название директории в которую помещяем список заявок
             list_tasks = []
             for task_path in os.listdir(self.getDirPath(dir_name)):
-                task_number = task_path.split('_(', 1)[0]
+                task_number = task_path.split('___', 1)[0]
                 # Исключаем зарезервированные папки
                 if task_number in (self.settings.get('template_name'), self.settings.get('archive_name')):
                     continue
@@ -665,7 +755,7 @@ class TaskManager(QMainWindow):
 
         for dir_name in work_dir_dict.keys():
             for task_path in work_dir_dict[dir_name]:
-                task_number = task_path.split('_(', 1)[0]
+                task_number = task_path.split('___', 1)[0]
 
                 # Получаем файл с информацией по заявке
                 task_data = self.getTaskData(dir_name, task_number)
@@ -712,11 +802,12 @@ class TaskManager(QMainWindow):
                         continue
 
                     # Записываем новую информацию
-                    task_data['labor_costs'] = task_info.get('labor_costs')
-                    task_data['all_labor_costs'] = task_info.get(
-                        'all_labor_costs')
-                    task_data['plane_labor_costs'] = task_info.get(
-                        'plane_labor_costs')
+                    task_data['labor_costs'] = round(task_info.get(
+                        'labor_costs'), 2) if task_info.get('labor_costs') else None
+                    task_data['all_labor_costs'] = round(task_info.get(
+                        'all_labor_costs'), 2) if task_info.get('all_labor_costs') else None
+                    task_data['plane_labor_costs'] = round(task_info.get(
+                        'plane_labor_costs'), 2) if task_info.get('plane_labor_costs') else None
                     task_data['deadline'] = task_info.get('deadline')
                     self.writeJson(task_data_path, task_data)
 
@@ -724,7 +815,11 @@ class TaskManager(QMainWindow):
             for dir_name in set_dir:
                 self.fillTaskManagerTab(dir_name)
 
-            self.progressBar(6, 6, 'Выполнено')
+        del work_dir_dict
+        del tasks_numbers
+        del dict_to_update
+        del answer
+        self.progressBar(6, 6, 'Выполнено')
 
 ########################
 # Работа с директорией
@@ -836,7 +931,7 @@ class TaskManager(QMainWindow):
             # Заменяем имя директории во всех вложенных заявках
             task_list = self.readWorkDir(dir_name_new)[dir_name_new].copy()
             for task_path in task_list:
-                task_number = task_path.split('_(', 1)[0]
+                task_number = task_path.split('___', 1)[0]
                 task_data_path = self.getTaskPath(
                     dir_name_new, task_number, get_task_data_path=True)
                 task_data = self.readJson(task_data_path)
@@ -880,6 +975,10 @@ class TaskManager(QMainWindow):
             # Запрещаем редактирование
             table.setEditTriggers(
                 QAbstractItemView.EditTrigger.NoEditTriggers)
+            # Разрешаем сортировку
+            table.setSortingEnabled(True)
+            # Сортировка в таблице по строчно
+            table.setSelectionBehavior(QAbstractItemView.SelectRows)
             # Задаём названия колонок
             table.setHorizontalHeaderLabels(labels)
             # Добавялем обработку сигнала выделения ячейки
@@ -1003,7 +1102,7 @@ class TaskManager(QMainWindow):
                            'Название директории не может быть пустым')
             return False
 
-        symbols = ['\\', '/', ':', '*', '?', '"', '<', '>', '|']
+        symbols = ['\\', '/', ':', '*', '?', '"', '<', '>', '|', '(',')','___']
         for symbol in symbols:
             if symbol in dir_name:
                 self.printInfo(
@@ -1046,7 +1145,7 @@ class TaskManager(QMainWindow):
         dir_path = self.getDirPath(dir_name)
 
         for task_path in os.listdir(dir_path):
-            if task_path.split('_(')[0] == task_number:
+            if task_path.split('___')[0] == task_number:
                 return True
 
         return False
@@ -1116,7 +1215,9 @@ class TaskManager(QMainWindow):
         if link.startswith('http'):
             webbrowser.open(link)
         elif os.path.isdir(link):
-            os.startfile(link)
+            self.openIn(self.settings.get('default_explorer'),link)
+        elif os.path.isfile(link):
+            os.startfile(link, 'open')
         else:
             self.printInfo(title='Предупреждение',
                            text=f'Не удаётся открыть ссылку: {link}')
@@ -1153,7 +1254,7 @@ class TaskManager(QMainWindow):
             # Ищем путь до заявки по номеру
             for task_dir_name in os.listdir(dir_path):
                 # Разделяем наименование на две части: номер заявки и описание
-                part = task_dir_name.split('_(', 1)[0]
+                part = task_dir_name.split('___', 1)[0]
                 # Если нашли
                 if part == task_number:
                     # Если нужен путь до данных
@@ -1223,6 +1324,9 @@ class TaskManager(QMainWindow):
             self.printInfo(
                 'Уведомление', f'Не удалось найти таблицу "{dir_name}" и добавить заявку "{task_data.get("task_number")}"')
             return
+        
+        # Отключаем сортировку на время добавления данных
+        self.ui.taskManagerTab.widget(tab_index).setSortingEnabled(False)
 
         # Если не редактируем заявку
         if not task_data_old:
@@ -1247,6 +1351,7 @@ class TaskManager(QMainWindow):
                 if column_name == 'dir_name':
                     continue
 
+                # Если в задаче есть данные записываемые в столбец
                 if dir_data.get(column_name):
                     content = task_data.get(column_name)
                     if content != None:
@@ -1254,19 +1359,65 @@ class TaskManager(QMainWindow):
                     else:
                         item = QTableWidgetItem(str(''))
 
-                    # Смотрим какие заявки надо отображать Не скрытые, Скрытые, Все
-                    status_text = self.ui.task_status.currentText()
-                    # Проверка статуса и добавление в таблицу
-                    if task_data.get('hidden') and status_text == 'Скрытые' or status_text == 'Все':
-                        self.ui.taskManagerTab.widget(tab_index).setItem(
-                            row, column, item)
-                    elif not task_data.get('hidden') and status_text == 'Не скрытые':
-                        self.ui.taskManagerTab.widget(tab_index).setItem(
-                            row, column, item)
-
+                    # Если задан цвет и нашли его в списке цветов
                     if color and found_color_name:
                         # Устанавливаем цвет
                         item.setBackground(QColor(color))
+
+                    # Если заявка не скрыта
+                    if not task_data.get('hidden'):
+                        # Если установлена проверка даты и тз, проверяем и устанавливаем цвет
+                        percent_to_warning = task_data.get('percent_to_warning')
+                        warning_color = self.settings.get('warning_color')
+                        if self.settings.get('highlight_warnings') and percent_to_warning and warning_color:
+                            percent_to_warning = float(percent_to_warning)
+                            if column_name == 'date_end':
+                                # Рассчитываем потраченый процент от заданного срока
+                                date_start = dt.datetime.strptime(
+                                    task_data.get('date_create_local'), '%d.%m.%Y')
+                                date_end = dt.datetime.strptime(
+                                    task_data.get('date_end'), '%d.%m.%Y')
+                                date_current = dt.datetime.now()
+                                # Дата создания - планируемой сдачи = количество дней
+                                max_day = (date_end - date_start).days
+                                # Текущее количество дней
+                                current_days = (date_current - date_start).days
+
+                                # Если срок уже просрочен то подсвечиваем, иначе рассчитываем процент
+                                if max_day <= 0 or (
+                                    current_days /
+                                        (max_day / 100) >= percent_to_warning
+                                ):
+                                    item.setBackground(QColor(warning_color))
+
+                            if column_name == 'labor_costs':
+                                labor_costs = task_data.get('labor_costs')
+                                my_plane_labor_costs = task_data.get(
+                                    'my_plane_labor_costs')
+
+                                if labor_costs and my_plane_labor_costs:
+                                    labor_costs = float(labor_costs)
+                                    my_plane_labor_costs = float(
+                                        my_plane_labor_costs)
+
+                                    # Если затраченый процент больше или равен заданому то подсвечиваем ячейку
+                                    if labor_costs >= my_plane_labor_costs or (
+                                        labor_costs /
+                                            (my_plane_labor_costs /
+                                            100) >= percent_to_warning
+                                    ):
+                                        item.setBackground(QColor(warning_color))
+                    
+                    # Делаем текст косой чертой, если заявка скрыта, а отображаем все
+                    if task_data.get('hidden') and status_text == 'Все':
+                        font = QFont()
+                        font.setItalic(True)
+                        item.setFont(font)
+
+                    # Добавляем ячейку в строку
+                    self.ui.taskManagerTab.widget(tab_index).setItem(
+                        row, column, item)
+                    
                     column += 1
         else:
             # Обновляем таблицу
@@ -1275,6 +1426,9 @@ class TaskManager(QMainWindow):
             # Если поменялась директория, то обновляем и её
             if dir_name_old != dir_name:
                 self.fillTaskManagerTab(dir_name_old)
+
+        # Включаем сортировку
+        self.ui.taskManagerTab.widget(tab_index).setSortingEnabled(True)
 
     def shortDescription(self, description: str) -> str:
         '''
@@ -1286,9 +1440,9 @@ class TaskManager(QMainWindow):
         # Если описание больше 50 символов, то берём только первые 50
         if len(description) > 50:
             description = description[0:49]
-            description += '...'
+            description += '..._'
         # Оборачиваем в специальную конструкцию
-        description = '_(' + description + ')'
+        description = '___' + description
 
         return description
 
@@ -1505,6 +1659,10 @@ class TaskManager(QMainWindow):
                         row, 1, QTableWidgetItem(links_dict.get(name_link)))
                     row += 1
 
+            # Заполняем процент "до предупреждения"
+            self.ui_task.percent_to_warning.setCurrentText(
+                task_data_old.get('percent_to_warning'))
+
             # Ищем цвет в настройках
             color_name = self.findNameByColor(task_data_old.get('color'))
             color_index = -1
@@ -1549,9 +1707,12 @@ class TaskManager(QMainWindow):
             # Заполняем данные заявки
             task_data_new['task_number'] = self.ui_task.task_number.text().strip()
             task_data_new['dir_name'] = self.ui_task.dir_name.currentText()
+
             # Записываем описание и заменяем символ " на '
             task_data_new['description'] = self.ui_task.description.text().replace(
                 '"', "'")
+            task_data_new['description'] = task_data_new.get('description').strip()
+
             task_data_new['date_end'] = self.ui_task.date_end.text()
             task_data_new['my_plane_labor_costs'] = self.ui_task.my_plane_labor_costs.value(
             )
@@ -1569,10 +1730,10 @@ class TaskManager(QMainWindow):
                 if name_link and link:
                     links_dict[name_link] = link
             task_data_new['links'] = links_dict
-
+            task_data_new['percent_to_warning'] = self.ui_task.percent_to_warning.currentText(
+            )
             task_data_new['color'] = self.findColorByName(
                 self.ui_task.color.currentText())
-
             task_data_new['hidden'] = self.ui_task.hidden.isChecked()
             task_data_new['date_create_local'] = self.ui_task.date_create_local.text()
 
@@ -1600,7 +1761,7 @@ class TaskManager(QMainWindow):
             dir_name, task_number+description_short)
 
         # Проверка на зарезервированные символы
-        symbols = ['\\', '/', ':', '*', '?', '<', '>', '|', '_(']
+        symbols = ['\\', '/', ':', '*', '?', '<', '>', '|', '(',')','___']
         for symbol in symbols:
             if symbol in task_number + description:
                 text_error = "'" + "',  '".join(str(element)
@@ -1694,15 +1855,13 @@ class TaskManager(QMainWindow):
 
         return task_path
 
-
 ########################
 # Работа с хранилищем
 ########################
 
-
     def openStorageWindow(self):
         '''
-        Открывает окно с параметрами обновления хранилища
+        Открывает окно для сборки хранилища
         '''
         self.storage_window = QDialog(parent=self)
         self.ui_storage = Ui_Storage()
@@ -1711,10 +1870,8 @@ class TaskManager(QMainWindow):
 
         # Соединяем сигналы кнопок и чек боксов с обработчиком
         self.ui_storage.patchBtn.clicked.connect(self.storageHandler)
-        self.ui_storage.toPathBtn.clicked.connect(self.storageHandler)
-        self.ui_storage.copyFilesTo.clicked.connect(self.storageHandler)
         self.ui_storage.rename.clicked.connect(self.storageHandler)
-        self.ui_storage.moveToDirCompareOld.clicked.connect(
+        self.ui_storage.moveToDirCompare.clicked.connect(
             self.storageHandler)
         self.ui_storage.schemeTwo.clicked.connect(self.storageHandler)
 
@@ -1737,17 +1894,6 @@ class TaskManager(QMainWindow):
             self.ui_storage.schemeOne_text.addItems(scheme_list)
             self.ui_storage.schemeTwo_text.addItems(scheme_list)
 
-        # Заполняем выпадающие списки путей для копирования
-        links = dict(task_data.get('links'))
-        # Если есть ссылки
-        if links:
-            path_to_copy_list = list(links.values())
-            # Проверяем, что путь является директорией
-            for path in path_to_copy_list:
-                if not os.path.isdir(path):
-                    path_to_copy_list.remove(path)
-            self.ui_storage.toCopyPath.addItems(path_to_copy_list)
-
         # Заполняем входными данными если имеются
         if storage_data:
             self.ui_storage.pckPath.setText(storage_data.get('pck_path'))
@@ -1762,9 +1908,6 @@ class TaskManager(QMainWindow):
             self.ui_storage.schemeTwo_text.setCurrentText(
                 storage_data.get('scheme_two_text'))
 
-            self.ui_storage.runCompare.setChecked(
-                storage_data.get('run_compare'))
-
             enabled = storage_data.get('rename')
             self.ui_storage.rename.setChecked(enabled)
             self.ui_storage.rename_text.setEnabled(enabled)
@@ -1772,26 +1915,27 @@ class TaskManager(QMainWindow):
                 storage_data.get('rename_text'))
 
             enabled = storage_data.get('move_to_dir_compare')
-            self.ui_storage.moveToDirCompare.setChecked(enabled)
+            self.ui_storage.moveToDirCompare.setChecked(storage_data.get('move_to_dir_compare'))
+            self.ui_storage.moveToDirCompareOld.setChecked(storage_data.get('move_to_dir_compare_old'))
+            self.ui_storage.moveToDirCompareOld.setEnabled(enabled)
+            self.ui_storage.dontMoveToDirCompareOld.setEnabled(enabled)
+            self.ui_storage.dontMoveToDirCompareOld.setChecked(storage_data.get('dont_move_to_dir_compare_old'))
             self.ui_storage.putDownSerialNum.setEnabled(enabled)
             self.ui_storage.putDownDateTime.setEnabled(enabled)
             self.ui_storage.putDownSerialNum.setChecked(
                 storage_data.get('put_down_serial_num'))
             self.ui_storage.putDownDateTime.setChecked(
                 storage_data.get('put_down_date_time'))
+            
+            enabled = storage_data.get('move_to_dir_compare_old')
 
             self.ui_storage.moveLog.setChecked(storage_data.get('move_log'))
             self.ui_storage.dontTouchLog.setChecked(
                 storage_data.get('dont_touch_log'))
             self.ui_storage.removeLog.setChecked(
                 storage_data.get('remove_log'))
-
-            enabled = storage_data.get('copy_files_to')
-            self.ui_storage.copyFilesTo.setChecked(enabled)
-            self.ui_storage.label_toCopyPath.setEnabled(enabled)
-            self.ui_storage.toCopyPath.setEnabled(enabled)
-            self.ui_storage.toCopyPath.setCurrentText(
-                storage_data.get('to_copy_path'))
+            
+            self.ui_storage.openDir.setChecked(storage_data.get('open_dir'))
 
         while True:
             self.storage_window.exec()
@@ -1801,21 +1945,31 @@ class TaskManager(QMainWindow):
             elif self.storage_window.result() == 1:
                 # Записываем данные
                 storage_data['pck_path'] = self.ui_storage.pckPath.text().strip()
-                storage_data['insert_two_whitespace'] = self.ui_storage.insertTwoWhitespace.isChecked()
-                storage_data['scheme_one_text'] = self.ui_storage.schemeOne_text.currentText().strip()
+                storage_data['insert_two_whitespace'] = self.ui_storage.insertTwoWhitespace.isChecked(
+                )
+                storage_data['scheme_one_text'] = self.ui_storage.schemeOne_text.currentText(
+                ).strip()
                 storage_data['scheme_two'] = self.ui_storage.schemeTwo.isChecked()
-                storage_data['scheme_two_text'] = self.ui_storage.schemeTwo_text.currentText().strip()
-                storage_data['run_compare'] = self.ui_storage.runCompare.isChecked()
+                storage_data['scheme_two_text'] = self.ui_storage.schemeTwo_text.currentText(
+                ).strip()
                 storage_data['rename'] = self.ui_storage.rename.isChecked()
-                storage_data['rename_text'] = self.ui_storage.rename_text.text().strip()
-                storage_data['move_to_dir_compare'] = self.ui_storage.moveToDirCompare.isChecked()
-                storage_data['put_down_serial_num'] = self.ui_storage.putDownSerialNum.isChecked()
-                storage_data['put_down_date_time'] = self.ui_storage.putDownDateTime.isChecked()
+                storage_data['rename_text'] = self.ui_storage.rename_text.text(
+                ).strip()
+                storage_data['move_to_dir_compare'] = self.ui_storage.moveToDirCompare.isChecked(
+                )
+                storage_data['move_to_dir_compare_old'] = self.ui_storage.moveToDirCompareOld.isChecked(
+                )
+                storage_data['dont_move_to_dir_compare_old'] = self.ui_storage.dontMoveToDirCompareOld.isChecked(
+                )
+                storage_data['put_down_serial_num'] = self.ui_storage.putDownSerialNum.isChecked(
+                )
+                storage_data['put_down_date_time'] = self.ui_storage.putDownDateTime.isChecked(
+                )
                 storage_data['move_log'] = self.ui_storage.moveLog.isChecked()
-                storage_data['dont_touch_log'] = self.ui_storage.dontTouchLog.isChecked()
+                storage_data['dont_touch_log'] = self.ui_storage.dontTouchLog.isChecked(
+                )
                 storage_data['remove_log'] = self.ui_storage.removeLog.isChecked()
-                storage_data['copy_files_to'] = self.ui_storage.copyFilesTo.isChecked()
-                storage_data['to_copy_path'] = self.ui_storage.toCopyPath.currentText().strip()
+                storage_data['open_dir'] = self.ui_storage.openDir.isChecked()
 
             # Проверяем входные данные
             if self.checkStorageData(storage_data):
@@ -1827,8 +1981,8 @@ class TaskManager(QMainWindow):
                 # Сохраняем введёные данные
                 task_data['storage_data'] = storage_data
                 self.writeJson(task_data_path, task_data)
-            
-            # Запускаем расчет
+
+            print('Пропуск')
 
     def storageHandler(self):
         '''
@@ -1846,24 +2000,72 @@ class TaskManager(QMainWindow):
             case 'schemeTwo':
                 enabled = self.ui_storage.schemeTwo.isChecked()
                 self.ui_storage.schemeTwo_text.setEnabled(enabled)
-            case 'toPathBtn':
-                path = self.getCurrentTaskPath()
-                dir_path = self.openDirDialog(path)
-                if not dir_path:
-                    return
-                self.ui_storage.toCopyPath.setCurrentText(dir_path)
-            case 'copyFilesTo':
-                enabled = self.ui_storage.copyFilesTo.isChecked()
-                self.ui_storage.label_toCopyPath.setEnabled(enabled)
-                self.ui_storage.toCopyPath.setEnabled(enabled)
-                self.ui_storage.toPathBtn.setEnabled(enabled)
             case 'rename':
                 enabled = self.ui_storage.rename.isChecked()
                 self.ui_storage.rename_text.setEnabled(enabled)
-            case 'moveToDirCompareOld':
-                enabled = self.ui_storage.moveToDirCompareOld.isChecked()
+            case 'moveToDirCompare':
+                enabled = self.ui_storage.moveToDirCompare.isChecked()
+                self.ui_storage.moveToDirCompareOld.setEnabled(enabled)
+                self.ui_storage.dontMoveToDirCompareOld.setEnabled(enabled)
                 self.ui_storage.putDownSerialNum.setEnabled(enabled)
                 self.ui_storage.putDownDateTime.setEnabled(enabled)
+    
+    def createStorage(self):
+        '''
+        Сборка хранилища
+        '''
+        task_data = self.getCurrentTaskData()
+        task_number = task_data.get('task_number')
+        #self.getTaskData(dir_name,task_number)
+        storage = dict(task_data.get('storage_data'))
+        if not storage:
+            self.printInfo('Предупреждение','Заполнненые данные по хранилищу не найдены!')
+            return
+        
+        
+        pck_path = storage.get('pck_path')
+        pck_path_dir = os.path.dirname(pck_path)
+        # Проверка на уже запущенный сборщик
+        #TODO !!! Проверять по созданному файлу
+
+        self.progressBar(0,4,f'{task_number} Начало сборки')
+        # Проставляем недостающие пробелы в patch.pck
+        if storage.get('insert_two_whitespace'):
+            self.progressBar(1,4,f'{task_number} Проставление пробелов')
+            self.checkTwoWhiteSpaces(pck_path)
+
+        scheme_one = storage.get('scheme_one_text')
+
+        command_first = f'cd "{pck_path_dir}"&a2.bat patch.pck {scheme_one}'
+        
+        self.progressBar(2,4,f'{task_number} Сборка')
+        if not os.system(command_first)  == 0:
+            print(f'Ошибка сборки {command_first}')
+            return False
+        
+        self.progressBar(3,4,f'{task_number} Конец сборки')
+        self.progressBar(4,4,f'')
+        # # Собираем хранилище(-а)
+        # # TODO проверять наличие данной директории и скриптов в настройках
+        # path_scripts = self.settings.get('path_scripts_dir')
+        # if not path_scripts:
+        #     return
+        # path_script_a2_bat = self.createPath(path_scripts, 'a2.bat')
+        
+        # scheme_one = storage.get('scheme_one_text')
+        
+        # print('----------')
+        # print('----------')
+        # command_first = f'{path_script_a2_bat} {pck_path} {scheme_one}'
+        # command_first = f'a2.bat patch.pck {scheme_one}'
+
+        # if not os.system('cd pck_path')  == 0:
+        #     print(f'Ошибка сборки {command_first}')
+        #     return False
+        
+        # if not os.system(command_first)  == 0:
+        #     print(f'Ошибка сборки {command_first}')
+        #     return False
 
     def checkStorageData(self, storage_data: dict) -> bool:
         '''
@@ -1879,7 +2081,7 @@ class TaskManager(QMainWindow):
         if not os.path.isfile(pck_path):
             self.printInfo('Предупреждение', 'Не найден файл .pck')
             return False
-        
+
         # Проверяем путь до Compare
 
         # Проверяем
@@ -1892,6 +2094,45 @@ class TaskManager(QMainWindow):
         path = None
 
         return path
+
+    def checkTwoWhiteSpaces(self,patch_path:str):
+        '''
+        Проставляет в patch.pck два пробела где необходимо
+        '''
+        text = ''
+        new_text = ''
+        
+        # Читаем файл
+        pck_encoding = self.settings.get('patch_pck_encoding')
+        try:
+            with open(patch_path, 'r',encoding=pck_encoding) as f:
+                text = f.read()
+        except Exception as e:
+            self.printInfo('Ошибка!',f'Не удалось прочитать:{patch_path} с кодировкой {pck_encoding}\n{e}')
+            return
+        
+        # Исправляем файл
+        for line in text.split('\n'):
+            
+            # Если строка с убранными пробелами пустая и строки не равны, убираем лишние пробелы
+            if line.strip() == '' and line.strip() != line:
+                line = line.strip()
+            # Если линия не пустая и два последних символа не два пробела
+            elif line != '' and line[-2:] != '  ':
+                line += '  '
+            # Если линия 
+            
+            new_text += line + '\n'
+
+        # Записываем файл
+        try:
+            with open(patch_path, 'w',encoding=pck_encoding) as f:
+                f.write(new_text)
+        except Exception as e:
+            self.printInfo('Ошибка!',f'Не удалось записать:{patch_path} с кодировкой {pck_encoding}\n{e}')
+            return
+
+
 ###########################################################
 ###########################################################
 # Модуль "Активные заявки"
@@ -1931,6 +2172,12 @@ class TaskManager(QMainWindow):
     def getPow(self) -> list:
         '''Возвращает котёл с заявками'''
 
+
+class Worker(QObject):
+
+    def do_work(self, parent: TaskManager):
+        print('Я живой')
+        #parent.createStorage()
 
 ############################################################
 # Запуск в окне
