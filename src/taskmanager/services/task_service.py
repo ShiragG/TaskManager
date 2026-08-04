@@ -215,6 +215,11 @@ class TaskService:
         directory = self._require_directory(task.directory_id)
         return self.fs.task_path(directory, task)
 
+    def directory_folder_path(self, directory_id: int) -> Path:
+        directory = self._require_directory(directory_id)
+        path = self.fs.ensure_directory(directory)
+        return path
+
     def check_missing_folders(self) -> list[tuple[Directory, Task]]:
         """Return (directory, task) pairs whose folders are missing on disk."""
         missing: list[tuple[Directory, Task]] = []

@@ -40,6 +40,8 @@ uv run taskmanager
 
 ## Настройки (`settings.json`)
 
+Файл настроек и SQLite по умолчанию лежат в каталоге данных приложения (Linux: `~/.local/share/taskmanager/`, Windows: `%APPDATA%\taskmanager\`).
+
 | Ключ | Назначение |
 |------|------------|
 | `work_dir` | Корень рабочих папок |
@@ -49,11 +51,15 @@ uv run taskmanager
 | `warning_color` | Цвет подсветки |
 | `colors` | Палитра цветов строк |
 
+Версия приложения и контакты — в настройках («О приложении»).
+
 ## Поиск и правки
 
 - Ctrl+F / поле поиска — фильтр по номеру и описанию на текущей вкладке.
 - Двойной клик — редактирование заявки (папка на диске не переименовывается).
-- ПКМ — изменить, открыть папку, архив, удалить, ссылки.
+- ПКМ по строке — изменить, открыть папку, архив, удалить, ссылки.
+- ПКМ по вкладке директории — изменить, открыть папку, удалить.
+- Таблица: колонки **Номер → Срок → Описание**; цвет заявки заливает строку; клик по заголовку сортирует (по умолчанию номер по возрастанию).
 
 ## Тесты
 
@@ -61,6 +67,40 @@ uv run taskmanager
 uv run pytest
 ```
 
+## Сборка (PyInstaller)
+
+Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). Артефакт: `TaskManager` на Linux, `TaskManager.exe` на Windows. Данные (`settings.json`, SQLite) остаются в каталоге данных пользователя, не рядом с exe.
+
+```bash
+uv sync --all-groups
+```
+
+**Linux:**
+
+```bash
+uv run pyinstaller --noconfirm --onefile --windowed \
+  --name TaskManager \
+  --icon src/taskmanager/resources/app_icon.ico \
+  --add-data "src/taskmanager/ui/styles/app.qss:taskmanager/ui/styles" \
+  --add-data "src/taskmanager/resources/app_icon.png:taskmanager/resources" \
+  --add-data "src/taskmanager/resources/app_icon.ico:taskmanager/resources" \
+  src/taskmanager/__main__.py
+```
+
+**Windows** (разделитель путей в `--add-data` — `;`):
+
+```bash
+uv run pyinstaller --noconfirm --onefile --windowed \
+  --name TaskManager \
+  --icon src/taskmanager/resources/app_icon.ico \
+  --add-data "src/taskmanager/ui/styles/app.qss;taskmanager/ui/styles" \
+  --add-data "src/taskmanager/resources/app_icon.png;taskmanager/resources" \
+  --add-data "src/taskmanager/resources/app_icon.ico;taskmanager/resources" \
+  src/taskmanager/__main__.py
+```
+
+Готовый бинарник появится в `dist/`.
+
 ## Что не входит в v1
 
-Связи между заявками, поиск по содержимому файлов, миграция старых `.taskData.json`, Oracle, хранилище, сторонние проводники, тёмная тема.
+Связи между заявками, поиск по содержимому файлов, массовый архив директории, миграция старых `.taskData.json`, Oracle, хранилище, сторонние проводники, тёмная тема, кросс-сборка Win↔Linux.

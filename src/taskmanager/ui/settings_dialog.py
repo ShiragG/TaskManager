@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
 )
 
 from taskmanager.services.settings_service import Settings, SettingsStore
+from taskmanager.ui.about_dialog import AboutDialog
+from taskmanager.version import get_version
 
 
 class SettingsDialog(QDialog):
@@ -67,12 +69,26 @@ class SettingsDialog(QDialog):
         hint.setStyleSheet("color: #64748b;")
         layout.addWidget(hint)
 
+        footer = QHBoxLayout()
+        version_label = QLabel(f"Версия {get_version()}")
+        version_label.setStyleSheet("color: #64748b;")
+        footer.addWidget(version_label)
+        footer.addStretch()
+        about_btn = QPushButton("О приложении…")
+        about_btn.setObjectName("secondaryButton")
+        about_btn.clicked.connect(self._open_about)
+        footer.addWidget(about_btn)
+        layout.addLayout(footer)
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _open_about(self) -> None:
+        AboutDialog(self).exec()
 
     def _browse_work_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(
