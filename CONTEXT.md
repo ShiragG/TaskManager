@@ -29,5 +29,9 @@ The root filesystem path under which directories, templates, and the archive liv
 _Avoid_: workspace root, project root, home
 
 **Folder name**:
-The on-disk name of a task folder, fixed at creation as `{number}___{description}` and not renamed by the application when metadata changes.
+The on-disk name of a task folder, equal to the task **number** (sanitized). When the number changes, the folder is renamed on disk and `folder_name` is updated in SQLite. Description is metadata only and is not part of the folder name.
 _Avoid_: path, title, display name
+
+**Hidden** (скрытая):
+A task flag: in the default view the task is omitted; in «Скрытые» mode only hidden tasks are listed.
+_Avoid_: archived (different concept), deleted, inactive

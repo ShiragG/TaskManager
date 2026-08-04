@@ -13,6 +13,8 @@ DEFAULT_COLORS = {
     "Жёлтый": "#ffff00",
 }
 
+BASE_COLOR_NAMES = frozenset(DEFAULT_COLORS.keys())
+
 
 @dataclass
 class Settings:
@@ -21,6 +23,7 @@ class Settings:
     archive_name: str = ".archive"
     highlight_warnings: bool = True
     warning_color: str = "#8B0000"
+    warning_lead_days: int = 1
     colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLORS))
 
     def to_dict(self) -> dict[str, Any]:

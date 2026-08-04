@@ -6,13 +6,30 @@ from taskmanager.services.settings_service import Settings, SettingsStore
 def test_settings_roundtrip(tmp_path: Path):
     path = tmp_path / "settings.json"
     store = SettingsStore(path)
-    settings = Settings(work_dir=str(tmp_path / "work"), template_name=".tpl")
+    settings = Settings(
+        work_dir=str(tmp_path / "work"),
+        template_name=".tpl",
+        warning_lead_days=3,
+    )
     store.save(settings)
     loaded = store.load()
     assert loaded.work_dir == settings.work_dir
     assert loaded.template_name == ".tpl"
     assert loaded.archive_name == ".archive"
+    assert loaded.warning_lead_days == 3
     assert "Белый" in loaded.colors
+
+
+def test_settings_default_lead_days(tmp_path: Path):
+    work = tmp_path / "w"
+    work.mkdir()
+    path = tmp_path / "settings.json"
+    path.write_text(
+        f'{{"work_dir": "{work.as_posix()}"}}',
+        encoding="utf-8",
+    )
+    loaded = SettingsStore(path).load()
+    assert loaded.warning_lead_days == 1
 
 
 def test_settings_drops_unknown_keys(tmp_path: Path):

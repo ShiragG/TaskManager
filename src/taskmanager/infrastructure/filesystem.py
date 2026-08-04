@@ -79,6 +79,23 @@ class TaskFilesystem:
             dest.mkdir(parents=True)
         return dest
 
+    def rename_task_folder(
+        self,
+        directory: Directory,
+        task: Task,
+        new_folder_name: str,
+    ) -> Path:
+        src = self.task_path(directory, task)
+        dest = self.directory_path(directory) / new_folder_name
+        if src == dest:
+            return dest
+        if not src.is_dir():
+            raise FilesystemError(f"Папка заявки не найдена: {src}")
+        if dest.exists():
+            raise FilesystemError(f"Папка заявки уже существует: {dest}")
+        src.rename(dest)
+        return dest
+
     def archive_task(self, directory: Directory, task: Task, archive_month: str) -> Path:
         src = self.task_path(directory, task)
         if not src.is_dir():

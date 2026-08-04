@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 
 
@@ -21,13 +21,21 @@ def sanitize_for_folder(text: str) -> str:
     return result.replace("___", "_")
 
 
-def make_folder_name(number: str, description: str) -> str:
-    """Build stable on-disk folder name: ``{number}___{description}``."""
-    number = sanitize_for_folder(number.strip())
-    desc = sanitize_for_folder(description.strip())
-    if len(desc) > 50:
-        desc = desc[:49] + "..._"
-    return f"{number}___{desc}"
+def make_folder_name(number: str) -> str:
+    """On-disk folder name equals the sanitized task number."""
+    return sanitize_for_folder(number.strip())
+
+
+def is_deadline_warning(
+    date_end: date | None,
+    *,
+    today: date,
+    lead_days: int,
+) -> bool:
+    """True when date_end is set and falls on or before today + lead_days."""
+    if date_end is None:
+        return False
+    return date_end <= today + timedelta(days=lead_days)
 
 
 @dataclass(frozen=True)

@@ -44,7 +44,7 @@ def test_directory_and_task_crud(service: TaskService, tmp_path: Path):
     )
     folder = tmp_path / "work" / "Alpha" / task.folder_name
     assert folder.is_dir()
-    assert task.folder_name == "42___hello"
+    assert task.folder_name == "42"
 
     loaded = service.get_task(task.id)
     assert loaded.number == "42"
@@ -55,10 +55,40 @@ def test_directory_and_task_crud(service: TaskService, tmp_path: Path):
         task.id,
         UpdateTaskRequest(description="changed", number="42"),
     )
-    # folder name must stay stable
-    assert updated.folder_name == "42___hello"
+    assert updated.folder_name == "42"
     assert folder.is_dir()
     assert updated.description == "changed"
+
+
+def test_rename_number_renames_folder(service: TaskService, tmp_path: Path):
+    directory = service.create_directory("RenameDir")
+    task = service.create_task(
+        CreateTaskRequest(
+            directory_id=directory.id,
+            number="10",
+            description="meta only",
+        )
+    )
+    old_path = tmp_path / "work" / "RenameDir" / "10"
+    assert old_path.is_dir()
+
+    updated = service.update_task(task.id, UpdateTaskRequest(number="20"))
+    assert updated.number == "20"
+    assert updated.folder_name == "20"
+    assert not old_path.exists()
+    assert (tmp_path / "work" / "RenameDir" / "20").is_dir()
+
+
+def test_rename_number_rejects_duplicate(service: TaskService):
+    directory = service.create_directory("DupNum")
+    service.create_task(
+        CreateTaskRequest(directory_id=directory.id, number="1", description="a")
+    )
+    other = service.create_task(
+        CreateTaskRequest(directory_id=directory.id, number="2", description="b")
+    )
+    with pytest.raises(ServiceError, match="уже существует"):
+        service.update_task(other.id, UpdateTaskRequest(number="1"))
 
 
 def test_create_from_template(service: TaskService, tmp_path: Path):

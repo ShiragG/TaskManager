@@ -5,7 +5,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from taskmanager.domain import Directory, Link, Task, TaskStatus, make_folder_name
-from taskmanager.infrastructure.filesystem import TaskFilesystem
+from taskmanager.infrastructure.filesystem import FilesystemError, TaskFilesystem
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.services.settings_service import Settings
 
@@ -99,13 +99,13 @@ class TaskService:
         self,
         directory_id: int,
         *,
-        include_hidden: bool = True,
+        only_hidden: bool = False,
         query: str | None = None,
     ) -> list[Task]:
         return self.repo.list_tasks(
             directory_id,
             status=TaskStatus.ACTIVE,
-            include_hidden=include_hidden,
+            only_hidden=only_hidden,
             query=query,
         )
 
@@ -120,11 +120,19 @@ class TaskService:
         number = request.number.strip()
         if not number:
             raise ServiceError("Номер заявки не может быть пустым")
-        folder_name = make_folder_name(number, request.description)
+        folder_name = make_folder_name(number)
+        if not folder_name:
+            raise ServiceError("Номер заявки содержит только недопустимые символы")
+        conflict = self.repo.find_task_by_number(directory.id, number)  # type: ignore[arg-type]
+        if conflict is not None:
+            raise ServiceError(f"Заявка с номером «{number}» уже существует")
         self.fs.ensure_directory(directory)
-        self.fs.create_task_folder(
-            directory, folder_name, by_template=request.by_template
-        )
+        try:
+            self.fs.create_task_folder(
+                directory, folder_name, by_template=request.by_template
+            )
+        except FilesystemError as exc:
+            raise ServiceError(str(exc)) from exc
         task = Task(
             id=None,
             directory_id=directory.id,  # type: ignore[arg-type]
@@ -156,12 +164,30 @@ class TaskService:
         if task.status != TaskStatus.ACTIVE:
             raise ServiceError("Нельзя редактировать архивную заявку")
 
-        # folder_name stays fixed — metadata only
+        directory = self._require_directory(task.directory_id)
+        old_folder_name = task.folder_name
+        renamed = False
+
         if request.number is not None:
             number = request.number.strip()
             if not number:
                 raise ServiceError("Номер заявки не может быть пустым")
+            new_folder_name = make_folder_name(number)
+            if not new_folder_name:
+                raise ServiceError("Номер заявки содержит только недопустимые символы")
+            if number != task.number:
+                conflict = self.repo.find_task_by_number(task.directory_id, number)
+                if conflict is not None and conflict.id != task.id:
+                    raise ServiceError(f"Заявка с номером «{number}» уже существует")
+            if new_folder_name != task.folder_name:
+                try:
+                    self.fs.rename_task_folder(directory, task, new_folder_name)
+                except FilesystemError as exc:
+                    raise ServiceError(str(exc)) from exc
+                renamed = True
+                task.folder_name = new_folder_name
             task.number = number
+
         if request.description is not None:
             task.description = request.description.strip()
         if request.clear_date_end:
@@ -173,7 +199,17 @@ class TaskService:
         if request.hidden is not None:
             task.hidden = request.hidden
 
-        self.repo.update_task(task)
+        try:
+            self.repo.update_task(task)
+        except Exception:
+            if renamed:
+                try:
+                    self.fs.rename_task_folder(directory, task, old_folder_name)
+                    task.folder_name = old_folder_name
+                except Exception:
+                    pass
+            raise
+
         if request.links is not None:
             links = [Link(None, task.id, n, t) for n, t in request.links]
             task.links = self.repo.replace_links(task.id, links)  # type: ignore[arg-type]
