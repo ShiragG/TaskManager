@@ -5,7 +5,6 @@ from datetime import date
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDateEdit,
     QDialog,
     QDialogButtonBox,
@@ -94,15 +93,6 @@ class TaskDialog(QDialog):
         date_row.addWidget(self.date_end_edit)
         form.addRow("Срок", date_row)
 
-        self.color_combo = QComboBox()
-        for name, hex_color in settings.colors.items():
-            self.color_combo.addItem(name, hex_color)
-        if task:
-            idx = self.color_combo.findData(task.color)
-            if idx >= 0:
-                self.color_combo.setCurrentIndex(idx)
-        form.addRow("Цвет", self.color_combo)
-
         self.hidden_cb = QCheckBox("Скрытая")
         self.hidden_cb.setChecked(bool(task and task.hidden))
         form.addRow(self.hidden_cb)
@@ -117,9 +107,7 @@ class TaskDialog(QDialog):
             self.template_cb.setVisible(False)
 
         if task is not None:
-            hint = QLabel(
-                f"Папка на диске: {task.folder_name} (не переименовывается при правке)"
-            )
+            hint = QLabel(f"Папка на диске: {task.folder_name}")
             hint.setWordWrap(True)
             hint.setStyleSheet("color: #64748b;")
             form.addRow(hint)
@@ -186,10 +174,6 @@ class TaskDialog(QDialog):
             return None
         qd = self.date_end_edit.date()
         return date(qd.year(), qd.month(), qd.day())
-
-    @property
-    def color(self) -> str:
-        return self.color_combo.currentData() or "#ffffff"
 
     @property
     def hidden(self) -> bool:

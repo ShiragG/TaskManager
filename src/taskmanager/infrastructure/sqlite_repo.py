@@ -112,7 +112,7 @@ class SqliteRepository:
         directory_id: int | None = None,
         *,
         status: TaskStatus | None = TaskStatus.ACTIVE,
-        include_hidden: bool = True,
+        only_hidden: bool | None = None,
         query: str | None = None,
     ) -> list[Task]:
         clauses: list[str] = []
@@ -123,7 +123,9 @@ class SqliteRepository:
         if status is not None:
             clauses.append("status = ?")
             params.append(status.value)
-        if not include_hidden:
+        if only_hidden is True:
+            clauses.append("hidden = 1")
+        elif only_hidden is False:
             clauses.append("hidden = 0")
         if query:
             like = f"%{query}%"
@@ -135,6 +137,17 @@ class SqliteRepository:
             params,
         ).fetchall()
         return [self._task_from_row(r) for r in rows]
+
+    def find_task_by_number(
+        self, directory_id: int, number: str
+    ) -> Task | None:
+        row = self._conn.execute(
+            "SELECT * FROM tasks WHERE directory_id = ? AND number = ?",
+            (directory_id, number),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._task_from_row(row)
 
     def get_task(self, task_id: int) -> Task | None:
         row = self._conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()

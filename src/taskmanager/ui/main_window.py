@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QColor, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QColorDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -16,13 +18,18 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
-from taskmanager.domain import Directory
+from taskmanager.domain import Directory, is_deadline_warning
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
-from taskmanager.services.settings_service import Settings, SettingsStore
+from taskmanager.services.settings_service import (
+    BASE_COLOR_NAMES,
+    Settings,
+    SettingsStore,
+)
 from taskmanager.services.task_service import (
     CreateTaskRequest,
     ServiceError,
@@ -39,6 +46,8 @@ COL_NUMBER = 0
 COL_DATE = 1
 COL_DESCRIPTION = 2
 
+SWATCH_SIZE = 22
+
 
 class SortableItem(QTableWidgetItem):
     """Compare by SORT_ROLE so dates and numbers sort correctly."""
@@ -49,6 +58,46 @@ class SortableItem(QTableWidgetItem):
         if left is not None and right is not None:
             return left < right
         return super().__lt__(other)
+
+
+class ColorSwatchButton(QToolButton):
+    """Palette swatch; optional right-click removal for custom colors."""
+
+    def __init__(
+        self,
+        color: str,
+        *,
+        tooltip: str,
+        removable: bool = False,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.hex_color = color
+        self.removable = removable
+        self.setToolTip(tooltip)
+        self.setFixedSize(SWATCH_SIZE, SWATCH_SIZE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        border = "#94a3b8" if color.lower() in {"#ffffff", "#fff"} else "#334155"
+        self.setStyleSheet(
+            f"QToolButton {{ background-color: {color}; border: 1px solid {border}; "
+            f"border-radius: 3px; }}"
+            f"QToolButton:hover {{ border: 2px solid #0f766e; }}"
+        )
+        self._on_remove = None
+
+    def set_remove_handler(self, handler) -> None:
+        self._on_remove = handler
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        if (
+            event.button() == Qt.MouseButton.RightButton
+            and self.removable
+            and self._on_remove is not None
+        ):
+            self._on_remove()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -78,6 +127,7 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         tb = QToolBar("Главная")
         tb.setMovable(False)
+        tb.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         self.addToolBar(tb)
 
         self.act_add_dir = QAction("Директория", self)
@@ -110,10 +160,6 @@ class MainWindow(QMainWindow):
         self.act_settings.triggered.connect(self.open_settings)
         tb.addAction(self.act_settings)
 
-        self.act_refresh = QAction("Обновить", self)
-        self.act_refresh.triggered.connect(self.reload_current_tab)
-        tb.addAction(self.act_refresh)
-
     def _build_central(self) -> None:
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -125,7 +171,23 @@ class MainWindow(QMainWindow):
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._on_search_changed)
         search_row.addWidget(self.search_edit)
+
+        self.hidden_cb = QCheckBox("Скрытые")
+        self.hidden_cb.setChecked(False)
+        self.hidden_cb.toggled.connect(self._on_hidden_toggled)
+        search_row.addWidget(self.hidden_cb)
         layout.addLayout(search_row)
+
+        palette_row = QHBoxLayout()
+        palette_row.addWidget(QLabel("Цвет:"))
+        self.palette_host = QWidget()
+        self.palette_layout = QHBoxLayout(self.palette_host)
+        self.palette_layout.setContentsMargins(0, 0, 0, 0)
+        self.palette_layout.setSpacing(4)
+        palette_row.addWidget(self.palette_host)
+        palette_row.addStretch()
+        layout.addLayout(palette_row)
+        self._rebuild_color_palette()
 
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(False)
@@ -137,6 +199,82 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("Готово")
+
+    def _rebuild_color_palette(self) -> None:
+        while self.palette_layout.count():
+            item = self.palette_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        none_btn = ColorSwatchButton("#ffffff", tooltip="Без цвета")
+        none_btn.setText("∅")
+        none_btn.setStyleSheet(
+            "QToolButton { background-color: #ffffff; border: 1px solid #94a3b8; "
+            "border-radius: 3px; color: #64748b; font-size: 11px; }"
+            "QToolButton:hover { border: 2px solid #0f766e; }"
+        )
+        none_btn.clicked.connect(lambda: self._apply_color_to_selection("#ffffff"))
+        self.palette_layout.addWidget(none_btn)
+
+        for name, hex_color in self.settings.colors.items():
+            removable = name not in BASE_COLOR_NAMES
+            btn = ColorSwatchButton(
+                hex_color, tooltip=name, removable=removable
+            )
+            btn.clicked.connect(
+                lambda checked=False, c=hex_color: self._apply_color_to_selection(c)
+            )
+            if removable:
+                btn.set_remove_handler(
+                    lambda n=name: self._remove_custom_color(n)
+                )
+            self.palette_layout.addWidget(btn)
+
+        add_btn = QToolButton()
+        add_btn.setText("+")
+        add_btn.setToolTip("Добавить цвет")
+        add_btn.setFixedSize(SWATCH_SIZE, SWATCH_SIZE)
+        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        add_btn.setObjectName("secondaryButton")
+        add_btn.clicked.connect(self._add_custom_color)
+        self.palette_layout.addWidget(add_btn)
+        self.palette_layout.addStretch()
+
+    def _apply_color_to_selection(self, color: str) -> None:
+        task_id = self.selected_task_id()
+        if task_id is None:
+            self.statusBar().showMessage("Выберите заявку, чтобы задать цвет")
+            return
+        try:
+            self.service.update_task(task_id, UpdateTaskRequest(color=color))
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        self.reload_current_tab()
+
+    def _add_custom_color(self) -> None:
+        initial = QColor("#cccccc")
+        color = QColorDialog.getColor(initial, self, "Выберите цвет")
+        if not color.isValid():
+            return
+        hex_color = color.name()
+        name = hex_color
+        suffix = 2
+        while name in self.settings.colors:
+            name = f"{hex_color} ({suffix})"
+            suffix += 1
+        self.settings.colors[name] = hex_color
+        self.settings_store.save(self.settings)
+        self._rebuild_color_palette()
+        self._apply_color_to_selection(hex_color)
+
+    def _remove_custom_color(self, name: str) -> None:
+        if name in BASE_COLOR_NAMES:
+            return
+        self.settings.colors.pop(name, None)
+        self.settings_store.save(self.settings)
+        self._rebuild_color_palette()
 
     def _build_shortcuts(self) -> None:
         QShortcut(QKeySequence.StandardKey.Find, self, activated=self.focus_search)
@@ -208,11 +346,9 @@ class MainWindow(QMainWindow):
         query = self._search_query or None
         tasks = self.service.list_tasks(
             directory.id,  # type: ignore[arg-type]
-            include_hidden=self._show_hidden,
+            only_hidden=self._show_hidden,
             query=query,
         )
-        if not self._show_hidden:
-            tasks = [t for t in tasks if not t.hidden]
 
         table.setSortingEnabled(False)
         table.setRowCount(0)
@@ -244,10 +380,10 @@ class MainWindow(QMainWindow):
                 if item:
                     item.setBackground(bg)
 
-            if (
-                self.settings.highlight_warnings
-                and task.date_end
-                and task.date_end < today
+            if self.settings.highlight_warnings and is_deadline_warning(
+                task.date_end,
+                today=today,
+                lead_days=self.settings.warning_lead_days,
             ):
                 warn = QColor(self.settings.warning_color)
                 for col in (COL_NUMBER, COL_DATE, COL_DESCRIPTION):
@@ -258,7 +394,8 @@ class MainWindow(QMainWindow):
         table.setSortingEnabled(True)
         header = table.horizontalHeader()
         table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
-        self.statusBar().showMessage(f"{directory.name}: {len(tasks)} заявок")
+        mode = "скрытых" if self._show_hidden else "заявок"
+        self.statusBar().showMessage(f"{directory.name}: {len(tasks)} {mode}")
 
     # --- selection helpers ---
 
@@ -366,7 +503,7 @@ class MainWindow(QMainWindow):
                     number=dialog.number,
                     description=dialog.description,
                     date_end=dialog.date_end,
-                    color=dialog.color,
+                    color="#ffffff",
                     hidden=dialog.hidden,
                     by_template=dialog.by_template,
                     links=dialog.links,
@@ -404,7 +541,6 @@ class MainWindow(QMainWindow):
                     description=dialog.description,
                     date_end=dialog.date_end,
                     clear_date_end=dialog.date_end is None,
-                    color=dialog.color,
                     hidden=dialog.hidden,
                     links=dialog.links,
                 ),
@@ -470,10 +606,15 @@ class MainWindow(QMainWindow):
         self.settings = dialog.settings
         self.service.settings = self.settings
         self.service.fs.settings = self.settings
+        self._rebuild_color_palette()
         self.reload_directories()
 
     def _on_search_changed(self, text: str) -> None:
         self._search_query = text.strip()
+        self.reload_current_tab()
+
+    def _on_hidden_toggled(self, checked: bool) -> None:
+        self._show_hidden = checked
         self.reload_current_tab()
 
     def _on_tab_changed(self, _index: int) -> None:
