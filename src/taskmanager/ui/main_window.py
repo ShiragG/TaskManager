@@ -33,6 +33,22 @@ from taskmanager.ui.dialogs import DirectoryDialog, TaskDialog
 from taskmanager.ui.settings_dialog import SettingsDialog
 
 TASK_ID_ROLE = Qt.ItemDataRole.UserRole
+SORT_ROLE = Qt.ItemDataRole.UserRole + 1
+
+COL_NUMBER = 0
+COL_DATE = 1
+COL_DESCRIPTION = 2
+
+
+class SortableItem(QTableWidgetItem):
+    """Compare by SORT_ROLE so dates and numbers sort correctly."""
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:  # type: ignore[override]
+        left = self.data(SORT_ROLE)
+        right = other.data(SORT_ROLE)
+        if left is not None and right is not None:
+            return left < right
+        return super().__lt__(other)
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +130,9 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(False)
         self.tabs.currentChanged.connect(self._on_tab_changed)
+        tab_bar = self.tabs.tabBar()
+        tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        tab_bar.customContextMenuRequested.connect(self._show_tab_context_menu)
         layout.addWidget(self.tabs)
 
         self.setCentralWidget(central)
@@ -166,13 +185,17 @@ class MainWindow(QMainWindow):
         self._fill_table(table, directory)
 
     def _make_table(self) -> QTableWidget:
-        table = QTableWidget(0, 4)
-        table.setHorizontalHeaderLabels(["Номер", "Описание", "Срок", "Цвет"])
+        table = QTableWidget(0, 3)
+        table.setHorizontalHeaderLabels(["Номер", "Срок", "Описание"])
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.setAlternatingRowColors(True)
-        table.horizontalHeader().setStretchLastSection(True)
+        table.setAlternatingRowColors(False)
+        table.setSortingEnabled(True)
+        header = table.horizontalHeader()
+        header.setStretchLastSection(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(COL_NUMBER, Qt.SortOrder.AscendingOrder)
         table.verticalHeader().setVisible(False)
         table.doubleClicked.connect(self.edit_selected_task)
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -191,23 +214,32 @@ class MainWindow(QMainWindow):
         if not self._show_hidden:
             tasks = [t for t in tasks if not t.hidden]
 
+        table.setSortingEnabled(False)
         table.setRowCount(0)
         today = date.today()
         for task in tasks:
             row = table.rowCount()
             table.insertRow(row)
-            number_item = QTableWidgetItem(task.number)
+
+            number_item = SortableItem(task.number)
             number_item.setData(TASK_ID_ROLE, task.id)
-            table.setItem(row, 0, number_item)
-            table.setItem(row, 1, QTableWidgetItem(task.description))
+            number_item.setData(SORT_ROLE, task.number.casefold())
+            table.setItem(row, COL_NUMBER, number_item)
+
             date_text = task.date_end.strftime("%d.%m.%Y") if task.date_end else ""
-            date_item = QTableWidgetItem(date_text)
-            table.setItem(row, 2, date_item)
-            color_item = QTableWidgetItem(task.color)
-            table.setItem(row, 3, color_item)
+            date_item = SortableItem(date_text)
+            date_item.setData(
+                SORT_ROLE,
+                task.date_end.toordinal() if task.date_end else 0,
+            )
+            table.setItem(row, COL_DATE, date_item)
+
+            desc_item = SortableItem(task.description)
+            desc_item.setData(SORT_ROLE, task.description.casefold())
+            table.setItem(row, COL_DESCRIPTION, desc_item)
 
             bg = QColor(task.color)
-            for col in range(4):
+            for col in (COL_NUMBER, COL_DATE, COL_DESCRIPTION):
                 item = table.item(row, col)
                 if item:
                     item.setBackground(bg)
@@ -218,11 +250,14 @@ class MainWindow(QMainWindow):
                 and task.date_end < today
             ):
                 warn = QColor(self.settings.warning_color)
-                for col in range(4):
+                for col in (COL_NUMBER, COL_DATE, COL_DESCRIPTION):
                     item = table.item(row, col)
                     if item:
                         item.setForeground(warn)
 
+        table.setSortingEnabled(True)
+        header = table.horizontalHeader()
+        table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
         self.statusBar().showMessage(f"{directory.name}: {len(tasks)} заявок")
 
     # --- selection helpers ---
@@ -259,6 +294,58 @@ class MainWindow(QMainWindow):
             return
         try:
             self.service.create_directory(dialog.directory_name)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        self.reload_directories()
+
+    def rename_current_directory(self) -> None:
+        directory_id = self.current_directory_id()
+        if directory_id is None:
+            return
+        directory = next(
+            (d for d in self.service.list_directories() if d.id == directory_id),
+            None,
+        )
+        if directory is None:
+            return
+        dialog = DirectoryDialog(
+            self,
+            name=directory.name,
+            title="Изменить директорию",
+        )
+        if dialog.exec() != DirectoryDialog.DialogCode.Accepted:
+            return
+        try:
+            self.service.rename_directory(directory_id, dialog.directory_name)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        self.reload_directories()
+
+    def open_current_directory_folder(self) -> None:
+        directory_id = self.current_directory_id()
+        if directory_id is None:
+            return
+        try:
+            path = self.service.directory_folder_path(directory_id)
+            open_target(str(path))
+        except (ServiceError, PlatformOpenError) as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+
+    def delete_current_directory(self) -> None:
+        directory_id = self.current_directory_id()
+        if directory_id is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Удаление",
+            "Удалить директорию? Активные заявки должны быть заархивированы заранее.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self.service.delete_directory(directory_id, remove_folder=True)
         except ServiceError as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
@@ -391,6 +478,18 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, _index: int) -> None:
         self.reload_current_tab()
+
+    def _show_tab_context_menu(self, pos) -> None:
+        tab_bar = self.tabs.tabBar()
+        index = tab_bar.tabAt(pos)
+        if index < 0:
+            return
+        self.tabs.setCurrentIndex(index)
+        menu = QMenu(self)
+        menu.addAction("Изменить", self.rename_current_directory)
+        menu.addAction("Открыть папку", self.open_current_directory_folder)
+        menu.addAction("Удалить", self.delete_current_directory)
+        menu.exec(tab_bar.mapToGlobal(pos))
 
     def _show_context_menu(self, table: QTableWidget, pos) -> None:
         index = table.indexAt(pos)

@@ -38,7 +38,7 @@ class Settings:
 
 
 class SettingsStore:
-    """Load/save trimmed settings.json next to the process CWD (or a given path)."""
+    """Load/save settings.json at a given path (default: ./settings.json)."""
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or Path("settings.json")

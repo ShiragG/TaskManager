@@ -20,11 +20,14 @@ packages = ["src/taskmanager"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/taskmanager/ui/styles/app.qss" = "taskmanager/ui/styles/app.qss"
+"src/taskmanager/resources/app_icon.png" = "taskmanager/resources/app_icon.png"
+"src/taskmanager/resources/app_icon.ico" = "taskmanager/resources/app_icon.ico"
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
+    "pyinstaller>=6.0",
 ]
 
 [tool.pytest.ini_options]
