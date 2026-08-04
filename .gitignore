@@ -171,3 +171,4 @@ test.py
 taskManagerSettings.json
 settings.json
 *.~sql
+GITHUB_RELEASES_SETUP.md
