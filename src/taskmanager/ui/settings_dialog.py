@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from taskmanager.infrastructure.paths import resolve_work_dir
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.settings_service import Settings, SettingsStore
 from taskmanager.services.update_service import (
@@ -211,7 +212,7 @@ class SettingsDialog(QDialog):
         if not work_dir:
             QMessageBox.warning(self, "Ошибка", "Укажите рабочую директорию")
             return
-        path = Path(work_dir)
+        path = resolve_work_dir(work_dir)
         if not path.is_dir():
             try:
                 path.mkdir(parents=True, exist_ok=True)

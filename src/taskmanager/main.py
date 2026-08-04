@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from taskmanager.infrastructure.paths import default_db_path, default_settings_path
+from taskmanager.infrastructure.paths import (
+    default_db_path,
+    default_settings_path,
+    resolve_work_dir,
+)
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.resources import app_icon_png
 from taskmanager.services.settings_service import SettingsStore
@@ -27,11 +30,12 @@ def run(argv: list[str] | None = None) -> int:
     settings_store = SettingsStore(default_settings_path())
     settings = settings_store.load()
 
-    if not Path(settings.work_dir).is_dir():
+    work_dir = resolve_work_dir(settings.work_dir)
+    if not work_dir.is_dir():
         QMessageBox.critical(
             None,
             "Ошибка",
-            f"Рабочая директория не найдена:\n{settings.work_dir}\n"
+            f"Рабочая директория не найдена:\n{work_dir}\n"
             "Исправьте settings.json или создайте папку.",
         )
         return 1

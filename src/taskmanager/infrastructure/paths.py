@@ -17,3 +17,11 @@ def default_settings_path() -> Path:
 
 def default_db_path() -> Path:
     return app_dir() / "taskmanager.db"
+
+
+def resolve_work_dir(work_dir: str | Path) -> Path:
+    """Resolve work_dir; relative paths are anchored at the app directory."""
+    path = Path(work_dir)
+    if path.is_absolute():
+        return path
+    return (app_dir() / path).resolve()

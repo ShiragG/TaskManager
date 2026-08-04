@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 from taskmanager.domain import Directory, Task, TaskStatus
+from taskmanager.infrastructure.paths import resolve_work_dir
 from taskmanager.services.settings_service import Settings
 
 
@@ -19,7 +20,7 @@ class TaskFilesystem:
 
     @property
     def work_dir(self) -> Path:
-        return Path(self.settings.work_dir)
+        return resolve_work_dir(self.settings.work_dir)
 
     def directory_path(self, directory: Directory) -> Path:
         return self.work_dir / directory.name

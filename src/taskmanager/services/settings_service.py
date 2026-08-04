@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from taskmanager.infrastructure.paths import resolve_work_dir
+
 
 DEFAULT_COLORS = {
     "Белый": "#ffffff",
@@ -68,6 +70,6 @@ class SettingsStore:
 
     @staticmethod
     def _ensure_work_dir(settings: Settings) -> None:
-        path = Path(settings.work_dir)
+        path = resolve_work_dir(settings.work_dir)
         if not path.is_dir():
             path.mkdir(parents=True, exist_ok=True)
