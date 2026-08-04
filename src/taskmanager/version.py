@@ -3,7 +3,7 @@ from __future__ import annotations
 from importlib import metadata
 
 # Keep in sync with pyproject.toml [project].version for frozen/editable fallbacks.
-_FALLBACK_VERSION = "0.2.0"
+_FALLBACK_VERSION = "0.3.0"
 
 
 def get_version() -> str:
