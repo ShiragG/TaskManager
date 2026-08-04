@@ -94,13 +94,7 @@ uv run pyinstaller --noconfirm --onefile --windowed \
 **Windows** (разделитель путей в `--add-data` — `;`):
 
 ```bash
-uv run pyinstaller --noconfirm --onefile --windowed \
-  --name TaskManager \
-  --icon src/taskmanager/resources/app_icon.ico \
-  --add-data "src/taskmanager/ui/styles/app.qss;taskmanager/ui/styles" \
-  --add-data "src/taskmanager/resources/app_icon.png;taskmanager/resources" \
-  --add-data "src/taskmanager/resources/app_icon.ico;taskmanager/resources" \
-  src/taskmanager/__main__.py
+uv run pyinstaller --noconfirm --onefile --windowed --name TaskManager --icon src/taskmanager/resources/app_icon.ico --add-data "src/taskmanager/ui/styles/app.qss;taskmanager/ui/styles" --add-data "src/taskmanager/resources/app_icon.png;taskmanager/resources" --add-data "src/taskmanager/resources/app_icon.ico;taskmanager/resources" src/taskmanager/__main__.py
 ```
 
 Готовый бинарник появится в `dist/`. Для публикации на GitHub Releases прикладывайте assets с именами **`TaskManager`** (Linux) и **`TaskManager.exe`** (Windows) — см. [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md). Проверка обновлений в настройках скачивает выбранный файл через «Сохранить как…» без самозамены exe.
