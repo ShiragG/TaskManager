@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from taskmanager.infrastructure.paths import app_data_dir, default_db_path
+from taskmanager.infrastructure.paths import default_db_path, default_settings_path
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.resources import app_icon_png
 from taskmanager.services.settings_service import SettingsStore
@@ -24,11 +24,7 @@ def run(argv: list[str] | None = None) -> int:
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    settings_store = SettingsStore(app_data_dir() / "settings.json")
-    # Prefer cwd settings.json when present (dev / existing installs)
-    cwd_settings = Path("settings.json")
-    if cwd_settings.is_file() and not settings_store.path.is_file():
-        settings_store = SettingsStore(cwd_settings)
+    settings_store = SettingsStore(default_settings_path())
     settings = settings_store.load()
 
     if not Path(settings.work_dir).is_dir():
