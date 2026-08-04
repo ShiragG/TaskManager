@@ -171,3 +171,8 @@ test.py
 taskManagerSettings.json
 settings.json
 *.~sql
+
+# Release / build artifacts (publish via GitHub Releases only)
+output/
+*.exe
+/TaskManager
