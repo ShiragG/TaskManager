@@ -5,7 +5,11 @@ from datetime import date, datetime
 from pathlib import Path
 
 from taskmanager.domain import Directory, Link, Task, TaskStatus, make_folder_name
-from taskmanager.infrastructure.filesystem import FilesystemError, TaskFilesystem
+from taskmanager.infrastructure.filesystem import (
+    NOTES_LINK_NAME,
+    FilesystemError,
+    TaskFilesystem,
+)
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.services.settings_service import Settings
 
@@ -23,6 +27,7 @@ class CreateTaskRequest:
     color: str = "#ffffff"
     hidden: bool = False
     by_template: bool = False
+    create_notes_file: bool = False
     links: list[tuple[str, str]] | None = None
 
 
@@ -128,11 +133,20 @@ class TaskService:
             raise ServiceError(f"Заявка с номером «{number}» уже существует")
         self.fs.ensure_directory(directory)
         try:
-            self.fs.create_task_folder(
+            folder_path = self.fs.create_task_folder(
                 directory, folder_name, by_template=request.by_template
             )
         except FilesystemError as exc:
             raise ServiceError(str(exc)) from exc
+
+        link_pairs: list[tuple[str, str]] = list(request.links or [])
+        if request.create_notes_file:
+            try:
+                notes_path = self.fs.ensure_notes_file(folder_path)
+            except OSError as exc:
+                raise ServiceError(f"Не удалось создать файл заметок: {exc}") from exc
+            link_pairs.append((NOTES_LINK_NAME, str(notes_path)))
+
         task = Task(
             id=None,
             directory_id=directory.id,  # type: ignore[arg-type]
@@ -147,8 +161,8 @@ class TaskService:
         )
         try:
             task = self.repo.add_task(task)
-            if request.links is not None:
-                links = [Link(None, task.id, n, t) for n, t in request.links]
+            if link_pairs:
+                links = [Link(None, task.id, n, t) for n, t in link_pairs]
                 task.links = self.repo.replace_links(task.id, links)  # type: ignore[arg-type]
         except Exception:
             # Best-effort rollback of folder if DB insert fails

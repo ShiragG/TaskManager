@@ -506,6 +506,7 @@ class MainWindow(QMainWindow):
                     color="#ffffff",
                     hidden=dialog.hidden,
                     by_template=dialog.by_template,
+                    create_notes_file=dialog.create_notes_file,
                     links=dialog.links,
                 )
             )

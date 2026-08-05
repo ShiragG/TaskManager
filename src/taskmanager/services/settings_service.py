@@ -26,6 +26,7 @@ class Settings:
     highlight_warnings: bool = True
     warning_color: str = "#8B0000"
     warning_lead_days: int = 1
+    create_notes_file: bool = True
     colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLORS))
 
     def to_dict(self) -> dict[str, Any]:

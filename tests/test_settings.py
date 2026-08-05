@@ -17,6 +17,7 @@ def test_settings_roundtrip(tmp_path: Path):
     assert loaded.template_name == ".tpl"
     assert loaded.archive_name == ".archive"
     assert loaded.warning_lead_days == 3
+    assert loaded.create_notes_file is True
     assert "Белый" in loaded.colors
 
 
@@ -30,6 +31,16 @@ def test_settings_default_lead_days(tmp_path: Path):
     )
     loaded = SettingsStore(path).load()
     assert loaded.warning_lead_days == 1
+    assert loaded.create_notes_file is True
+
+
+def test_settings_create_notes_file_roundtrip(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(work_dir=str(tmp_path / "work"), create_notes_file=False)
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.create_notes_file is False
 
 
 def test_settings_drops_unknown_keys(tmp_path: Path):

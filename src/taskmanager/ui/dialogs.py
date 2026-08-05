@@ -101,10 +101,16 @@ class TaskDialog(QDialog):
             f"Создать из шаблона («{settings.template_name}»)"
         )
         self.template_cb.setChecked(False)
+        self.notes_cb = QCheckBox("Создать файл заметок (Notes.txt)")
+        self.notes_cb.setChecked(settings.create_notes_file)
         if allow_template and task is None:
             form.addRow(self.template_cb)
         else:
             self.template_cb.setVisible(False)
+        if task is None:
+            form.addRow(self.notes_cb)
+        else:
+            self.notes_cb.setVisible(False)
 
         if task is not None:
             hint = QLabel(f"Папка на диске: {task.folder_name}")
@@ -182,6 +188,10 @@ class TaskDialog(QDialog):
     @property
     def by_template(self) -> bool:
         return self.template_cb.isChecked()
+
+    @property
+    def create_notes_file(self) -> bool:
+        return self.notes_cb.isChecked()
 
     @property
     def links(self) -> list[tuple[str, str]]:

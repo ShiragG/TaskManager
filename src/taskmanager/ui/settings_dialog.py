@@ -85,6 +85,10 @@ class SettingsDialog(QDialog):
         form.addRow("Цвет предупреждения", color_row)
         self._sync_warning_swatch(self.warning_color_edit.text())
 
+        self.create_notes_cb = QCheckBox("Создавать файл заметок по умолчанию")
+        self.create_notes_cb.setChecked(settings.create_notes_file)
+        form.addRow(self.create_notes_cb)
+
         layout.addLayout(form)
         hint = QLabel(
             "Метаданные заявок хранятся в SQLite рядом с исполняемым файлом. "
@@ -239,6 +243,7 @@ class SettingsDialog(QDialog):
         self._settings.highlight_warnings = self.highlight_cb.isChecked()
         self._settings.warning_lead_days = self.lead_days_spin.value()
         self._settings.warning_color = warning_color
+        self._settings.create_notes_file = self.create_notes_cb.isChecked()
         self._store.save(self._settings)
         self.accept()
 

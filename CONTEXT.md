@@ -35,3 +35,7 @@ _Avoid_: path, title, display name
 **Hidden** (скрытая):
 A task flag: in the default view the task is omitted; in «Скрытые» mode only hidden tasks are listed.
 _Avoid_: archived (different concept), deleted, inactive
+
+**Notes file** (файл заметок):
+An optional `Notes.txt` in the task folder, created at task creation with a dated header; paired with a Link named «Заметки» pointing at the absolute path. Whether to create it by default is a setting; the create-task dialog exposes a checkbox. Existing `Notes.txt` is never overwritten.
+_Avoid_: memo, comment, description (task metadata)

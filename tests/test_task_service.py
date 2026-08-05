@@ -108,6 +108,48 @@ def test_create_from_template(service: TaskService, tmp_path: Path):
     assert (tmp_path / "work" / "Beta" / task.folder_name / "readme.txt").is_file()
 
 
+def test_create_with_notes_file(service: TaskService, tmp_path: Path):
+    directory = service.create_directory("NotesDir")
+    task = service.create_task(
+        CreateTaskRequest(
+            directory_id=directory.id,
+            number="55",
+            description="with notes",
+            create_notes_file=True,
+        )
+    )
+    notes = tmp_path / "work" / "NotesDir" / "55" / "Notes.txt"
+    assert notes.is_file()
+    text = notes.read_text(encoding="utf-8")
+    assert "ЗАМЕТКИ" in text
+    assert len(task.links) == 1
+    assert task.links[0].name == "Заметки"
+    assert Path(task.links[0].target) == notes.resolve()
+
+
+def test_create_notes_skips_overwrite_keeps_link(service: TaskService, tmp_path: Path):
+    directory = service.create_directory("TplNotes")
+    template = tmp_path / "work" / "TplNotes" / ".template"
+    template.mkdir()
+    existing = template / "Notes.txt"
+    existing.write_text("keep me", encoding="utf-8")
+
+    task = service.create_task(
+        CreateTaskRequest(
+            directory_id=directory.id,
+            number="8",
+            description="tpl notes",
+            by_template=True,
+            create_notes_file=True,
+        )
+    )
+    notes = tmp_path / "work" / "TplNotes" / "8" / "Notes.txt"
+    assert notes.read_text(encoding="utf-8") == "keep me"
+    notes_links = [link for link in task.links if link.name == "Заметки"]
+    assert len(notes_links) == 1
+    assert Path(notes_links[0].target).resolve() == notes.resolve()
+
+
 def test_archive_moves_folder(service: TaskService, tmp_path: Path):
     directory = service.create_directory("Gamma")
     task = service.create_task(

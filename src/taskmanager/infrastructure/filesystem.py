@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import shutil
+from datetime import date
 from pathlib import Path
 
 from taskmanager.domain import Directory, Task, TaskStatus
 from taskmanager.infrastructure.paths import resolve_work_dir
 from taskmanager.services.settings_service import Settings
 
+NOTES_FILE_NAME = "Notes.txt"
+NOTES_LINK_NAME = "Заметки"
+
 
 class FilesystemError(Exception):
     """Filesystem operation failed."""
+
+
+def notes_file_content(today: date | None = None) -> str:
+    """Header written into a new Notes.txt (date as DD.MM.YY)."""
+    d = today or date.today()
+    stamp = d.strftime("%d.%m.%y")
+    return (
+        "-------------------------\n"
+        "---------ЗАМЕТКИ---------\n"
+        f"---------{stamp}--------\n"
+        "-------------------------\n"
+    )
 
 
 class TaskFilesystem:
@@ -79,6 +95,13 @@ class TaskFilesystem:
         else:
             dest.mkdir(parents=True)
         return dest
+
+    def ensure_notes_file(self, task_folder: Path, *, today: date | None = None) -> Path:
+        """Create Notes.txt with header if missing; never overwrite existing."""
+        path = task_folder / NOTES_FILE_NAME
+        if not path.exists():
+            path.write_text(notes_file_content(today), encoding="utf-8")
+        return path.resolve()
 
     def rename_task_folder(
         self,
