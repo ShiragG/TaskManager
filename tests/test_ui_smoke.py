@@ -42,4 +42,4 @@ def test_main_window_creates_directory_and_task(app_env, qtbot):
     assert window.tabs.tabText(0) == "UIDir"
     table = window.tabs.widget(0)
     assert table.rowCount() == 1
-    assert table.item(0, 0).text() == "1"
+    assert table.item(0, 1).text() == "1"

@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     description TEXT NOT NULL DEFAULT '',
     date_end TEXT,
     color TEXT NOT NULL DEFAULT '#ffffff',
+    priority INTEGER NOT NULL DEFAULT 10,
     hidden INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'active',
     folder_name TEXT NOT NULL,
@@ -50,10 +51,20 @@ class SqliteRepository:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
+
+    def _migrate(self) -> None:
+        cols = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        if "priority" not in cols:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN priority INTEGER NOT NULL DEFAULT 10"
+            )
 
     # --- directories ---
 
@@ -162,9 +173,9 @@ class SqliteRepository:
         cur = self._conn.execute(
             """
             INSERT INTO tasks (
-                directory_id, number, description, date_end, color, hidden,
-                status, folder_name, archive_month, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                directory_id, number, description, date_end, color, priority,
+                hidden, status, folder_name, archive_month, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.directory_id,
@@ -172,6 +183,7 @@ class SqliteRepository:
                 task.description,
                 task.date_end.isoformat() if task.date_end else None,
                 task.color,
+                task.priority,
                 1 if task.hidden else 0,
                 task.status.value,
                 task.folder_name,
@@ -190,7 +202,7 @@ class SqliteRepository:
             """
             UPDATE tasks SET
                 directory_id = ?, number = ?, description = ?, date_end = ?,
-                color = ?, hidden = ?, status = ?, folder_name = ?,
+                color = ?, priority = ?, hidden = ?, status = ?, folder_name = ?,
                 archive_month = ?
             WHERE id = ?
             """,
@@ -200,6 +212,7 @@ class SqliteRepository:
                 task.description,
                 task.date_end.isoformat() if task.date_end else None,
                 task.color,
+                task.priority,
                 1 if task.hidden else 0,
                 task.status.value,
                 task.folder_name,
@@ -247,6 +260,8 @@ class SqliteRepository:
         created_at = (
             datetime.fromisoformat(row["created_at"]) if row["created_at"] else None
         )
+        keys = row.keys()
+        priority = int(row["priority"]) if "priority" in keys else 10
         return Task(
             id=row["id"],
             directory_id=row["directory_id"],
@@ -256,6 +271,7 @@ class SqliteRepository:
             status=TaskStatus(row["status"]),
             date_end=date_end,
             color=row["color"],
+            priority=priority,
             hidden=bool(row["hidden"]),
             archive_month=row["archive_month"],
             created_at=created_at,

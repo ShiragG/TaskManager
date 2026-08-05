@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import date
 
-from PySide6.QtCore import QDate
+from PySide6.QtCore import QDate, Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDateEdit,
     QDialog,
     QDialogButtonBox,
@@ -19,7 +21,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from taskmanager.domain import Task
+from taskmanager.domain import (
+    PRIORITY_DEFAULT,
+    PRIORITY_MAX,
+    PRIORITY_MIN,
+    Task,
+    clamp_priority,
+    priority_color_hex,
+)
 from taskmanager.services.settings_service import Settings
 
 
@@ -73,6 +82,21 @@ class TaskDialog(QDialog):
 
         self.description_edit = QLineEdit(task.description if task else "")
         form.addRow("Описание", self.description_edit)
+
+        self.priority_combo = QComboBox()
+        for value in range(PRIORITY_MIN, PRIORITY_MAX + 1):
+            self.priority_combo.addItem(str(value), value)
+            brush = QBrush(QColor(priority_color_hex(value)))
+            self.priority_combo.setItemData(
+                value, brush, Qt.ItemDataRole.BackgroundRole
+            )
+        initial_priority = (
+            clamp_priority(task.priority) if task else PRIORITY_DEFAULT
+        )
+        self.priority_combo.setCurrentIndex(initial_priority)
+        self.priority_combo.currentIndexChanged.connect(self._sync_priority_combo_color)
+        self._sync_priority_combo_color()
+        form.addRow("Приоритет", self.priority_combo)
 
         self.date_end_edit = QDateEdit()
         self.date_end_edit.setCalendarPopup(True)
@@ -149,6 +173,12 @@ class TaskDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _sync_priority_combo_color(self) -> None:
+        color = priority_color_hex(self.priority)
+        self.priority_combo.setStyleSheet(
+            f"QComboBox {{ background-color: {color}; }}"
+        )
+
     def _add_link_row(self, name: str, target: str) -> None:
         row = self.links_table.rowCount()
         self.links_table.insertRow(row)
@@ -173,6 +203,10 @@ class TaskDialog(QDialog):
     @property
     def description(self) -> str:
         return self.description_edit.text().strip()
+
+    @property
+    def priority(self) -> int:
+        return clamp_priority(self.priority_combo.currentData())
 
     @property
     def date_end(self) -> date | None:

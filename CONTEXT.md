@@ -39,3 +39,7 @@ _Avoid_: archived (different concept), deleted, inactive
 **Notes file** (файл заметок):
 An optional `Notes.txt` in the task folder, created at task creation with a dated header; paired with a Link named «Заметки» pointing at the absolute path. Whether to create it by default is a setting; the create-task dialog exposes a checkbox. Existing `Notes.txt` is never overwritten.
 _Avoid_: memo, comment, description (task metadata)
+
+**Priority** (приоритет):
+An integer urgency score on a task from 0 (critical) to 10 (calm). Distinct from the task row Color.
+_Avoid_: severity, importance, rank, color

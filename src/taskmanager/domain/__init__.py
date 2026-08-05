@@ -38,6 +38,28 @@ def is_deadline_warning(
     return date_end <= today + timedelta(days=lead_days)
 
 
+PRIORITY_MIN = 0
+PRIORITY_MAX = 10
+PRIORITY_DEFAULT = 10
+
+
+def clamp_priority(value: int) -> int:
+    """Clamp priority to the inclusive 0–10 range."""
+    return max(PRIORITY_MIN, min(PRIORITY_MAX, int(value)))
+
+
+def priority_color_hex(priority: int) -> str:
+    """RGB hex for the priority scale: 0 red → 5 yellow → 10 green."""
+    p = clamp_priority(priority)
+    if p <= 5:
+        t = p / 5
+        r, g, b = 255, int(255 * t), 0
+    else:
+        t = (p - 5) / 5
+        r, g, b = int(255 * (1 - t)), 255, 0
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
 @dataclass(frozen=True)
 class Directory:
     id: int | None
@@ -63,6 +85,7 @@ class Task:
     status: TaskStatus = TaskStatus.ACTIVE
     date_end: date | None = None
     color: str = "#ffffff"
+    priority: int = PRIORITY_DEFAULT
     hidden: bool = False
     archive_month: str | None = None
     created_at: datetime | None = None

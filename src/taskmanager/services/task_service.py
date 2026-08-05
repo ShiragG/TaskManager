@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from taskmanager.domain import Directory, Link, Task, TaskStatus, make_folder_name
+from taskmanager.domain import (
+    Directory,
+    Link,
+    Task,
+    TaskStatus,
+    clamp_priority,
+    make_folder_name,
+)
 from taskmanager.infrastructure.filesystem import (
     NOTES_LINK_NAME,
     FilesystemError,
@@ -12,6 +20,8 @@ from taskmanager.infrastructure.filesystem import (
 )
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.services.settings_service import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class ServiceError(Exception):
@@ -25,6 +35,7 @@ class CreateTaskRequest:
     description: str = ""
     date_end: date | None = None
     color: str = "#ffffff"
+    priority: int = 10
     hidden: bool = False
     by_template: bool = False
     create_notes_file: bool = False
@@ -37,6 +48,7 @@ class UpdateTaskRequest:
     description: str | None = None
     date_end: date | None = None
     color: str | None = None
+    priority: int | None = None
     hidden: bool | None = None
     links: list[tuple[str, str]] | None = None
     clear_date_end: bool = False
@@ -71,6 +83,7 @@ class TaskService:
             raise ServiceError(f"Имя «{name}» зарезервировано настройками")
         directory = self.repo.add_directory(name)
         self.fs.ensure_directory(directory)
+        logger.debug("Created directory id=%s name=%r", directory.id, name)
         return directory
 
     def rename_directory(self, directory_id: int, new_name: str) -> Directory:
@@ -81,8 +94,12 @@ class TaskService:
         existing = self.repo.get_directory_by_name(new_name)
         if existing and existing.id != directory_id:
             raise ServiceError(f"Директория «{new_name}» уже существует")
+        old_name = directory.name
         self.fs.rename_directory(directory, new_name)
         self.repo.rename_directory(directory_id, new_name)
+        logger.debug(
+            "Renamed directory id=%s %r -> %r", directory_id, old_name, new_name
+        )
         return self._require_directory(directory_id)
 
     def delete_directory(self, directory_id: int, *, remove_folder: bool = False) -> None:
@@ -97,6 +114,7 @@ class TaskService:
             path = self.fs.directory_path(directory)
             if path.is_dir() and not any(path.iterdir()):
                 path.rmdir()
+        logger.debug("Deleted directory id=%s name=%r", directory_id, directory.name)
 
     # --- tasks ---
 
@@ -156,6 +174,7 @@ class TaskService:
             status=TaskStatus.ACTIVE,
             date_end=request.date_end,
             color=request.color,
+            priority=clamp_priority(request.priority),
             hidden=request.hidden,
             created_at=datetime.now(),
         )
@@ -165,12 +184,20 @@ class TaskService:
                 links = [Link(None, task.id, n, t) for n, t in link_pairs]
                 task.links = self.repo.replace_links(task.id, links)  # type: ignore[arg-type]
         except Exception:
+            logger.exception("Failed to persist new task number=%r", number)
             # Best-effort rollback of folder if DB insert fails
             try:
                 self.fs.remove_task_folder(directory, task)
             except Exception:
                 pass
             raise
+        logger.debug(
+            "Created task id=%s number=%r dir=%s priority=%s",
+            task.id,
+            task.number,
+            task.directory_id,
+            task.priority,
+        )
         return task
 
     def update_task(self, task_id: int, request: UpdateTaskRequest) -> Task:
@@ -210,12 +237,15 @@ class TaskService:
             task.date_end = request.date_end
         if request.color is not None:
             task.color = request.color
+        if request.priority is not None:
+            task.priority = clamp_priority(request.priority)
         if request.hidden is not None:
             task.hidden = request.hidden
 
         try:
             self.repo.update_task(task)
         except Exception:
+            logger.exception("Failed to update task id=%s", task_id)
             if renamed:
                 try:
                     self.fs.rename_task_folder(directory, task, old_folder_name)
@@ -229,6 +259,7 @@ class TaskService:
             task.links = self.repo.replace_links(task.id, links)  # type: ignore[arg-type]
         else:
             task.links = self.repo.list_links(task.id)  # type: ignore[arg-type]
+        logger.debug("Updated task id=%s number=%r", task.id, task.number)
         return task
 
     def archive_task(self, task_id: int) -> Task:
@@ -242,6 +273,12 @@ class TaskService:
         task.status = TaskStatus.ARCHIVED
         task.archive_month = archive_month
         self.repo.update_task(task)
+        logger.debug(
+            "Archived task id=%s number=%r month=%s",
+            task.id,
+            task.number,
+            archive_month,
+        )
         return task
 
     def delete_task(self, task_id: int, *, remove_folder: bool = True) -> None:
@@ -251,8 +288,10 @@ class TaskService:
             try:
                 self.fs.remove_task_folder(directory, task)
             except Exception as exc:
+                logger.exception("Failed to remove task folder id=%s", task_id)
                 raise ServiceError(f"Не удалось удалить папку заявки: {exc}") from exc
         self.repo.delete_task(task_id)
+        logger.debug("Deleted task id=%s number=%r", task_id, task.number)
 
     def search(self, query: str) -> list[Task]:
         query = query.strip()

@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
+from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtGui import QAction, QColor, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QColorDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QMenu,
+    QProgressBar,
+    QPushButton,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -23,7 +28,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taskmanager.domain import Directory, is_deadline_warning
+from taskmanager.domain import Directory, is_deadline_warning, priority_color_hex
+from taskmanager.infrastructure.logging_setup import setup_logging
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.settings_service import (
     BASE_COLOR_NAMES,
@@ -36,17 +42,42 @@ from taskmanager.services.task_service import (
     TaskService,
     UpdateTaskRequest,
 )
+from taskmanager.services.update_service import (
+    LatestRelease,
+    UpdateService,
+    asset_name_for_platform,
+)
 from taskmanager.ui.dialogs import DirectoryDialog, TaskDialog
 from taskmanager.ui.settings_dialog import SettingsDialog
+from taskmanager.ui.update_worker import UpdateCheckWorker, UpdateDownloadWorker
+from taskmanager.version import get_version
+
+logger = logging.getLogger(__name__)
 
 TASK_ID_ROLE = Qt.ItemDataRole.UserRole
 SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 
-COL_NUMBER = 0
-COL_DATE = 1
-COL_DESCRIPTION = 2
+COL_PRIORITY = 0
+COL_NUMBER = 1
+COL_DATE = 2
+COL_DESCRIPTION = 3
 
 SWATCH_SIZE = 22
+
+
+def _format_bytes(n: int) -> str:
+    value = float(n)
+    for unit in ("Б", "КБ", "МБ", "ГБ"):
+        if value < 1024 or unit == "ГБ":
+            if unit == "Б":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{n} Б"
+
+
+def _format_speed(bps: float) -> str:
+    return f"{_format_bytes(int(bps))}/с"
 
 
 class SortableItem(QTableWidgetItem):
@@ -113,6 +144,10 @@ class MainWindow(QMainWindow):
         self.settings_store = settings_store
         self._show_hidden = False
         self._search_query = ""
+        self._update_thread: QThread | None = None
+        self._update_worker: UpdateCheckWorker | UpdateDownloadWorker | None = None
+        self._download_worker: UpdateDownloadWorker | None = None
+        self._update_busy = False
 
         self.setWindowTitle("TaskManager")
         self.resize(1000, 640)
@@ -196,6 +231,23 @@ class MainWindow(QMainWindow):
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_context_menu)
         layout.addWidget(self.tabs)
+
+        self._update_panel = QWidget()
+        update_row = QHBoxLayout(self._update_panel)
+        update_row.setContentsMargins(0, 0, 0, 0)
+        self._update_label = QLabel("Загрузка обновления…")
+        self._update_progress = QProgressBar()
+        self._update_progress.setMinimum(0)
+        self._update_progress.setMaximum(100)
+        self._update_progress.setValue(0)
+        self._update_cancel_btn = QPushButton("Отмена")
+        self._update_cancel_btn.setObjectName("secondaryButton")
+        self._update_cancel_btn.clicked.connect(self._cancel_update_download)
+        update_row.addWidget(self._update_label, stretch=1)
+        update_row.addWidget(self._update_progress, stretch=2)
+        update_row.addWidget(self._update_cancel_btn)
+        self._update_panel.hide()
+        layout.addWidget(self._update_panel)
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("Готово")
@@ -323,8 +375,8 @@ class MainWindow(QMainWindow):
         self._fill_table(table, directory)
 
     def _make_table(self) -> QTableWidget:
-        table = QTableWidget(0, 3)
-        table.setHorizontalHeaderLabels(["Номер", "Срок", "Описание"])
+        table = QTableWidget(0, 4)
+        table.setHorizontalHeaderLabels(["Приоритет", "Номер", "Срок", "Описание"])
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -353,9 +405,16 @@ class MainWindow(QMainWindow):
         table.setSortingEnabled(False)
         table.setRowCount(0)
         today = date.today()
+        all_cols = (COL_PRIORITY, COL_NUMBER, COL_DATE, COL_DESCRIPTION)
         for task in tasks:
             row = table.rowCount()
             table.insertRow(row)
+
+            priority_item = SortableItem(str(task.priority))
+            priority_item.setData(TASK_ID_ROLE, task.id)
+            priority_item.setData(SORT_ROLE, task.priority)
+            priority_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            table.setItem(row, COL_PRIORITY, priority_item)
 
             number_item = SortableItem(task.number)
             number_item.setData(TASK_ID_ROLE, task.id)
@@ -374,11 +433,14 @@ class MainWindow(QMainWindow):
             desc_item.setData(SORT_ROLE, task.description.casefold())
             table.setItem(row, COL_DESCRIPTION, desc_item)
 
-            bg = QColor(task.color)
-            for col in (COL_NUMBER, COL_DATE, COL_DESCRIPTION):
+            row_bg = QColor(task.color)
+            for col in all_cols:
                 item = table.item(row, col)
                 if item:
-                    item.setBackground(bg)
+                    item.setBackground(row_bg)
+
+            if self.settings.show_priority_colors:
+                priority_item.setBackground(QColor(priority_color_hex(task.priority)))
 
             if self.settings.highlight_warnings and is_deadline_warning(
                 task.date_end,
@@ -386,7 +448,7 @@ class MainWindow(QMainWindow):
                 lead_days=self.settings.warning_lead_days,
             ):
                 warn = QColor(self.settings.warning_color)
-                for col in (COL_NUMBER, COL_DATE, COL_DESCRIPTION):
+                for col in all_cols:
                     item = table.item(row, col)
                     if item:
                         item.setForeground(warn)
@@ -417,7 +479,7 @@ class MainWindow(QMainWindow):
         row = table.currentRow()
         if row < 0:
             return None
-        item = table.item(row, 0)
+        item = table.item(row, COL_NUMBER)
         if item is None:
             return None
         value = item.data(TASK_ID_ROLE)
@@ -432,8 +494,10 @@ class MainWindow(QMainWindow):
         try:
             self.service.create_directory(dialog.directory_name)
         except ServiceError as exc:
+            logger.debug("Create directory failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
+        logger.debug("UI: directory created %r", dialog.directory_name)
         self.reload_directories()
 
     def rename_current_directory(self) -> None:
@@ -456,8 +520,12 @@ class MainWindow(QMainWindow):
         try:
             self.service.rename_directory(directory_id, dialog.directory_name)
         except ServiceError as exc:
+            logger.debug("Rename directory failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
+        logger.debug(
+            "UI: directory renamed id=%s -> %r", directory_id, dialog.directory_name
+        )
         self.reload_directories()
 
     def open_current_directory_folder(self) -> None:
@@ -484,8 +552,10 @@ class MainWindow(QMainWindow):
         try:
             self.service.delete_directory(directory_id, remove_folder=True)
         except ServiceError as exc:
+            logger.debug("Delete directory failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
+        logger.debug("UI: directory deleted id=%s", directory_id)
         self.reload_directories()
 
     def add_task(self) -> None:
@@ -504,6 +574,7 @@ class MainWindow(QMainWindow):
                     description=dialog.description,
                     date_end=dialog.date_end,
                     color="#ffffff",
+                    priority=dialog.priority,
                     hidden=dialog.hidden,
                     by_template=dialog.by_template,
                     create_notes_file=dialog.create_notes_file,
@@ -511,8 +582,15 @@ class MainWindow(QMainWindow):
                 )
             )
         except ServiceError as exc:
+            logger.debug("Create task failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
+        logger.debug(
+            "UI: task created number=%r dir=%s priority=%s",
+            dialog.number,
+            directory_id,
+            dialog.priority,
+        )
         self.reload_current_tab()
 
     def edit_selected_task(self) -> None:
@@ -542,13 +620,16 @@ class MainWindow(QMainWindow):
                     description=dialog.description,
                     date_end=dialog.date_end,
                     clear_date_end=dialog.date_end is None,
+                    priority=dialog.priority,
                     hidden=dialog.hidden,
                     links=dialog.links,
                 ),
             )
         except ServiceError as exc:
+            logger.debug("Update task failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
+        logger.debug("UI: task updated id=%s number=%r", task_id, dialog.number)
         self.reload_current_tab()
 
     def archive_selected_task(self) -> None:
@@ -566,8 +647,10 @@ class MainWindow(QMainWindow):
         try:
             self.service.archive_task(task_id)
         except ServiceError as exc:
+            logger.debug("Archive task failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
+        logger.debug("UI: task archived id=%s", task_id)
         self.reload_current_tab()
 
     def delete_selected_task(self) -> None:
@@ -585,8 +668,10 @@ class MainWindow(QMainWindow):
         try:
             self.service.delete_task(task_id)
         except ServiceError as exc:
+            logger.debug("Delete task failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
+        logger.debug("UI: task deleted id=%s", task_id)
         self.reload_current_tab()
 
     def open_selected_folder(self) -> None:
@@ -601,14 +686,188 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", str(exc))
 
     def open_settings(self) -> None:
-        dialog = SettingsDialog(self.settings, self.settings_store, self)
+        dialog = SettingsDialog(
+            self.settings,
+            self.settings_store,
+            self,
+            on_check_updates=self.start_update_check,
+        )
         if dialog.exec() != SettingsDialog.DialogCode.Accepted:
             return
         self.settings = dialog.settings
         self.service.settings = self.settings
         self.service.fs.settings = self.settings
+        setup_logging(debug=self.settings.debug_logging)
+        logger.debug(
+            "Settings saved (debug_logging=%s)", self.settings.debug_logging
+        )
         self._rebuild_color_palette()
         self.reload_directories()
+
+    def start_update_check(self) -> None:
+        if self._update_busy:
+            self.statusBar().showMessage("Обновление уже выполняется…")
+            return
+        logger.debug("Starting update check")
+        self._update_busy = True
+        self.statusBar().showMessage("Проверка обновлений…")
+        thread = QThread(self)
+        worker = UpdateCheckWorker()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.succeeded.connect(self._on_update_check_succeeded)
+        worker.failed.connect(self._on_update_check_failed)
+        worker.succeeded.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_update_thread_finished)
+        self._update_thread = thread
+        self._update_worker = worker
+        thread.start()
+
+    def _on_update_check_succeeded(self, release: object) -> None:
+        assert isinstance(release, LatestRelease)
+        current = get_version()
+        updater = UpdateService()
+        if not updater.is_newer(release.tag, current):
+            self.statusBar().showMessage(
+                f"Установлена актуальная версия ({current})"
+            )
+            logger.debug("Already up to date: %s", current)
+            self._update_busy = False
+            return
+
+        asset_name = asset_name_for_platform()
+        asset = updater.find_asset(release, asset_name)
+        if asset is None:
+            msg = f"В релизе {release.tag} нет файла «{asset_name}»."
+            logger.error(msg)
+            self.statusBar().showMessage(msg)
+            self._update_busy = False
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Обновления",
+            f"Доступна версия {release.version} (сейчас {current}).\n"
+            f"Скачать «{asset.name}»?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.statusBar().showMessage("Загрузка обновления не начата")
+            self._update_busy = False
+            return
+
+        dest, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить обновление",
+            str(Path.home() / asset.name),
+            "Все файлы (*)",
+        )
+        if not dest:
+            self.statusBar().showMessage("Загрузка обновления не начата")
+            self._update_busy = False
+            return
+
+        self._start_update_download(asset, Path(dest))
+
+    def _on_update_check_failed(self, message: str) -> None:
+        logger.error("Update check failed: %s", message)
+        self.statusBar().showMessage(f"Ошибка обновления: {message}")
+        self._update_busy = False
+
+    def _start_update_download(self, asset, dest: Path) -> None:
+        self._update_panel.show()
+        self._update_label.setText(f"Загрузка «{asset.name}»…")
+        self._update_progress.setRange(0, 0)
+        self._update_progress.setValue(0)
+        self._update_cancel_btn.setEnabled(True)
+        self.statusBar().showMessage("Загрузка обновления…")
+
+        thread = QThread(self)
+        worker = UpdateDownloadWorker(asset, dest)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_update_progress)
+        worker.succeeded.connect(self._on_update_download_succeeded)
+        worker.failed.connect(self._on_update_download_failed)
+        worker.cancelled.connect(self._on_update_download_cancelled)
+        worker.succeeded.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_update_thread_finished)
+        self._update_thread = thread
+        self._update_worker = worker
+        self._download_worker = worker
+        thread.start()
+
+    def _on_update_progress(
+        self, bytes_done: int, total: object, speed: float
+    ) -> None:
+        total_int = int(total) if isinstance(total, int) and total > 0 else None
+        if total_int:
+            self._update_progress.setRange(0, 100)
+            self._update_progress.setValue(min(100, int(bytes_done * 100 / total_int)))
+            pct = bytes_done * 100 / total_int
+            self._update_label.setText(
+                f"Загрузка… {pct:.0f}% · {_format_speed(speed)}"
+            )
+        else:
+            self._update_progress.setRange(0, 0)
+            self._update_label.setText(
+                f"Загрузка… {_format_bytes(bytes_done)} · {_format_speed(speed)}"
+            )
+
+    def _on_update_download_succeeded(self, path: object) -> None:
+        assert isinstance(path, Path)
+        self._hide_update_panel()
+        self._download_worker = None
+        self._update_busy = False
+        msg = f"Обновление скачано: {path}"
+        logger.info(msg)
+        self.statusBar().showMessage(msg)
+        QMessageBox.information(
+            self,
+            "Обновления",
+            f"Файл сохранён:\n{path}\n\n"
+            "Закройте приложение и замените исполняемый файл вручную.",
+        )
+        try:
+            open_target(str(path.parent))
+        except PlatformOpenError:
+            pass
+
+    def _on_update_download_failed(self, message: str) -> None:
+        self._hide_update_panel()
+        self._download_worker = None
+        self._update_busy = False
+        logger.error("Update download failed: %s", message)
+        self.statusBar().showMessage(f"Ошибка загрузки: {message}")
+
+    def _on_update_download_cancelled(self) -> None:
+        self._hide_update_panel()
+        self._download_worker = None
+        self._update_busy = False
+        self.statusBar().showMessage("Загрузка отменена")
+
+    def _cancel_update_download(self) -> None:
+        if self._download_worker is not None:
+            self._update_cancel_btn.setEnabled(False)
+            self._update_label.setText("Отмена…")
+            self._download_worker.request_cancel()
+
+    def _hide_update_panel(self) -> None:
+        self._update_panel.hide()
+        self._update_progress.setRange(0, 100)
+        self._update_progress.setValue(0)
+
+    def _on_update_thread_finished(self) -> None:
+        sender = self.sender()
+        if sender is self._update_thread:
+            self._update_thread = None
+            self._update_worker = None
 
     def _on_search_changed(self, text: str) -> None:
         self._search_query = text.strip()

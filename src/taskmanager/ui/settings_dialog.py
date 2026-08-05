@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -20,13 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from taskmanager.infrastructure.paths import resolve_work_dir
-from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.settings_service import Settings, SettingsStore
-from taskmanager.services.update_service import (
-    UpdateError,
-    UpdateService,
-    asset_name_for_platform,
-)
 from taskmanager.ui.about_dialog import AboutDialog
 from taskmanager.version import get_version
 
@@ -37,12 +29,15 @@ class SettingsDialog(QDialog):
         settings: Settings,
         store: SettingsStore,
         parent=None,
+        *,
+        on_check_updates=None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Настройки")
         self.setMinimumWidth(480)
         self._store = store
         self._settings = settings
+        self._on_check_updates = on_check_updates
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -88,6 +83,14 @@ class SettingsDialog(QDialog):
         self.create_notes_cb = QCheckBox("Создавать файл заметок по умолчанию")
         self.create_notes_cb.setChecked(settings.create_notes_file)
         form.addRow(self.create_notes_cb)
+
+        self.show_priority_colors_cb = QCheckBox("Цвета приоритета в таблице")
+        self.show_priority_colors_cb.setChecked(settings.show_priority_colors)
+        form.addRow(self.show_priority_colors_cb)
+
+        self.debug_logging_cb = QCheckBox("Подробный лог (DEBUG/INFO)")
+        self.debug_logging_cb.setChecked(settings.debug_logging)
+        form.addRow(self.debug_logging_cb)
 
         layout.addLayout(form)
         hint = QLabel(
@@ -149,67 +152,14 @@ class SettingsDialog(QDialog):
             self.warning_color_edit.setText(chosen.name())
 
     def _check_updates(self) -> None:
-        updater = UpdateService()
-        try:
-            release = updater.fetch_latest_release()
-        except UpdateError as exc:
-            QMessageBox.warning(self, "Обновления", str(exc))
+        if self._on_check_updates is not None:
+            self._on_check_updates()
             return
-
-        current = get_version()
-        if not updater.is_newer(release.tag, current):
-            QMessageBox.information(
-                self,
-                "Обновления",
-                f"Установлена актуальная версия ({current}).",
-            )
-            return
-
-        asset_name = asset_name_for_platform()
-        asset = updater.find_asset(release, asset_name)
-        if asset is None:
-            QMessageBox.warning(
-                self,
-                "Обновления",
-                f"В релизе {release.tag} нет файла «{asset_name}».",
-            )
-            return
-
-        answer = QMessageBox.question(
-            self,
-            "Обновления",
-            f"Доступна версия {release.version} (сейчас {current}).\n"
-            f"Скачать «{asset.name}»?",
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
-
-        default_name = asset.name
-        dest, _ = QFileDialog.getSaveFileName(
-            self,
-            "Сохранить обновление",
-            str(Path.home() / default_name),
-            "Все файлы (*)",
-        )
-        if not dest:
-            return
-
-        try:
-            saved = updater.download_asset(asset, Path(dest))
-        except UpdateError as exc:
-            QMessageBox.warning(self, "Обновления", str(exc))
-            return
-
         QMessageBox.information(
             self,
             "Обновления",
-            f"Файл сохранён:\n{saved}\n\n"
-            "Закройте приложение и замените исполняемый файл вручную.",
+            "Проверка обновлений недоступна в этом контексте.",
         )
-        try:
-            open_target(str(saved.parent))
-        except PlatformOpenError:
-            pass
 
     def _save(self) -> None:
         work_dir = self.work_dir_edit.text().strip()
@@ -244,6 +194,8 @@ class SettingsDialog(QDialog):
         self._settings.warning_lead_days = self.lead_days_spin.value()
         self._settings.warning_color = warning_color
         self._settings.create_notes_file = self.create_notes_cb.isChecked()
+        self._settings.show_priority_colors = self.show_priority_colors_cb.isChecked()
+        self._settings.debug_logging = self.debug_logging_cb.isChecked()
         self._store.save(self._settings)
         self.accept()
 

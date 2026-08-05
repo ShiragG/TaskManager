@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import platform
 import re
+import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,9 +18,15 @@ GITHUB_LATEST_URL = (
 )
 USER_AGENT = "TaskManager-UpdateCheck"
 
+logger = logging.getLogger(__name__)
+
 
 class UpdateError(Exception):
     """Failed to check or download an update."""
+
+
+class UpdateCancelled(UpdateError):
+    """Download was cancelled by the user."""
 
 
 @dataclass(frozen=True)
@@ -32,6 +41,10 @@ class LatestRelease:
     tag: str
     version: str
     assets: list[ReleaseAsset]
+
+
+ProgressCallback = Callable[[int, int | None, float], None]
+CancelPredicate = Callable[[], bool]
 
 
 _VERSION_RE = re.compile(
@@ -107,7 +120,13 @@ class UpdateService:
         raw = self._http_get_json(self.api_url)
         if not isinstance(raw, dict):
             raise UpdateError("Некорректный ответ GitHub API")
-        return parse_release_payload(raw)
+        release = parse_release_payload(raw)
+        logger.debug(
+            "Fetched latest release tag=%s assets=%d",
+            release.tag,
+            len(release.assets),
+        )
+        return release
 
     def is_newer(self, remote_tag: str, current_version: str) -> bool:
         try:
@@ -121,27 +140,78 @@ class UpdateService:
         name = asset_name or asset_name_for_platform()
         return pick_asset(release.assets, name)
 
-    def download_asset(self, asset: ReleaseAsset, dest: Path) -> Path:
+    def download_asset(
+        self,
+        asset: ReleaseAsset,
+        dest: Path,
+        *,
+        progress_callback: ProgressCallback | None = None,
+        should_cancel: CancelPredicate | None = None,
+        chunk_size: int = 64 * 1024,
+    ) -> Path:
         dest = Path(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         request = urllib.request.Request(
             asset.download_url,
             headers={"User-Agent": USER_AGENT, "Accept": "application/octet-stream"},
         )
+        cancelled = False
         try:
             if self._opener is not None:
-                with self._opener.open(request) as resp, dest.open("wb") as out:
-                    out.write(resp.read())
+                response_cm = self._opener.open(request)
             else:
-                with urllib.request.urlopen(request, timeout=120) as resp, dest.open(
-                    "wb"
-                ) as out:
-                    out.write(resp.read())
+                response_cm = urllib.request.urlopen(request, timeout=120)
+            with response_cm as resp, dest.open("wb") as out:
+                total = asset.size
+                if total is None:
+                    length = resp.headers.get("Content-Length")
+                    if length and length.isdigit():
+                        total = int(length)
+                bytes_done = 0
+                started = time.monotonic()
+                last_report = started
+                while True:
+                    if should_cancel is not None and should_cancel():
+                        cancelled = True
+                        break
+                    chunk = resp.read(chunk_size)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    bytes_done += len(chunk)
+                    now = time.monotonic()
+                    if progress_callback is not None and (
+                        now - last_report >= 0.1 or (total and bytes_done >= total)
+                    ):
+                        elapsed = max(now - started, 1e-6)
+                        speed = bytes_done / elapsed
+                        progress_callback(bytes_done, total, speed)
+                        last_report = now
+        except UpdateCancelled:
+            raise
         except urllib.error.URLError as exc:
+            logger.exception("Update download failed")
+            self._cleanup_partial(dest)
             raise UpdateError(f"Не удалось скачать обновление: {exc}") from exc
         except OSError as exc:
+            logger.exception("Update save failed")
+            self._cleanup_partial(dest)
             raise UpdateError(f"Не удалось сохранить файл: {exc}") from exc
+
+        if cancelled:
+            self._cleanup_partial(dest)
+            logger.info("Update download cancelled, removed partial file %s", dest)
+            raise UpdateCancelled("Загрузка отменена")
+        logger.info("Update downloaded to %s (%s bytes)", dest, dest.stat().st_size)
         return dest
+
+    @staticmethod
+    def _cleanup_partial(dest: Path) -> None:
+        try:
+            if dest.is_file():
+                dest.unlink()
+        except OSError:
+            logger.exception("Failed to remove partial update file: %s", dest)
 
     def _http_get_json(self, url: str) -> Any:
         request = urllib.request.Request(
@@ -159,10 +229,13 @@ class UpdateService:
                 with urllib.request.urlopen(request, timeout=30) as resp:
                     body = resp.read()
         except urllib.error.HTTPError as exc:
+            logger.exception("GitHub API HTTP error")
             raise UpdateError(f"GitHub API: HTTP {exc.code}") from exc
         except urllib.error.URLError as exc:
+            logger.exception("GitHub API network error")
             raise UpdateError(f"Нет сети или GitHub недоступен: {exc}") from exc
         try:
             return json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logger.exception("GitHub API JSON parse error")
             raise UpdateError("Некорректный JSON от GitHub") from exc

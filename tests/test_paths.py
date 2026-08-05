@@ -4,6 +4,7 @@ from pathlib import Path
 from taskmanager.infrastructure.paths import (
     app_dir,
     default_db_path,
+    default_log_path,
     default_settings_path,
 )
 
@@ -14,6 +15,7 @@ def test_app_dir_dev_uses_cwd(monkeypatch, tmp_path: Path):
     assert app_dir() == tmp_path.resolve()
     assert default_settings_path() == tmp_path.resolve() / "settings.json"
     assert default_db_path() == tmp_path.resolve() / "taskmanager.db"
+    assert default_log_path() == tmp_path.resolve() / "taskmanager.log"
 
 
 def test_app_dir_frozen_uses_executable_parent(monkeypatch, tmp_path: Path):

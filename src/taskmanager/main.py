@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
 import sys
 
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from taskmanager.infrastructure.logging_setup import (
+    install_qt_message_handler,
+    setup_logging,
+)
 from taskmanager.infrastructure.paths import (
     default_db_path,
     default_settings_path,
@@ -16,6 +21,8 @@ from taskmanager.services.settings_service import SettingsStore
 from taskmanager.services.task_service import TaskService
 from taskmanager.ui.main_window import MainWindow
 from taskmanager.ui.stylesheet import apply_stylesheet
+
+logger = logging.getLogger(__name__)
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -29,9 +36,13 @@ def run(argv: list[str] | None = None) -> int:
 
     settings_store = SettingsStore(default_settings_path())
     settings = settings_store.load()
+    setup_logging(debug=settings.debug_logging)
+    install_qt_message_handler()
+    logger.debug("TaskManager starting")
 
     work_dir = resolve_work_dir(settings.work_dir)
     if not work_dir.is_dir():
+        logger.error("Work directory missing: %s", work_dir)
         QMessageBox.critical(
             None,
             "Ошибка",
