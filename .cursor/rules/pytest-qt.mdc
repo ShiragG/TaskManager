@@ -1,0 +1,22 @@
+---
+description: How to run pytest for this PySide6 app (avoid Qt ABRT in agent shells)
+alwaysApply: true
+---
+
+# Running tests
+
+This project has PySide6 UI tests via `pytest-qt`. Without a Qt platform, `QApplication` aborts the whole pytest process (signal 6 / ABRT), which looks like a mysterious crash — not a normal test failure.
+
+`tests/conftest.py` sets `QT_QPA_PLATFORM=offscreen` by default. Prefer:
+
+```bash
+.venv/bin/pytest tests/ -q --tb=short
+```
+
+If you override env or see Qt platform / ABRT / coredump on pytest, explicitly set:
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/ -q --tb=short
+```
+
+Do not treat a Qt abort as an application logic failure until the suite actually reports pass/fail under `offscreen`.

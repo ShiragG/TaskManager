@@ -4,6 +4,8 @@ import json
 import logging
 import platform
 import re
+import stat
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -11,6 +13,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from taskmanager.infrastructure.paths import app_dir
 
 
 GITHUB_LATEST_URL = (
@@ -76,6 +80,22 @@ def asset_name_for_platform(system: str | None = None) -> str:
     return "TaskManager"
 
 
+def staged_update_path(*, system: str | None = None, directory: Path | None = None) -> Path:
+    """Path for the downloaded binary: ``TaskManager[.exe].new`` beside the app."""
+    base = directory or app_dir()
+    return base / f"{asset_name_for_platform(system)}.new"
+
+
+def is_frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def current_executable() -> Path:
+    if is_frozen():
+        return Path(sys.executable).resolve()
+    return Path(sys.argv[0]).resolve()
+
+
 def pick_asset(
     assets: list[ReleaseAsset], asset_name: str
 ) -> ReleaseAsset | None:
@@ -104,8 +124,94 @@ def parse_release_payload(payload: dict[str, Any]) -> LatestRelease:
     return LatestRelease(tag=tag, version=version, assets=assets)
 
 
+def write_restart_helper(
+    *,
+    new_path: Path,
+    target_path: Path,
+    pid: int,
+    helper_dir: Path | None = None,
+) -> Path:
+    """Write a platform helper that replaces ``target_path`` with ``new_path`` after PID exits."""
+    directory = helper_dir or new_path.parent
+    directory.mkdir(parents=True, exist_ok=True)
+    is_windows = platform.system().lower().startswith("win")
+    if is_windows:
+        helper = directory / "taskmanager_apply_update.bat"
+        old_path = target_path.with_suffix(target_path.suffix + ".old")
+        content = f"""@echo off
+setlocal
+set PID={pid}
+set NEW={new_path}
+set TARGET={target_path}
+set OLD={old_path}
+:wait
+tasklist /FI "PID eq %PID%" 2>NUL | find "%PID%" >NUL
+if not errorlevel 1 (
+  timeout /t 1 /nobreak >NUL
+  goto wait
+)
+if exist "%OLD%" del /f /q "%OLD%"
+if exist "%TARGET%" move /y "%TARGET%" "%OLD%"
+move /y "%NEW%" "%TARGET%"
+start "" "%TARGET%"
+if exist "%OLD%" del /f /q "%OLD%"
+del /f /q "%~f0"
+"""
+        helper.write_text(content, encoding="utf-8", newline="\r\n")
+        return helper
+
+    helper = directory / "taskmanager_apply_update.sh"
+    old_path = Path(str(target_path) + ".old")
+    content = f"""#!/bin/sh
+PID={pid}
+NEW="{new_path}"
+TARGET="{target_path}"
+OLD="{old_path}"
+while kill -0 "$PID" 2>/dev/null; do
+  sleep 1
+done
+rm -f "$OLD"
+if [ -e "$TARGET" ]; then
+  mv -f "$TARGET" "$OLD"
+fi
+mv -f "$NEW" "$TARGET"
+chmod +x "$TARGET"
+"$TARGET" &
+rm -f "$OLD"
+rm -f -- "$0"
+"""
+    helper.write_text(content, encoding="utf-8")
+    mode = helper.stat().st_mode
+    helper.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return helper
+
+
+def launch_restart_helper(helper: Path) -> None:
+    """Start the apply-update helper detached, then caller should exit."""
+    import subprocess
+
+    is_windows = platform.system().lower().startswith("win")
+    if is_windows:
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        creationflags = 0x00000008 | 0x00000200
+        subprocess.Popen(  # noqa: S603
+            [str(helper)],
+            cwd=str(helper.parent),
+            creationflags=creationflags,
+            close_fds=True,
+        )
+        return
+
+    subprocess.Popen(  # noqa: S603
+        ["/bin/sh", str(helper)],
+        cwd=str(helper.parent),
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
 class UpdateService:
-    """Check GitHub Releases and download the platform binary (no self-replace)."""
+    """Check GitHub Releases and download the platform binary."""
 
     def __init__(
         self,
@@ -202,6 +308,13 @@ class UpdateService:
             self._cleanup_partial(dest)
             logger.info("Update download cancelled, removed partial file %s", dest)
             raise UpdateCancelled("Загрузка отменена")
+        # Ensure executable bit on Unix downloads
+        if not platform.system().lower().startswith("win"):
+            try:
+                mode = dest.stat().st_mode
+                dest.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            except OSError:
+                logger.exception("Failed to chmod downloaded update")
         logger.info("Update downloaded to %s (%s bytes)", dest, dest.stat().st_size)
         return dest
 

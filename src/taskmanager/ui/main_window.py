@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import QModelIndex, Qt, QThread
 from PySide6.QtGui import QAction, QColor, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QColorDialog,
     QFileDialog,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -28,9 +31,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taskmanager.domain import Directory, is_deadline_warning, priority_color_hex
+from taskmanager.domain import Project, contrast_foreground, html_to_plain, is_deadline_warning, priority_color_hex
 from taskmanager.infrastructure.logging_setup import setup_logging
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
+from taskmanager.services.excel_export import ExcelExportError, export_tasks_to_excel
 from taskmanager.services.settings_service import (
     BASE_COLOR_NAMES,
     Settings,
@@ -46,9 +50,21 @@ from taskmanager.services.update_service import (
     LatestRelease,
     UpdateService,
     asset_name_for_platform,
+    current_executable,
+    is_frozen,
+    launch_restart_helper,
+    staged_update_path,
+    write_restart_helper,
 )
-from taskmanager.ui.dialogs import DirectoryDialog, TaskDialog
+from taskmanager.ui.dialogs import (
+    ExcelExportDialog,
+    MissingFoldersDialog,
+    ProjectDialog,
+    RichTextEditDialog,
+    TaskDialog,
+)
 from taskmanager.ui.settings_dialog import SettingsDialog
+from taskmanager.ui.stylesheet import apply_stylesheet
 from taskmanager.ui.update_worker import UpdateCheckWorker, UpdateDownloadWorker
 from taskmanager.version import get_version
 
@@ -61,8 +77,10 @@ COL_PRIORITY = 0
 COL_NUMBER = 1
 COL_DATE = 2
 COL_DESCRIPTION = 3
+COL_COMMENT = 4
 
 SWATCH_SIZE = 22
+DESC_COL_WIDTH = 360
 
 
 def _format_bytes(n: int) -> str:
@@ -143,20 +161,23 @@ class MainWindow(QMainWindow):
         self.settings = settings
         self.settings_store = settings_store
         self._show_hidden = False
+        self._show_archive = False
         self._search_query = ""
         self._update_thread: QThread | None = None
         self._update_worker: UpdateCheckWorker | UpdateDownloadWorker | None = None
         self._download_worker: UpdateDownloadWorker | None = None
         self._update_busy = False
+        self._pending_update_path: Path | None = None
 
         self.setWindowTitle("TaskManager")
-        self.resize(1000, 640)
+        self.resize(1100, 640)
 
         self._build_toolbar()
         self._build_central()
         self._build_shortcuts()
+        self._sync_mode_actions()
 
-        self.reload_directories()
+        self.reload_projects()
         self._check_missing_folders()
 
     def _build_toolbar(self) -> None:
@@ -165,9 +186,9 @@ class MainWindow(QMainWindow):
         tb.setContextMenuPolicy(Qt.ContextMenuPolicy.PreventContextMenu)
         self.addToolBar(tb)
 
-        self.act_add_dir = QAction("Директория", self)
-        self.act_add_dir.triggered.connect(self.add_directory)
-        tb.addAction(self.act_add_dir)
+        self.act_add_project = QAction("Проект", self)
+        self.act_add_project.triggered.connect(self.add_project)
+        tb.addAction(self.act_add_project)
 
         self.act_add_task = QAction("Заявка", self)
         self.act_add_task.triggered.connect(self.add_task)
@@ -181,6 +202,10 @@ class MainWindow(QMainWindow):
         self.act_archive.triggered.connect(self.archive_selected_task)
         tb.addAction(self.act_archive)
 
+        self.act_restore = QAction("Вернуть", self)
+        self.act_restore.triggered.connect(self.restore_selected_task)
+        tb.addAction(self.act_restore)
+
         self.act_delete = QAction("Удалить", self)
         self.act_delete.triggered.connect(self.delete_selected_task)
         tb.addAction(self.act_delete)
@@ -190,6 +215,10 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_open_folder)
 
         tb.addSeparator()
+
+        self.act_export = QAction("Excel…", self)
+        self.act_export.triggered.connect(self.export_excel)
+        tb.addAction(self.act_export)
 
         self.act_settings = QAction("Настройки", self)
         self.act_settings.triggered.connect(self.open_settings)
@@ -202,7 +231,7 @@ class MainWindow(QMainWindow):
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel("Поиск:"))
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Номер или описание…")
+        self.search_edit.setPlaceholderText("Номер, описание или комментарий…")
         self.search_edit.setClearButtonEnabled(True)
         self.search_edit.textChanged.connect(self._on_search_changed)
         search_row.addWidget(self.search_edit)
@@ -211,6 +240,11 @@ class MainWindow(QMainWindow):
         self.hidden_cb.setChecked(False)
         self.hidden_cb.toggled.connect(self._on_hidden_toggled)
         search_row.addWidget(self.hidden_cb)
+
+        self.archive_cb = QCheckBox("Архив")
+        self.archive_cb.setChecked(False)
+        self.archive_cb.toggled.connect(self._on_archive_toggled)
+        search_row.addWidget(self.archive_cb)
         layout.addLayout(search_row)
 
         palette_row = QHBoxLayout()
@@ -228,6 +262,8 @@ class MainWindow(QMainWindow):
         self.tabs.setTabsClosable(False)
         self.tabs.currentChanged.connect(self._on_tab_changed)
         tab_bar = self.tabs.tabBar()
+        tab_bar.setMovable(True)
+        tab_bar.tabMoved.connect(self._on_tab_moved)
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_context_menu)
         layout.addWidget(self.tabs)
@@ -243,9 +279,13 @@ class MainWindow(QMainWindow):
         self._update_cancel_btn = QPushButton("Отмена")
         self._update_cancel_btn.setObjectName("secondaryButton")
         self._update_cancel_btn.clicked.connect(self._cancel_update_download)
+        self._update_restart_btn = QPushButton("Перезапустить")
+        self._update_restart_btn.clicked.connect(self._restart_with_update)
+        self._update_restart_btn.hide()
         update_row.addWidget(self._update_label, stretch=1)
         update_row.addWidget(self._update_progress, stretch=2)
         update_row.addWidget(self._update_cancel_btn)
+        update_row.addWidget(self._update_restart_btn)
         self._update_panel.hide()
         layout.addWidget(self._update_panel)
 
@@ -259,14 +299,14 @@ class MainWindow(QMainWindow):
             if widget is not None:
                 widget.deleteLater()
 
-        none_btn = ColorSwatchButton("#ffffff", tooltip="Без цвета")
+        none_btn = ColorSwatchButton("#e2e8f0", tooltip="Без цвета")
         none_btn.setText("∅")
         none_btn.setStyleSheet(
-            "QToolButton { background-color: #ffffff; border: 1px solid #94a3b8; "
+            "QToolButton { background-color: #e2e8f0; border: 1px dashed #64748b; "
             "border-radius: 3px; color: #64748b; font-size: 11px; }"
             "QToolButton:hover { border: 2px solid #0f766e; }"
         )
-        none_btn.clicked.connect(lambda: self._apply_color_to_selection("#ffffff"))
+        none_btn.clicked.connect(lambda: self._apply_color_to_selection(None))
         self.palette_layout.addWidget(none_btn)
 
         for name, hex_color in self.settings.colors.items():
@@ -293,13 +333,16 @@ class MainWindow(QMainWindow):
         self.palette_layout.addWidget(add_btn)
         self.palette_layout.addStretch()
 
-    def _apply_color_to_selection(self, color: str) -> None:
+    def _apply_color_to_selection(self, color: str | None) -> None:
         task_id = self.selected_task_id()
         if task_id is None:
             self.statusBar().showMessage("Выберите заявку, чтобы задать цвет")
             return
         try:
-            self.service.update_task(task_id, UpdateTaskRequest(color=color))
+            if color is None:
+                self.service.update_task(task_id, UpdateTaskRequest(clear_color=True))
+            else:
+                self.service.update_task(task_id, UpdateTaskRequest(color=color))
         except ServiceError as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
@@ -337,17 +380,26 @@ class MainWindow(QMainWindow):
         self.search_edit.setFocus()
         self.search_edit.selectAll()
 
+    def _sync_mode_actions(self) -> None:
+        archive = self._show_archive
+        self.act_add_task.setEnabled(not archive)
+        self.act_archive.setVisible(not archive)
+        self.act_restore.setVisible(archive)
+        self.act_edit.setEnabled(not archive)
+
     # --- data loading ---
 
-    def reload_directories(self) -> None:
-        current_id = self.current_directory_id()
+    def reload_projects(self) -> None:
+        current_id = self.current_project_id()
         self.tabs.blockSignals(True)
+        self.tabs.tabBar().blockSignals(True)
         self.tabs.clear()
-        for directory in self.service.list_directories():
+        for project in self.service.list_projects():
             table = self._make_table()
-            self.tabs.addTab(table, directory.name)
-            self.tabs.tabBar().setTabData(self.tabs.count() - 1, directory.id)
-            self._fill_table(table, directory)
+            self.tabs.addTab(table, project.name)
+            self.tabs.tabBar().setTabData(self.tabs.count() - 1, project.id)
+            self._fill_table(table, project)
+        self.tabs.tabBar().blockSignals(False)
         self.tabs.blockSignals(False)
 
         if current_id is not None:
@@ -358,54 +410,68 @@ class MainWindow(QMainWindow):
         elif self.tabs.count():
             self.tabs.setCurrentIndex(0)
 
+    # Alias used by older tests
+    def reload_directories(self) -> None:
+        self.reload_projects()
+
     def reload_current_tab(self) -> None:
         idx = self.tabs.currentIndex()
         if idx < 0:
             return
-        directory_id = self.tabs.tabBar().tabData(idx)
-        directory = next(
-            (d for d in self.service.list_directories() if d.id == directory_id),
+        project_id = self.tabs.tabBar().tabData(idx)
+        project = next(
+            (p for p in self.service.list_projects() if p.id == project_id),
             None,
         )
-        if directory is None:
-            self.reload_directories()
+        if project is None:
+            self.reload_projects()
             return
         table = self.tabs.widget(idx)
         assert isinstance(table, QTableWidget)
-        self._fill_table(table, directory)
+        self._fill_table(table, project)
 
     def _make_table(self) -> QTableWidget:
-        table = QTableWidget(0, 4)
-        table.setHorizontalHeaderLabels(["Приоритет", "Номер", "Срок", "Описание"])
+        table = QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(
+            ["Приоритет", "Номер", "Срок", "Описание", "Комментарий"]
+        )
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(False)
         table.setSortingEnabled(True)
         header = table.horizontalHeader()
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(COL_PRIORITY, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(COL_NUMBER, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(COL_DATE, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(COL_DESCRIPTION, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(COL_COMMENT, QHeaderView.ResizeMode.Stretch)
+        header.resizeSection(COL_DESCRIPTION, DESC_COL_WIDTH)
+        header.setMinimumSectionSize(60)
         header.setSortIndicatorShown(True)
         header.setSortIndicator(COL_NUMBER, Qt.SortOrder.AscendingOrder)
         table.verticalHeader().setVisible(False)
-        table.doubleClicked.connect(self.edit_selected_task)
+        table.doubleClicked.connect(self._on_table_double_clicked)
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         table.customContextMenuRequested.connect(
             lambda pos, t=table: self._show_context_menu(t, pos)
         )
         return table
 
-    def _fill_table(self, table: QTableWidget, directory: Directory) -> None:
+    def _fill_table(self, table: QTableWidget, project: Project) -> None:
         query = self._search_query or None
         tasks = self.service.list_tasks(
-            directory.id,  # type: ignore[arg-type]
+            project.id,  # type: ignore[arg-type]
             only_hidden=self._show_hidden,
+            archived=self._show_archive,
             query=query,
         )
 
         table.setSortingEnabled(False)
         table.setRowCount(0)
         today = date.today()
-        all_cols = (COL_PRIORITY, COL_NUMBER, COL_DATE, COL_DESCRIPTION)
+        all_cols = (COL_PRIORITY, COL_NUMBER, COL_DATE, COL_DESCRIPTION, COL_COMMENT)
         for task in tasks:
             row = table.rowCount()
             table.insertRow(row)
@@ -429,18 +495,32 @@ class MainWindow(QMainWindow):
             )
             table.setItem(row, COL_DATE, date_item)
 
-            desc_item = SortableItem(task.description)
-            desc_item.setData(SORT_ROLE, task.description.casefold())
+            desc_plain = html_to_plain(task.description)
+            desc_item = SortableItem(desc_plain)
+            desc_item.setData(TASK_ID_ROLE, task.id)
+            desc_item.setData(SORT_ROLE, desc_plain.casefold())
             table.setItem(row, COL_DESCRIPTION, desc_item)
 
-            row_bg = QColor(task.color)
-            for col in all_cols:
-                item = table.item(row, col)
-                if item:
-                    item.setBackground(row_bg)
+            comment_plain = html_to_plain(task.comment)
+            comment_item = SortableItem(comment_plain)
+            comment_item.setData(TASK_ID_ROLE, task.id)
+            comment_item.setData(SORT_ROLE, comment_plain.casefold())
+            table.setItem(row, COL_COMMENT, comment_item)
+
+            if task.color:
+                row_bg = QColor(task.color)
+                fg = QColor(contrast_foreground(task.color))
+                for col in all_cols:
+                    item = table.item(row, col)
+                    if item:
+                        item.setBackground(row_bg)
+                        item.setForeground(fg)
 
             if self.settings.show_priority_colors:
                 priority_item.setBackground(QColor(priority_color_hex(task.priority)))
+                priority_item.setForeground(
+                    QColor(contrast_foreground(priority_color_hex(task.priority)))
+                )
 
             if self.settings.highlight_warnings and is_deadline_warning(
                 task.date_end,
@@ -455,18 +535,82 @@ class MainWindow(QMainWindow):
 
         table.setSortingEnabled(True)
         header = table.horizontalHeader()
+        if header.sectionSize(COL_DESCRIPTION) < DESC_COL_WIDTH // 2:
+            header.resizeSection(COL_DESCRIPTION, DESC_COL_WIDTH)
         table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
-        mode = "скрытых" if self._show_hidden else "заявок"
-        self.statusBar().showMessage(f"{directory.name}: {len(tasks)} {mode}")
+        if self._show_archive:
+            mode = "в архиве"
+        elif self._show_hidden:
+            mode = "скрытых"
+        else:
+            mode = "заявок"
+        self.statusBar().showMessage(f"{project.name}: {len(tasks)} {mode}")
+
+    def _save_task_html(
+        self,
+        task_id: int,
+        *,
+        description: str | None = None,
+        comment: str | None = None,
+    ) -> None:
+        try:
+            self.service.update_task(
+                task_id,
+                UpdateTaskRequest(description=description, comment=comment),
+            )
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        self.reload_current_tab()
+
+    def _on_table_double_clicked(self, index: QModelIndex) -> None:
+        if not index.isValid():
+            return
+        if index.column() in (COL_DESCRIPTION, COL_COMMENT):
+            self._edit_selected_rich_field(index.column())
+        else:
+            self.edit_selected_task()
+
+    def _edit_selected_rich_field(self, column: int) -> None:
+        if self._show_archive:
+            QMessageBox.information(
+                self, "Уведомление", "Архивные заявки нельзя редактировать — сначала верните"
+            )
+            return
+        task_id = self.selected_task_id()
+        if task_id is None:
+            QMessageBox.information(self, "Уведомление", "Выберите заявку")
+            return
+        try:
+            task = self.service.get_task(task_id)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        if column == COL_DESCRIPTION:
+            title = "Описание"
+            html = task.description
+        else:
+            title = "Комментарий"
+            html = task.comment
+        dialog = RichTextEditDialog(self, title=title, html=html)
+        if dialog.exec() != RichTextEditDialog.DialogCode.Accepted:
+            return
+        if column == COL_DESCRIPTION:
+            self._save_task_html(task_id, description=dialog.html)
+        else:
+            self._save_task_html(task_id, comment=dialog.html)
 
     # --- selection helpers ---
 
-    def current_directory_id(self) -> int | None:
+    def current_project_id(self) -> int | None:
         idx = self.tabs.currentIndex()
         if idx < 0:
             return None
         data = self.tabs.tabBar().tabData(idx)
         return int(data) if data is not None else None
+
+    def current_directory_id(self) -> int | None:
+        return self.current_project_id()
 
     def current_table(self) -> QTableWidget | None:
         widget = self.tabs.currentWidget()
@@ -487,97 +631,112 @@ class MainWindow(QMainWindow):
 
     # --- actions ---
 
-    def add_directory(self) -> None:
-        dialog = DirectoryDialog(self, title="Новая директория")
-        if dialog.exec() != DirectoryDialog.DialogCode.Accepted:
+    def add_project(self) -> None:
+        dialog = ProjectDialog(self, title="Новый проект")
+        if dialog.exec() != ProjectDialog.DialogCode.Accepted:
             return
         try:
-            self.service.create_directory(dialog.directory_name)
+            self.service.create_project(dialog.project_name)
         except ServiceError as exc:
-            logger.debug("Create directory failed: %s", exc)
+            logger.debug("Create project failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
-        logger.debug("UI: directory created %r", dialog.directory_name)
-        self.reload_directories()
+        logger.debug("UI: project created %r", dialog.project_name)
+        self.reload_projects()
 
-    def rename_current_directory(self) -> None:
-        directory_id = self.current_directory_id()
-        if directory_id is None:
+    def add_directory(self) -> None:
+        self.add_project()
+
+    def rename_current_project(self) -> None:
+        project_id = self.current_project_id()
+        if project_id is None:
             return
-        directory = next(
-            (d for d in self.service.list_directories() if d.id == directory_id),
+        project = next(
+            (p for p in self.service.list_projects() if p.id == project_id),
             None,
         )
-        if directory is None:
+        if project is None:
             return
-        dialog = DirectoryDialog(
+        dialog = ProjectDialog(
             self,
-            name=directory.name,
-            title="Изменить директорию",
+            name=project.name,
+            title="Изменить проект",
         )
-        if dialog.exec() != DirectoryDialog.DialogCode.Accepted:
+        if dialog.exec() != ProjectDialog.DialogCode.Accepted:
             return
         try:
-            self.service.rename_directory(directory_id, dialog.directory_name)
+            self.service.rename_project(project_id, dialog.project_name)
         except ServiceError as exc:
-            logger.debug("Rename directory failed: %s", exc)
+            logger.debug("Rename project failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
         logger.debug(
-            "UI: directory renamed id=%s -> %r", directory_id, dialog.directory_name
+            "UI: project renamed id=%s -> %r", project_id, dialog.project_name
         )
-        self.reload_directories()
+        self.reload_projects()
 
-    def open_current_directory_folder(self) -> None:
-        directory_id = self.current_directory_id()
-        if directory_id is None:
+    def open_current_project_folder(self) -> None:
+        project_id = self.current_project_id()
+        if project_id is None:
             return
         try:
-            path = self.service.directory_folder_path(directory_id)
+            path = self.service.project_folder_path(project_id)
             open_target(str(path))
         except (ServiceError, PlatformOpenError) as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
 
-    def delete_current_directory(self) -> None:
-        directory_id = self.current_directory_id()
-        if directory_id is None:
+    def delete_current_project(self) -> None:
+        project_id = self.current_project_id()
+        if project_id is None:
             return
         answer = QMessageBox.question(
             self,
             "Удаление",
-            "Удалить директорию? Активные заявки должны быть заархивированы заранее.",
+            "Удалить проект? Активные заявки должны быть заархивированы заранее.",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
         try:
-            self.service.delete_directory(directory_id, remove_folder=True)
+            self.service.delete_project(project_id, remove_folder=True)
         except ServiceError as exc:
-            logger.debug("Delete directory failed: %s", exc)
+            logger.debug("Delete project failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
-        logger.debug("UI: directory deleted id=%s", directory_id)
-        self.reload_directories()
+        logger.debug("UI: project deleted id=%s", project_id)
+        self.reload_projects()
 
     def add_task(self) -> None:
-        directory_id = self.current_directory_id()
-        if directory_id is None:
-            QMessageBox.information(self, "Уведомление", "Сначала создайте директорию")
+        if self._show_archive:
+            QMessageBox.information(
+                self, "Уведомление", "В режиме архива нельзя создавать заявки"
+            )
             return
-        dialog = TaskDialog(self.settings, self, title="Новая заявка")
+        project_id = self.current_project_id()
+        if project_id is None:
+            QMessageBox.information(self, "Уведомление", "Сначала создайте проект")
+            return
+        dialog = TaskDialog(
+            self.settings,
+            self,
+            title="Новая заявка",
+            folder_validator=self._make_create_folder_validator(project_id),
+        )
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return
         try:
             self.service.create_task(
                 CreateTaskRequest(
-                    directory_id=directory_id,
+                    project_id=project_id,
                     number=dialog.number,
                     description=dialog.description,
+                    comment=dialog.comment,
                     date_end=dialog.date_end,
-                    color="#ffffff",
+                    color=None,
                     priority=dialog.priority,
                     hidden=dialog.hidden,
                     by_template=dialog.by_template,
                     create_notes_file=dialog.create_notes_file,
+                    create_folder=dialog.create_folder,
                     links=dialog.links,
                 )
             )
@@ -586,14 +745,37 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
         logger.debug(
-            "UI: task created number=%r dir=%s priority=%s",
+            "UI: task created number=%r project=%s priority=%s",
             dialog.number,
-            directory_id,
+            project_id,
             dialog.priority,
         )
         self.reload_current_tab()
 
+    def _make_create_folder_validator(self, project_id: int):
+        def validate(dialog: TaskDialog) -> str | None:
+            need_folder = (
+                dialog.create_folder or dialog.by_template or dialog.create_notes_file
+            )
+            try:
+                self.service.validate_create_folder(
+                    project_id,
+                    dialog.number,
+                    create_folder=need_folder,
+                    by_template=dialog.by_template,
+                )
+            except ServiceError as exc:
+                return str(exc)
+            return None
+
+        return validate
+
     def edit_selected_task(self) -> None:
+        if self._show_archive:
+            QMessageBox.information(
+                self, "Уведомление", "Архивные заявки нельзя редактировать — сначала верните"
+            )
+            return
         task_id = self.selected_task_id()
         if task_id is None:
             QMessageBox.information(self, "Уведомление", "Выберите заявку")
@@ -603,12 +785,21 @@ class MainWindow(QMainWindow):
         except ServiceError as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
+
+        def validate(dialog: TaskDialog) -> str | None:
+            try:
+                self.service.validate_update_folder(task_id, dialog.number)
+            except ServiceError as exc:
+                return str(exc)
+            return None
+
         dialog = TaskDialog(
             self.settings,
             self,
             task=task,
             title="Изменить заявку",
             allow_template=False,
+            folder_validator=validate,
         )
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return
@@ -618,6 +809,7 @@ class MainWindow(QMainWindow):
                 UpdateTaskRequest(
                     number=dialog.number,
                     description=dialog.description,
+                    comment=dialog.comment,
                     date_end=dialog.date_end,
                     clear_date_end=dialog.date_end is None,
                     priority=dialog.priority,
@@ -640,7 +832,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Архив",
-            "Перед переносом закройте файлы заявки. Продолжить?",
+            "Перед переносом закройте файлы заявки (если есть папка). Продолжить?",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -653,6 +845,20 @@ class MainWindow(QMainWindow):
         logger.debug("UI: task archived id=%s", task_id)
         self.reload_current_tab()
 
+    def restore_selected_task(self) -> None:
+        task_id = self.selected_task_id()
+        if task_id is None:
+            QMessageBox.information(self, "Уведомление", "Выберите заявку")
+            return
+        try:
+            self.service.restore_task(task_id)
+        except ServiceError as exc:
+            logger.debug("Restore task failed: %s", exc)
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        logger.debug("UI: task restored id=%s", task_id)
+        self.reload_current_tab()
+
     def delete_selected_task(self) -> None:
         task_id = self.selected_task_id()
         if task_id is None:
@@ -661,7 +867,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Удаление",
-            "Удалить заявку и её папку? Действие необратимо.",
+            "Удалить заявку и её папку (если есть)? Действие необратимо.",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -680,10 +886,44 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
         try:
-            path = self.service.task_folder_path(task_id)
+            path = self.service.open_task_folder(task_id)
             open_target(str(path))
         except (ServiceError, PlatformOpenError) as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
+        else:
+            self.reload_current_tab()
+
+    def export_excel(self) -> None:
+        projects = self.service.list_projects()
+        if not projects:
+            QMessageBox.information(self, "Уведомление", "Нет проектов для экспорта")
+            return
+        dialog = ExcelExportDialog(projects, self)
+        if dialog.exec() != ExcelExportDialog.DialogCode.Accepted:
+            return
+        dest, _ = QFileDialog.getSaveFileName(
+            self,
+            "Сохранить Excel",
+            str(Path.home() / "tasks.xlsx"),
+            "Excel (*.xlsx)",
+        )
+        if not dest:
+            return
+        if not dest.lower().endswith(".xlsx"):
+            dest += ".xlsx"
+        try:
+            path = export_tasks_to_excel(
+                self.service,
+                Path(dest),
+                project_ids=dialog.selected_project_ids,
+                include_hidden=dialog.include_hidden,
+                include_archived=dialog.include_archived,
+            )
+        except ExcelExportError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        self.statusBar().showMessage(f"Экспорт сохранён: {path}")
+        QMessageBox.information(self, "Excel", f"Файл сохранён:\n{path}")
 
     def open_settings(self) -> None:
         dialog = SettingsDialog(
@@ -698,11 +938,16 @@ class MainWindow(QMainWindow):
         self.service.settings = self.settings
         self.service.fs.settings = self.settings
         setup_logging(debug=self.settings.debug_logging)
+        app = QApplication.instance()
+        if isinstance(app, QApplication):
+            apply_stylesheet(app, self.settings.theme_mode)
         logger.debug(
-            "Settings saved (debug_logging=%s)", self.settings.debug_logging
+            "Settings saved (debug_logging=%s theme=%s)",
+            self.settings.debug_logging,
+            self.settings.theme_mode,
         )
         self._rebuild_color_palette()
-        self.reload_directories()
+        self.reload_projects()
 
     def start_update_check(self) -> None:
         if self._update_busy:
@@ -758,18 +1003,8 @@ class MainWindow(QMainWindow):
             self._update_busy = False
             return
 
-        dest, _ = QFileDialog.getSaveFileName(
-            self,
-            "Сохранить обновление",
-            str(Path.home() / asset.name),
-            "Все файлы (*)",
-        )
-        if not dest:
-            self.statusBar().showMessage("Загрузка обновления не начата")
-            self._update_busy = False
-            return
-
-        self._start_update_download(asset, Path(dest))
+        dest = staged_update_path()
+        self._start_update_download(asset, dest)
 
     def _on_update_check_failed(self, message: str) -> None:
         logger.error("Update check failed: %s", message)
@@ -777,7 +1012,11 @@ class MainWindow(QMainWindow):
         self._update_busy = False
 
     def _start_update_download(self, asset, dest: Path) -> None:
+        self._pending_update_path = None
         self._update_panel.show()
+        self._update_restart_btn.hide()
+        self._update_cancel_btn.show()
+        self._update_progress.show()
         self._update_label.setText(f"Загрузка «{asset.name}»…")
         self._update_progress.setRange(0, 0)
         self._update_progress.setValue(0)
@@ -822,22 +1061,53 @@ class MainWindow(QMainWindow):
 
     def _on_update_download_succeeded(self, path: object) -> None:
         assert isinstance(path, Path)
-        self._hide_update_panel()
         self._download_worker = None
         self._update_busy = False
-        msg = f"Обновление скачано: {path}"
+        self._pending_update_path = path
+        self._update_progress.hide()
+        self._update_cancel_btn.hide()
+        self._update_panel.show()
+        msg = "Загрузка обновления завершена"
+        self._update_label.setText(msg)
+        self.statusBar().showMessage(f"{msg}: {path}")
         logger.info(msg)
-        self.statusBar().showMessage(msg)
-        QMessageBox.information(
-            self,
-            "Обновления",
-            f"Файл сохранён:\n{path}\n\n"
-            "Закройте приложение и замените исполняемый файл вручную.",
-        )
+
+        if is_frozen():
+            self._update_restart_btn.show()
+        else:
+            self._update_restart_btn.hide()
+            QMessageBox.information(
+                self,
+                "Обновления",
+                f"Файл сохранён:\n{path}\n\n"
+                "В режиме разработки замените исполняемый файл вручную "
+                "и перезапустите приложение.",
+            )
+
+    def _restart_with_update(self) -> None:
+        if self._pending_update_path is None or not self._pending_update_path.is_file():
+            QMessageBox.warning(self, "Обновления", "Файл обновления не найден")
+            return
+        if not is_frozen():
+            QMessageBox.information(
+                self,
+                "Обновления",
+                "Автозамена доступна только в собранном приложении.",
+            )
+            return
+        target = current_executable()
         try:
-            open_target(str(path.parent))
-        except PlatformOpenError:
-            pass
+            helper = write_restart_helper(
+                new_path=self._pending_update_path,
+                target_path=target,
+                pid=os.getpid(),
+            )
+            launch_restart_helper(helper)
+        except OSError as exc:
+            QMessageBox.warning(self, "Обновления", f"Не удалось запустить helper:\n{exc}")
+            return
+        logger.info("Restarting via helper %s", helper)
+        QApplication.instance().quit()
 
     def _on_update_download_failed(self, message: str) -> None:
         self._hide_update_panel()
@@ -860,8 +1130,12 @@ class MainWindow(QMainWindow):
 
     def _hide_update_panel(self) -> None:
         self._update_panel.hide()
+        self._update_progress.show()
+        self._update_cancel_btn.show()
+        self._update_restart_btn.hide()
         self._update_progress.setRange(0, 100)
         self._update_progress.setValue(0)
+        self._pending_update_path = None
 
     def _on_update_thread_finished(self) -> None:
         sender = self.sender()
@@ -875,10 +1149,38 @@ class MainWindow(QMainWindow):
 
     def _on_hidden_toggled(self, checked: bool) -> None:
         self._show_hidden = checked
+        if checked and self._show_archive:
+            self.archive_cb.blockSignals(True)
+            self.archive_cb.setChecked(False)
+            self.archive_cb.blockSignals(False)
+            self._show_archive = False
+        self._sync_mode_actions()
+        self.reload_current_tab()
+
+    def _on_archive_toggled(self, checked: bool) -> None:
+        self._show_archive = checked
+        if checked and self._show_hidden:
+            self.hidden_cb.blockSignals(True)
+            self.hidden_cb.setChecked(False)
+            self.hidden_cb.blockSignals(False)
+            self._show_hidden = False
+        self._sync_mode_actions()
         self.reload_current_tab()
 
     def _on_tab_changed(self, _index: int) -> None:
         self.reload_current_tab()
+
+    def _on_tab_moved(self, _from: int, _to: int) -> None:
+        ids: list[int] = []
+        for i in range(self.tabs.count()):
+            pid = self.tabs.tabBar().tabData(i)
+            if pid is not None:
+                ids.append(int(pid))
+        try:
+            self.service.reorder_projects(ids)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            self.reload_projects()
 
     def _show_tab_context_menu(self, pos) -> None:
         tab_bar = self.tabs.tabBar()
@@ -887,9 +1189,9 @@ class MainWindow(QMainWindow):
             return
         self.tabs.setCurrentIndex(index)
         menu = QMenu(self)
-        menu.addAction("Изменить", self.rename_current_directory)
-        menu.addAction("Открыть папку", self.open_current_directory_folder)
-        menu.addAction("Удалить", self.delete_current_directory)
+        menu.addAction("Изменить", self.rename_current_project)
+        menu.addAction("Открыть папку", self.open_current_project_folder)
+        menu.addAction("Удалить", self.delete_current_project)
         menu.exec(tab_bar.mapToGlobal(pos))
 
     def _show_context_menu(self, table: QTableWidget, pos) -> None:
@@ -898,9 +1200,13 @@ class MainWindow(QMainWindow):
             table.selectRow(index.row())
         task_id = self.selected_task_id()
         menu = QMenu(self)
-        menu.addAction("Изменить", self.edit_selected_task)
+        if not self._show_archive:
+            menu.addAction("Изменить", self.edit_selected_task)
         menu.addAction("Открыть папку", self.open_selected_folder)
-        menu.addAction("В архив", self.archive_selected_task)
+        if self._show_archive:
+            menu.addAction("Вернуть", self.restore_selected_task)
+        else:
+            menu.addAction("В архив", self.archive_selected_task)
         menu.addAction("Удалить", self.delete_selected_task)
 
         if task_id is not None:
@@ -928,18 +1234,17 @@ class MainWindow(QMainWindow):
         missing = self.service.check_missing_folders()
         if not missing:
             return
-        lines = [
-            f"• {directory.name} / {task.number} ({task.folder_name})"
-            for directory, task in missing[:20]
-        ]
-        extra = ""
-        if len(missing) > 20:
-            extra = f"\n… и ещё {len(missing) - 20}"
-        QMessageBox.warning(
-            self,
-            "Папки не найдены",
-            "На диске отсутствуют папки для заявок:\n"
-            + "\n".join(lines)
-            + extra
-            + "\n\nМетаданные в БД сохранены; восстановите папки или удалите записи.",
-        )
+        dialog = MissingFoldersDialog(missing, self)
+        if dialog.exec() != MissingFoldersDialog.DialogCode.Accepted:
+            return
+        for task_id in dialog.recreate_ids:
+            try:
+                self.service.recreate_task_folder(task_id)
+            except ServiceError as exc:
+                QMessageBox.warning(self, "Ошибка", str(exc))
+        for task_id in dialog.clear_ids:
+            try:
+                self.service.clear_task_folder_flag(task_id)
+            except ServiceError as exc:
+                QMessageBox.warning(self, "Ошибка", str(exc))
+        self.reload_current_tab()

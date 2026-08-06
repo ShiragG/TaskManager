@@ -27,19 +27,39 @@ def app_env(tmp_path: Path, qtbot):
     repo.close()
 
 
-def test_main_window_creates_directory_and_task(app_env, qtbot):
+def test_main_window_creates_project_and_task(app_env, qtbot):
     window, service = app_env
-    directory = service.create_directory("UIDir")
+    project = service.create_project("UIDir")
     service.create_task(
         CreateTaskRequest(
-            directory_id=directory.id,
+            project_id=project.id,
             number="1",
             description="ui smoke",
         )
     )
-    window.reload_directories()
+    window.reload_projects()
     assert window.tabs.count() == 1
     assert window.tabs.tabText(0) == "UIDir"
     table = window.tabs.widget(0)
     assert table.rowCount() == 1
     assert table.item(0, 1).text() == "1"
+    assert window.tabs.tabBar().isMovable()
+
+
+def test_tab_reorder_persists(app_env, qtbot):
+    window, service = app_env
+    service.create_project("First")
+    service.create_project("Second")
+    window.reload_projects()
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == [
+        "First",
+        "Second",
+    ]
+    window.tabs.tabBar().moveTab(0, 1)
+    names = [p.name for p in service.list_projects()]
+    assert names == ["Second", "First"]
+    window.reload_projects()
+    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == [
+        "Second",
+        "First",
+    ]

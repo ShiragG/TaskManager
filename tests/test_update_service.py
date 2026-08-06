@@ -1,3 +1,10 @@
+from pathlib import Path
+
+from taskmanager.services.settings_service import (
+    THEME_SYSTEM,
+    Settings,
+    SettingsStore,
+)
 from taskmanager.services.update_service import (
     ReleaseAsset,
     LatestRelease,
@@ -5,7 +12,9 @@ from taskmanager.services.update_service import (
     parse_release_payload,
     parse_version,
     pick_asset,
+    staged_update_path,
     version_is_newer,
+    write_restart_helper,
 )
 
 
@@ -25,6 +34,27 @@ def test_asset_name_for_platform():
     assert asset_name_for_platform("Linux") == "TaskManager"
     assert asset_name_for_platform("Windows") == "TaskManager.exe"
     assert asset_name_for_platform("win32") == "TaskManager.exe"
+
+
+def test_staged_update_path(tmp_path: Path):
+    path = staged_update_path(system="Linux", directory=tmp_path)
+    assert path == tmp_path / "TaskManager.new"
+    win = staged_update_path(system="Windows", directory=tmp_path)
+    assert win == tmp_path / "TaskManager.exe.new"
+
+
+def test_write_restart_helper_unix(tmp_path: Path):
+    new_path = tmp_path / "TaskManager.new"
+    target = tmp_path / "TaskManager"
+    new_path.write_bytes(b"x")
+    helper = write_restart_helper(
+        new_path=new_path, target_path=target, pid=12345, helper_dir=tmp_path
+    )
+    assert helper.is_file()
+    text = helper.read_text(encoding="utf-8")
+    assert "12345" in text
+    assert str(new_path) in text
+    assert helper.stat().st_mode & 0o111
 
 
 def test_parse_release_and_pick_asset():
@@ -61,3 +91,13 @@ def test_latest_release_dataclass():
         assets=[ReleaseAsset("TaskManager", "https://x/y", 1)],
     )
     assert release.assets[0].name == "TaskManager"
+
+
+def test_settings_theme_default(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(work_dir=str(tmp_path / "work"))
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.theme_mode == THEME_SYSTEM
+    assert loaded.create_task_folder is True

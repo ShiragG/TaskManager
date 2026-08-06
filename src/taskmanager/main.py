@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 def run(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
     app = QApplication(argv)
-    apply_stylesheet(app)
 
     icon_path = app_icon_png()
     if icon_path.is_file():
@@ -36,6 +35,7 @@ def run(argv: list[str] | None = None) -> int:
 
     settings_store = SettingsStore(default_settings_path())
     settings = settings_store.load()
+    apply_stylesheet(app, settings.theme_mode)
     setup_logging(debug=settings.debug_logging)
     install_qt_message_handler()
     logger.debug("TaskManager starting")

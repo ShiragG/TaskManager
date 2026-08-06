@@ -1,6 +1,12 @@
 from datetime import date
 
-from taskmanager.domain import is_deadline_warning, make_folder_name, sanitize_for_folder
+from taskmanager.domain import (
+    contrast_foreground,
+    html_to_plain,
+    is_deadline_warning,
+    make_folder_name,
+    sanitize_for_folder,
+)
 
 
 def test_make_folder_name_is_number_only():
@@ -24,3 +30,27 @@ def test_is_deadline_warning_lead_days():
     assert not is_deadline_warning(date(2026, 8, 7), today=today, lead_days=1)
     assert is_deadline_warning(date(2026, 8, 1), today=today, lead_days=1)
     assert not is_deadline_warning(None, today=today, lead_days=1)
+
+
+def test_html_to_plain():
+    assert html_to_plain("<b>Hello</b> &amp; world") == "Hello & world"
+    assert html_to_plain("") == ""
+
+
+def test_html_to_plain_with_urls():
+    from taskmanager.domain import html_to_plain_with_urls
+
+    assert (
+        html_to_plain_with_urls('<a href="https://ex.com">click</a>')
+        == "click https://ex.com"
+    )
+    assert (
+        html_to_plain_with_urls('<a href="https://ex.com">https://ex.com</a>')
+        == "https://ex.com"
+    )
+    assert html_to_plain_with_urls("") == ""
+
+
+def test_contrast_foreground():
+    assert contrast_foreground("#ffffff") == "#0f172a"
+    assert contrast_foreground("#000000") == "#f8fafc"

@@ -41,9 +41,9 @@ def test_task_folder_openable_when_cwd_differs_from_app_dir(
     settings = Settings(work_dir="Working directory")
     repo = SqliteRepository(install / "tm.db")
     svc = TaskService(repo, settings, TaskFilesystem(settings))
-    directory = svc.create_directory("Alpha")
+    project = svc.create_project("Alpha")
     task = svc.create_task(
-        CreateTaskRequest(directory_id=directory.id, number="7", description="x")
+        CreateTaskRequest(project_id=project.id, number="7", description="x")
     )
     expected = install / "Working directory" / "Alpha" / "7"
     assert expected.is_dir()

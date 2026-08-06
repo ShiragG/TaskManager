@@ -17,6 +17,11 @@ DEFAULT_COLORS = {
 
 BASE_COLOR_NAMES = frozenset(DEFAULT_COLORS.keys())
 
+THEME_LIGHT = "light"
+THEME_DARK = "dark"
+THEME_SYSTEM = "system"
+THEME_MODES = frozenset({THEME_LIGHT, THEME_DARK, THEME_SYSTEM})
+
 
 @dataclass
 class Settings:
@@ -24,11 +29,13 @@ class Settings:
     template_name: str = ".template"
     archive_name: str = ".archive"
     highlight_warnings: bool = True
-    warning_color: str = "#8B0000"
+    warning_color: str = "#ff0000"
     warning_lead_days: int = 1
     create_notes_file: bool = True
+    create_task_folder: bool = True
     show_priority_colors: bool = True
     debug_logging: bool = False
+    theme_mode: str = THEME_SYSTEM
     colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLORS))
 
     def to_dict(self) -> dict[str, Any]:
@@ -42,6 +49,8 @@ class Settings:
         for key, value in data.items():
             if key in known:
                 merged[key] = value
+        if merged.get("theme_mode") not in THEME_MODES:
+            merged["theme_mode"] = THEME_SYSTEM
         return cls(**merged)
 
 

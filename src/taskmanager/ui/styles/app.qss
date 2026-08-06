@@ -33,6 +33,15 @@ QToolBar QToolButton:pressed {
     background-color: #0d9488;
 }
 
+QToolBar QToolButton:checked {
+    background-color: #0f766e;
+    color: #ecfdf5;
+}
+
+QToolBar QToolButton:checked:hover {
+    background-color: #14b8a6;
+}
+
 QLineEdit, QSpinBox, QDateEdit, QComboBox, QPlainTextEdit, QTextEdit {
     background-color: #ffffff;
     border: 1px solid #cbd5e1;

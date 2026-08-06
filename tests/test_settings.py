@@ -18,6 +18,8 @@ def test_settings_roundtrip(tmp_path: Path):
     assert loaded.archive_name == ".archive"
     assert loaded.warning_lead_days == 3
     assert loaded.create_notes_file is True
+    assert loaded.create_task_folder is True
+    assert loaded.theme_mode == "system"
     assert "Белый" in loaded.colors
 
 

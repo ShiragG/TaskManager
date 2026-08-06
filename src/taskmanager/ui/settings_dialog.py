@@ -4,6 +4,7 @@ from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -18,7 +19,13 @@ from PySide6.QtWidgets import (
 )
 
 from taskmanager.infrastructure.paths import resolve_work_dir
-from taskmanager.services.settings_service import Settings, SettingsStore
+from taskmanager.services.settings_service import (
+    THEME_DARK,
+    THEME_LIGHT,
+    THEME_SYSTEM,
+    Settings,
+    SettingsStore,
+)
 from taskmanager.ui.about_dialog import AboutDialog
 from taskmanager.version import get_version
 
@@ -34,7 +41,7 @@ class SettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Настройки")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
         self._store = store
         self._settings = settings
         self._on_check_updates = on_check_updates
@@ -58,6 +65,14 @@ class SettingsDialog(QDialog):
         self.archive_edit = QLineEdit(settings.archive_name)
         form.addRow("Имя архива", self.archive_edit)
 
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Светлая", THEME_LIGHT)
+        self.theme_combo.addItem("Тёмная", THEME_DARK)
+        self.theme_combo.addItem("Как в системе", THEME_SYSTEM)
+        idx = self.theme_combo.findData(settings.theme_mode)
+        self.theme_combo.setCurrentIndex(idx if idx >= 0 else 2)
+        form.addRow("Тема", self.theme_combo)
+
         self.highlight_cb = QCheckBox("Подсвечивать сроки (включая ближайшие)")
         self.highlight_cb.setChecked(settings.highlight_warnings)
         form.addRow(self.highlight_cb)
@@ -66,6 +81,7 @@ class SettingsDialog(QDialog):
         self.lead_days_spin.setRange(0, 365)
         self.lead_days_spin.setValue(settings.warning_lead_days)
         self.lead_days_spin.setSuffix(" дн.")
+        self.lead_days_spin.setMinimumWidth(120)
         form.addRow("За сколько дней предупреждать", self.lead_days_spin)
 
         self.warning_color_edit = QLineEdit(settings.warning_color)
@@ -79,6 +95,10 @@ class SettingsDialog(QDialog):
         color_row.addWidget(self.warning_color_edit)
         form.addRow("Цвет предупреждения", color_row)
         self._sync_warning_swatch(self.warning_color_edit.text())
+
+        self.create_folder_cb = QCheckBox("Создавать папку заявки по умолчанию")
+        self.create_folder_cb.setChecked(settings.create_task_folder)
+        form.addRow(self.create_folder_cb)
 
         self.create_notes_cb = QCheckBox("Создавать файл заметок по умолчанию")
         self.create_notes_cb.setChecked(settings.create_notes_file)
@@ -95,8 +115,7 @@ class SettingsDialog(QDialog):
         layout.addLayout(form)
         hint = QLabel(
             "Метаданные заявок хранятся в SQLite рядом с исполняемым файлом. "
-            "Имя папки заявки совпадает с номером; при смене номера папка "
-            "переименовывается автоматически."
+            "Папка заявки опциональна; при наличии имя совпадает с номером."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #64748b;")
@@ -135,18 +154,18 @@ class SettingsDialog(QDialog):
             self.work_dir_edit.setText(path)
 
     def _sync_warning_swatch(self, text: str) -> None:
-        color = QColor(text.strip() or "#8B0000")
+        color = QColor(text.strip() or "#ff0000")
         if not color.isValid():
-            color = QColor("#8B0000")
+            color = QColor("#ff0000")
         self.warning_color_btn.setStyleSheet(
             f"QPushButton {{ background-color: {color.name()}; "
             f"border: 1px solid #334155; border-radius: 3px; }}"
         )
 
     def _pick_warning_color(self) -> None:
-        current = QColor(self.warning_color_edit.text().strip() or "#8B0000")
+        current = QColor(self.warning_color_edit.text().strip() or "#ff0000")
         if not current.isValid():
-            current = QColor("#8B0000")
+            current = QColor("#ff0000")
         chosen = QColorDialog.getColor(current, self, "Цвет предупреждения")
         if chosen.isValid():
             self.warning_color_edit.setText(chosen.name())
@@ -182,7 +201,7 @@ class SettingsDialog(QDialog):
             )
             return
 
-        warning_color = self.warning_color_edit.text().strip() or "#8B0000"
+        warning_color = self.warning_color_edit.text().strip() or "#ff0000"
         if not QColor(warning_color).isValid():
             QMessageBox.warning(self, "Ошибка", "Некорректный цвет предупреждения")
             return
@@ -190,9 +209,11 @@ class SettingsDialog(QDialog):
         self._settings.work_dir = work_dir
         self._settings.template_name = template
         self._settings.archive_name = archive
+        self._settings.theme_mode = self.theme_combo.currentData()
         self._settings.highlight_warnings = self.highlight_cb.isChecked()
         self._settings.warning_lead_days = self.lead_days_spin.value()
         self._settings.warning_color = warning_color
+        self._settings.create_task_folder = self.create_folder_cb.isChecked()
         self._settings.create_notes_file = self.create_notes_cb.isChecked()
         self._settings.show_priority_colors = self.show_priority_colors_cb.isChecked()
         self._settings.debug_logging = self.debug_logging_cb.isChecked()

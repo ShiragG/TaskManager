@@ -1,8 +1,8 @@
 # TaskManager
 
-Приложение для ведения заявок: каждая заявка — папка на диске и запись в SQLite, сгруппированные по директориям (вкладки).
+Приложение для ведения заявок: метаданные в SQLite, папка на диске опциональна; заявки группируются по **проектам** (вкладки).
 
-Словарь терминов: [`CONTEXT.md`](CONTEXT.md). Архитектура: [`docs/adr/0001-layered-desktop-architecture.md`](docs/adr/0001-layered-desktop-architecture.md).
+Словарь терминов: [`CONTEXT.md`](CONTEXT.md). Архитектура: [`docs/adr/`](docs/adr/).
 
 ## Требования
 
@@ -30,13 +30,14 @@ uv run taskmanager
 ## Рабочий цикл
 
 1. В настройках укажите **рабочую директорию** (`work_dir`).
-2. Создайте **директорию** (вкладка) — появится одноимённая папка в `work_dir`.
-3. При необходимости положите шаблон в `{директория}/{template_name}` (по умолчанию `.template`).
-4. Создайте **заявку** — папка с именем = **номер** заявки; при флаге «из шаблона» содержимое копируется из шаблона.
-5. Ссылки на заявку хранятся в БД; ПКМ по строке → «Открыть ссылку».
-6. **Архив** переносит папку в `{work_dir}/{archive_name}/{YYYY_MM}/` и ставит статус `archived`.
+2. Создайте **проект** (вкладка) — папка на диске появится лениво при первой заявке с папкой или «Открыть папку».
+3. При необходимости положите шаблон в `{проект}/{template_name}` (по умолчанию `.template`).
+4. Создайте **заявку** — запись в БД; при включённой папке имя каталога = **номер**; при флаге «из шаблона» содержимое копируется из шаблона.
+5. **Комментарий** — HTML-поле в БД (отдельно от Notes.txt).
+6. Ссылки на заявку хранятся в БД; ПКМ по строке → «Открыть ссылку».
+7. **Архив** ставит статус `archived` и переносит папку в `{work_dir}/{archive_name}/{YYYY_MM}/{project}/` *если папка есть*; режим «Архив» + «Вернуть» для просмотра и восстановления.
 
-Метаданные (номер, описание, срок, приоритет, цвет, ссылки) живут в SQLite рядом с исполняемым файлом. Имя папки на диске совпадает с номером: при смене номера папка переименовывается автоматически. Приоритет — целое 0–10 (0 критично, 10 спокойно; по умолчанию 10), отдельно от цвета строки.
+Метаданные (номер, описание, комментарий, срок, приоритет, цвет, `has_folder`, ссылки) живут в SQLite рядом с исполняемым файлом. Цвет «Без цвета» хранится как NULL; «Белый» — `#ffffff`. Приоритет — целое 0–10 (0 критично, 10 спокойно; по умолчанию 10), отдельно от цвета строки.
 
 ## Настройки (`settings.json`)
 
@@ -45,32 +46,35 @@ uv run taskmanager
 | Ключ | Назначение |
 |------|------------|
 | `work_dir` | Корень рабочих папок |
-| `template_name` | Имя папки-шаблона в директории |
+| `template_name` | Имя папки-шаблона в проекте |
 | `archive_name` | Имя корня архива |
+| `theme_mode` | `light` / `dark` / `system` |
 | `highlight_warnings` | Подсветка сроков (просрочка и ближайшие дни) |
 | `warning_lead_days` | За сколько дней до срока начинать подсветку (по умолчанию 1) |
 | `warning_color` | Цвет подсветки |
-| `colors` | Палитра цветов строк |
-| `create_notes_file` | Создавать `Notes.txt` и ссылку «Заметки» при новой заявке (по умолчанию да) |
-| `show_priority_colors` | Цвет фона ячейки приоритета по шкале 0→красный … 10→зелёный (по умолчанию да) |
-| `debug_logging` | Писать INFO/DEBUG действий в `taskmanager.log` (по умолчанию нет; ERROR+ пишется всегда) |
+| `colors` | Палитра цветов строк («Белый» ≠ «Без цвета») |
+| `create_task_folder` | Создавать папку заявки по умолчанию |
+| `create_notes_file` | Создавать `Notes.txt` и ссылку «Заметки» при новой заявке с папкой |
+| `show_priority_colors` | Цвет фона ячейки приоритета по шкале 0→красный … 10→зелёный |
+| `debug_logging` | Писать INFO/DEBUG действий в `taskmanager.log` |
 
-Версия приложения и контакты — в настройках («О приложении»). Проверка обновлений идёт в фоне: прогресс на главном окне, статус и ошибки — в строке состояния; «Скачать?» и «Сохранить как…» — модальные диалоги. При отмене незавершённый файл удаляется.
+Версия приложения и контакты — в настройках («О приложении»). Обновление (frozen): скачивание в `TaskManager[.exe].new` рядом с exe → баннер «Перезапустить» → helper ждёт PID, подменяет бинарник (`chmod` на Linux) и стартует заново. В dev — файл скачивается, замена вручную.
 
 ## Поиск и правки
 
-- Ctrl+F / поле поиска — фильтр по номеру и описанию на текущей вкладке.
-- Чекбокс **Скрытые** — только скрытые заявки; без него — только обычные.
-- Палитра цветов над таблицей — покрасить выделенную заявку; «+» добавляет цвет; ПКМ по кастомному swatch удаляет его из настроек.
-- Двойной клик — редактирование заявки (при смене номера папка на диске переименовывается).
-- ПКМ по строке — изменить, открыть папку, архив, удалить, ссылки.
-- ПКМ по вкладке директории — изменить, открыть папку, удалить.
+- Ctrl+F / поле поиска — фильтр по номеру, описанию и комментарию на текущей вкладке.
+- Чекбоксы **Скрытые** и **Архив** взаимоисключающие.
+- Палитра: ∅ = без цвета; «Белый» и остальные swatch’и; «+» добавляет цвет; ПКМ по кастомному — удалить из настроек.
+- Двойной клик — редактирование (описание/комментарий через «…»; `created_at` только для чтения).
+- ПКМ по строке — изменить, открыть папку, архив/вернуть, удалить, ссылки.
+- ПКМ по вкладке проекта — изменить, открыть папку, удалить.
+- **Excel…** — экспорт выбранных проектов (`openpyxl`).
 - F5 — обновить текущую вкладку.
-- Таблица: колонки **Приоритет → Номер → Срок → Описание**; цвет заявки заливает строку (ячейка приоритета — по шкале, если включено `show_priority_colors`); клик по заголовку сортирует (по умолчанию номер по возрастанию).
+- Таблица: **Приоритет → Номер → Срок → Описание → Комментарий**.
 
 ## Сборка (PyInstaller)
 
-Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). Артефакт: `TaskManager` на Linux, `TaskManager.exe` на Windows. `settings.json`, `taskmanager.db` и `taskmanager.log` создаются рядом с exe.
+Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). Артефакт: `TaskManager` на Linux, `TaskManager.exe` на Windows.
 
 ```bash
 uv sync --all-groups
@@ -83,6 +87,7 @@ uv run pyinstaller --noconfirm --onefile --windowed \
   --name TaskManager \
   --icon src/taskmanager/resources/app_icon.ico \
   --add-data "src/taskmanager/ui/styles/app.qss:taskmanager/ui/styles" \
+  --add-data "src/taskmanager/ui/styles/app_dark.qss:taskmanager/ui/styles" \
   --add-data "src/taskmanager/resources/app_icon.png:taskmanager/resources" \
   --add-data "src/taskmanager/resources/app_icon.ico:taskmanager/resources" \
   src/taskmanager/__main__.py
@@ -91,11 +96,11 @@ uv run pyinstaller --noconfirm --onefile --windowed \
 **Windows** (разделитель путей в `--add-data` — `;`):
 
 ```bash
-uv run pyinstaller --noconfirm --onefile --windowed --name TaskManager --icon src/taskmanager/resources/app_icon.ico --add-data "src/taskmanager/ui/styles/app.qss;taskmanager/ui/styles" --add-data "src/taskmanager/resources/app_icon.png;taskmanager/resources" --add-data "src/taskmanager/resources/app_icon.ico;taskmanager/resources" src/taskmanager/__main__.py
+uv run pyinstaller --noconfirm --onefile --windowed --name TaskManager --icon src/taskmanager/resources/app_icon.ico --add-data "src/taskmanager/ui/styles/app.qss;taskmanager/ui/styles" --add-data "src/taskmanager/ui/styles/app_dark.qss;taskmanager/ui/styles" --add-data "src/taskmanager/resources/app_icon.png;taskmanager/resources" --add-data "src/taskmanager/resources/app_icon.ico;taskmanager/resources" src/taskmanager/__main__.py
 ```
 
-Готовый бинарник появится в `dist/`. Для публикации на GitHub Releases прикладывайте assets с именами **`TaskManager`** (Linux) и **`TaskManager.exe`** (Windows) — см. [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md). Проверка обновлений в настройках скачивает выбранный файл через «Сохранить как…» без самозамены exe.
+Готовый бинарник появится в `dist/`. Для публикации на GitHub Releases прикладывайте assets с именами **`TaskManager`** (Linux) и **`TaskManager.exe`** (Windows) — см. [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md).
 
 ## Что не входит в v1
 
-Связи между заявками, поиск по содержимому файлов, массовый архив директории, миграция старых `.taskData.json`, Oracle, хранилище, сторонние проводники, тёмная тема, кросс-сборка Win↔Linux.
+Связи между заявками, поиск по содержимому файлов, массовый архив проекта, миграция старых `.taskData.json`, Oracle, автоудаление пустых папок проектов, onedir/installer вместо onefile helper, кросс-сборка Win↔Linux.

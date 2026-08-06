@@ -1,11 +1,12 @@
 [project]
 name = "taskmanager"
-version = "0.5.0"
+version = "0.6.2"
 description = "Приложение помогающее вести заявки"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "pyside6==6.8.1.1",
+    "openpyxl>=3.1",
 ]
 
 [project.scripts]
@@ -20,6 +21,7 @@ packages = ["src/taskmanager"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "src/taskmanager/ui/styles/app.qss" = "taskmanager/ui/styles/app.qss"
+"src/taskmanager/ui/styles/app_dark.qss" = "taskmanager/ui/styles/app_dark.qss"
 "src/taskmanager/resources/app_icon.png" = "taskmanager/resources/app_icon.png"
 "src/taskmanager/resources/app_icon.ico" = "taskmanager/resources/app_icon.ico"
 
