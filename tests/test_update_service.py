@@ -69,8 +69,13 @@ def test_write_restart_helper_unix(tmp_path: Path):
     assert "12345" in text
     assert str(new_path) in text
     assert "taskmanager_update.log" in text
+    assert "taskmanager_update.crash.log" in text
     assert "setsid" in text or "nohup" in text
     assert "ATTEMPT" in text
+    assert "relaunch OK" in text
+    assert "relaunch FAIL" in text
+    assert "kill -0" in text
+    assert "2>>\"$CRASH\"" in text or "2>>$CRASH" in text
     assert helper.stat().st_mode & 0o111
 
 
@@ -90,6 +95,11 @@ def test_write_restart_helper_windows_content(tmp_path: Path, monkeypatch):
     assert "taskmanager_update.log" in text
     assert "timeout /t 2" in text
     assert "ATTEMPT" in text
+    assert "chcp 65001" in text
+    assert f'start "" /D "{tmp_path}"' in text or 'start "" /D "%APPDIR%"' in text
+    assert "relaunch OK" in text
+    assert "relaunch FAIL" in text
+    assert "IMAGENAME eq TaskManager.exe" in text
 
 
 def test_launch_restart_helper_windows_uses_cmd(tmp_path: Path, monkeypatch):
@@ -97,11 +107,11 @@ def test_launch_restart_helper_windows_uses_cmd(tmp_path: Path, monkeypatch):
         "taskmanager.services.update_service.platform.system",
         lambda: "Windows",
     )
-    calls: list[list[str]] = []
+    calls: list[tuple] = []
 
     class FakePopen:
         def __init__(self, args, **kwargs):
-            calls.append(list(args))
+            calls.append((list(args), kwargs))
 
     monkeypatch.setattr(
         "subprocess.Popen",
@@ -109,13 +119,20 @@ def test_launch_restart_helper_windows_uses_cmd(tmp_path: Path, monkeypatch):
     )
     helper = tmp_path / "taskmanager_apply_update.bat"
     helper.write_text("@echo off\n", encoding="utf-8")
-    from taskmanager.services.update_service import launch_restart_helper
+    from taskmanager.services.update_service import (
+        _CREATE_NEW_CONSOLE,
+        launch_restart_helper,
+    )
 
     launch_restart_helper(helper)
     assert len(calls) == 1
-    assert calls[0][0].lower().endswith("cmd.exe") or calls[0][0] == "cmd.exe"
-    assert calls[0][1] == "/c"
-    assert calls[0][2] == str(helper)
+    args, kwargs = calls[0]
+    assert args[0].lower().endswith("cmd.exe") or args[0] == "cmd.exe"
+    assert args[1] == "/c"
+    assert args[2] == str(helper)
+    # CREATE_NEW_CONSOLE only — DETACHED_PROCESS causes WinError 87.
+    assert kwargs.get("creationflags") == _CREATE_NEW_CONSOLE
+    assert kwargs.get("creationflags") == 0x00000010
 
 
 def test_parse_release_and_pick_asset():

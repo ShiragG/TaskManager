@@ -148,17 +148,24 @@ def write_restart_helper(
     if is_windows:
         helper = directory / "taskmanager_apply_update.bat"
         old_path = target_path.with_suffix(target_path.suffix + ".old")
+        app_dir_win = str(target_path.parent)
+        target_name = target_path.name
         # cmd /c launches this .bat; log every step for frozen diagnose.
+        # UTF-8 code page avoids OEM mojibake if tools write to the console;
+        # do not redirect move/del stdout into the log (OEM text).
         content = f"""@echo off
 setlocal EnableExtensions EnableDelayedExpansion
+chcp 65001 >NUL
 set "PID={pid}"
 set "NEW={new_path}"
 set "TARGET={target_path}"
 set "OLD={old_path}"
+set "APPDIR={app_dir_win}"
 set "LOG={log_path}"
 echo [%date% %time%] helper start pid=%PID% > "%LOG%"
 echo NEW=%NEW%>> "%LOG%"
 echo TARGET=%TARGET%>> "%LOG%"
+echo APPDIR=%APPDIR%>> "%LOG%"
 :wait
 tasklist /FI "PID eq %PID%" 2>NUL | find "%PID%" >NUL
 if not errorlevel 1 (
@@ -172,9 +179,9 @@ set /a ATTEMPT=0
 :replace
 set /a ATTEMPT+=1
 echo [%date% %time%] replace attempt !ATTEMPT!>> "%LOG%"
-if exist "%OLD%" del /f /q "%OLD%" >> "%LOG%" 2>&1
+if exist "%OLD%" del /f /q "%OLD%" >NUL 2>&1
 if exist "%TARGET%" (
-  move /y "%TARGET%" "%OLD%" >> "%LOG%" 2>&1
+  move /y "%TARGET%" "%OLD%" >NUL 2>&1
   if errorlevel 1 (
     if !ATTEMPT! LSS 15 (
       timeout /t 1 /nobreak >NUL
@@ -184,19 +191,26 @@ if exist "%TARGET%" (
     exit /b 1
   )
 )
-move /y "%NEW%" "%TARGET%" >> "%LOG%" 2>&1
+move /y "%NEW%" "%TARGET%" >NUL 2>&1
 if errorlevel 1 (
   if !ATTEMPT! LSS 15 (
     timeout /t 1 /nobreak >NUL
     goto replace
   )
-  echo [%date% %time%] FAILED to move NEW to TARGET>> "%LOG%"
-  if exist "%OLD%" move /y "%OLD%" "%TARGET%" >> "%LOG%" 2>&1
+  echo [%date% %time%] FAILED to move NEW to TARGET; leaving .new in place>> "%LOG%"
+  if exist "%OLD%" move /y "%OLD%" "%TARGET%" >NUL 2>&1
   exit /b 1
 )
 echo [%date% %time%] starting new binary>> "%LOG%"
-start "" "%TARGET%"
-if exist "%OLD%" del /f /q "%OLD%" >> "%LOG%" 2>&1
+start "" /D "%APPDIR%" "%TARGET%"
+timeout /t 2 /nobreak >NUL
+tasklist /FI "IMAGENAME eq {target_name}" 2>NUL | find /I "{target_name}" >NUL
+if errorlevel 1 (
+  echo [%date% %time%] relaunch FAIL - {target_name} not running; start manually from %TARGET%>> "%LOG%"
+) else (
+  echo [%date% %time%] relaunch OK - {target_name} is running>> "%LOG%"
+)
+if exist "%OLD%" del /f /q "%OLD%" >NUL 2>&1
 echo [%date% %time%] helper done>> "%LOG%"
 del /f /q "%~f0"
 """
@@ -206,7 +220,9 @@ del /f /q "%~f0"
 
     helper = directory / "taskmanager_apply_update.sh"
     old_path = Path(str(target_path) + ".old")
+    crash_log = directory / "taskmanager_update.crash.log"
     # Quote paths; retry mv on ETXTBSY/busy; log to taskmanager_update.log.
+    # New binary stderr goes to .crash.log (not /dev/null) so launch crashes are visible.
     content = f"""#!/bin/sh
 set -eu
 PID={pid}
@@ -214,6 +230,7 @@ NEW="{new_path}"
 TARGET="{target_path}"
 OLD="{old_path}"
 LOG="{log_path}"
+CRASH="{crash_log}"
 log() {{
   echo "$(date -Iseconds 2>/dev/null || date) $*" >> "$LOG"
 }}
@@ -251,16 +268,25 @@ while true; do
     sleep 1
     continue
   fi
-  log "FAILED to move NEW to TARGET"
+  log "FAILED to move NEW to TARGET; leaving .new in place"
   exit 1
 done
 chmod +x "$TARGET" || true
 log "starting new binary"
 # Detach from this helper's session so the new app outlives the script.
+# Keep stderr so a crash is not swallowed into /dev/null.
+: > "$CRASH"
 if command -v setsid >/dev/null 2>&1; then
-  setsid "$TARGET" </dev/null >/dev/null 2>&1 &
+  setsid "$TARGET" </dev/null >/dev/null 2>>"$CRASH" &
 else
-  nohup "$TARGET" </dev/null >/dev/null 2>&1 &
+  nohup "$TARGET" </dev/null >/dev/null 2>>"$CRASH" &
+fi
+NEWPID=$!
+sleep 2
+if kill -0 "$NEWPID" 2>/dev/null; then
+  log "relaunch OK pid=$NEWPID"
+else
+  log "relaunch FAIL pid=$NEWPID (process not alive); see $CRASH; start manually: $TARGET"
 fi
 rm -f "$OLD" || true
 log "helper done"
@@ -273,27 +299,29 @@ rm -f -- "$0"
     return helper
 
 
+# CREATE_NEW_CONSOLE — must not combine with DETACHED_PROCESS (WinError 87).
+_CREATE_NEW_CONSOLE = 0x00000010
+
+
 def launch_restart_helper(helper: Path) -> None:
     """Start the apply-update helper detached, then caller should exit.
 
     On Windows, ``.bat`` must be launched via ``cmd.exe /c`` — ``Popen([bat])``
-    often fails to start the script at all.
+    often fails to start the script at all. Use only ``CREATE_NEW_CONSOLE``
+    (not ``DETACHED_PROCESS``) so CreateProcess succeeds.
     """
     import subprocess
 
     helper = Path(helper)
     is_windows = platform.system().lower().startswith("win")
     if is_windows:
-        # CREATE_NEW_CONSOLE | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-        # NEW_CONSOLE helps cmd keep running after the parent exits.
-        creationflags = 0x00000010 | 0x00000008 | 0x00000200
         cmd = os_environ_comspec()
         popen_args = [cmd, "/c", str(helper)]
         logger.info("Launching Windows update helper via %s /c %s", cmd, helper)
         subprocess.Popen(  # noqa: S603
             popen_args,
             cwd=str(helper.parent),
-            creationflags=creationflags,
+            creationflags=_CREATE_NEW_CONSOLE,
             close_fds=True,
         )
         return

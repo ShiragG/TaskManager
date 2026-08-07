@@ -1,10 +1,10 @@
 # In-place update via `.new` and restart helper (PyInstaller onefile)
 
-Frozen builds cannot reliably overwrite the running executable. We download the new binary next to the current one as `TaskManager[.exe].new`, show a restart banner, then launch a short-lived helper (`.sh` / `.bat`) that waits for our PID, pauses briefly for file unlock, retries the replace, backs up to `.old`, replaces the binary, `chmod`s on Unix, starts the new process detached, and cleans up. The helper writes `taskmanager_update.log` beside the app for diagnosis. Dev (non-frozen) downloads or prompts for manual replace without apply.
+Frozen builds cannot reliably overwrite the running executable. We download the new binary next to the current one as `TaskManager[.exe].new`, show a restart banner, then launch a short-lived helper (`.sh` / `.bat`) that waits for our PID, pauses briefly for file unlock, retries the replace, backs up to `.old`, replaces the binary, `chmod`s on Unix, starts the new process detached, verifies it is alive, and cleans up. The helper writes `taskmanager_update.log` beside the app for diagnosis; on Unix, the new binary's stderr goes to `taskmanager_update.crash.log` so a launch crash is not swallowed.
 
-**Windows launch:** the helper must be started as `cmd.exe /c taskmanager_apply_update.bat` (not `Popen([bat])`), with a new console / detached process group so the script survives parent exit.
+**Windows launch:** the helper must be started as `cmd.exe /c taskmanager_apply_update.bat` (not `Popen([bat])`), with **only** `CREATE_NEW_CONSOLE` so the script survives parent exit. Do **not** combine `DETACHED_PROCESS` with `CREATE_NEW_CONSOLE` (WinError 87). After replace, start with `start "" /D "<appdir>" "%TARGET%"`, then `tasklist` to log relaunch OK/FAIL. Use `chcp 65001` and avoid redirecting `move`/`del` stdout into the log (OEM mojibake).
 
-**Linux launch:** `/bin/sh` helper with `start_new_session`, `setsid`/`nohup` for the new binary, and mv retries on busy files.
+**Linux launch:** `/bin/sh` helper with `start_new_session`, `setsid`/`nohup` for the new binary (stderr → `.crash.log`), `sleep` + `kill -0` to log relaunch OK/FAIL, and mv retries on busy files.
 
 ## Fallback (reserved)
 
