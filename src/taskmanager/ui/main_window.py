@@ -279,7 +279,7 @@ class MainWindow(QMainWindow):
         self._update_cancel_btn = QPushButton("Отмена")
         self._update_cancel_btn.setObjectName("secondaryButton")
         self._update_cancel_btn.clicked.connect(self._cancel_update_download)
-        self._update_restart_btn = QPushButton("Перезапустить")
+        self._update_restart_btn = QPushButton("Установить и закрыть")
         self._update_restart_btn.clicked.connect(self._restart_with_update)
         self._update_restart_btn.hide()
         update_row.addWidget(self._update_label, stretch=1)
@@ -1077,14 +1077,18 @@ class MainWindow(QMainWindow):
         self._update_progress.hide()
         self._update_cancel_btn.hide()
         self._update_panel.show()
-        msg = "Загрузка обновления завершена"
-        self._update_label.setText(msg)
-        self.statusBar().showMessage(f"{msg}: {path}")
-        logger.info(msg)
-
         if is_frozen():
+            banner = (
+                "Обновление готово. «Установить и закрыть» — после закрытия "
+                "файл заменят; затем запустите приложение снова вручную."
+            )
+            self._update_label.setText(banner)
+            self.statusBar().showMessage(f"Обновление готово: {path}")
             self._update_restart_btn.show()
         else:
+            msg = "Загрузка обновления завершена"
+            self._update_label.setText(msg)
+            self.statusBar().showMessage(f"{msg}: {path}")
             self._update_restart_btn.hide()
             QMessageBox.information(
                 self,
@@ -1093,6 +1097,7 @@ class MainWindow(QMainWindow):
                 "В режиме разработки замените исполняемый файл вручную "
                 "и перезапустите приложение.",
             )
+        logger.info("Update download finished: %s", path)
 
     def _restart_with_update(self) -> None:
         if self._pending_update_path is None or not self._pending_update_path.is_file():
@@ -1116,7 +1121,7 @@ class MainWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.warning(self, "Обновления", f"Не удалось запустить helper:\n{exc}")
             return
-        logger.info("Restarting via helper %s", helper)
+        logger.info("Install-and-close via helper %s (no relaunch)", helper)
         QApplication.instance().quit()
 
     def _on_update_download_failed(self, message: str) -> None:

@@ -140,7 +140,10 @@ def write_restart_helper(
     pid: int,
     helper_dir: Path | None = None,
 ) -> Path:
-    """Write a platform helper that replaces ``target_path`` with ``new_path`` after PID exits."""
+    """Write a platform helper that replaces ``target_path`` after PID exits.
+
+    Does not start the new binary — caller quits; user relaunches manually.
+    """
     directory = helper_dir or new_path.parent
     directory.mkdir(parents=True, exist_ok=True)
     log_path = update_log_path(directory=directory)
@@ -148,11 +151,10 @@ def write_restart_helper(
     if is_windows:
         helper = directory / "taskmanager_apply_update.bat"
         old_path = target_path.with_suffix(target_path.suffix + ".old")
-        app_dir_win = str(target_path.parent)
-        target_name = target_path.name
         # cmd /c launches this .bat; log every step for frozen diagnose.
         # UTF-8 code page avoids OEM mojibake if tools write to the console;
         # do not redirect move/del stdout into the log (OEM text).
+        # Apply-on-exit only — do not start the new binary (PyInstaller _MEI).
         content = f"""@echo off
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >NUL
@@ -160,12 +162,10 @@ set "PID={pid}"
 set "NEW={new_path}"
 set "TARGET={target_path}"
 set "OLD={old_path}"
-set "APPDIR={app_dir_win}"
 set "LOG={log_path}"
 echo [%date% %time%] helper start pid=%PID% > "%LOG%"
 echo NEW=%NEW%>> "%LOG%"
 echo TARGET=%TARGET%>> "%LOG%"
-echo APPDIR=%APPDIR%>> "%LOG%"
 :wait
 tasklist /FI "PID eq %PID%" 2>NUL | find "%PID%" >NUL
 if not errorlevel 1 (
@@ -201,16 +201,8 @@ if errorlevel 1 (
   if exist "%OLD%" move /y "%OLD%" "%TARGET%" >NUL 2>&1
   exit /b 1
 )
-echo [%date% %time%] starting new binary>> "%LOG%"
-start "" /D "%APPDIR%" "%TARGET%"
-timeout /t 2 /nobreak >NUL
-tasklist /FI "IMAGENAME eq {target_name}" 2>NUL | find /I "{target_name}" >NUL
-if errorlevel 1 (
-  echo [%date% %time%] relaunch FAIL - {target_name} not running; start manually from %TARGET%>> "%LOG%"
-) else (
-  echo [%date% %time%] relaunch OK - {target_name} is running>> "%LOG%"
-)
 if exist "%OLD%" del /f /q "%OLD%" >NUL 2>&1
+echo [%date% %time%] replace OK; start the app manually from %TARGET%>> "%LOG%"
 echo [%date% %time%] helper done>> "%LOG%"
 del /f /q "%~f0"
 """
@@ -220,9 +212,8 @@ del /f /q "%~f0"
 
     helper = directory / "taskmanager_apply_update.sh"
     old_path = Path(str(target_path) + ".old")
-    crash_log = directory / "taskmanager_update.crash.log"
     # Quote paths; retry mv on ETXTBSY/busy; log to taskmanager_update.log.
-    # New binary stderr goes to .crash.log (not /dev/null) so launch crashes are visible.
+    # Apply-on-exit only — do not start the new binary (PyInstaller _MEI).
     content = f"""#!/bin/sh
 set -eu
 PID={pid}
@@ -230,7 +221,6 @@ NEW="{new_path}"
 TARGET="{target_path}"
 OLD="{old_path}"
 LOG="{log_path}"
-CRASH="{crash_log}"
 log() {{
   echo "$(date -Iseconds 2>/dev/null || date) $*" >> "$LOG"
 }}
@@ -272,23 +262,8 @@ while true; do
   exit 1
 done
 chmod +x "$TARGET" || true
-log "starting new binary"
-# Detach from this helper's session so the new app outlives the script.
-# Keep stderr so a crash is not swallowed into /dev/null.
-: > "$CRASH"
-if command -v setsid >/dev/null 2>&1; then
-  setsid "$TARGET" </dev/null >/dev/null 2>>"$CRASH" &
-else
-  nohup "$TARGET" </dev/null >/dev/null 2>>"$CRASH" &
-fi
-NEWPID=$!
-sleep 2
-if kill -0 "$NEWPID" 2>/dev/null; then
-  log "relaunch OK pid=$NEWPID"
-else
-  log "relaunch FAIL pid=$NEWPID (process not alive); see $CRASH; start manually: $TARGET"
-fi
 rm -f "$OLD" || true
+log "replace OK; start the app manually: $TARGET"
 log "helper done"
 rm -f -- "$0"
 """
@@ -304,7 +279,9 @@ _CREATE_NEW_CONSOLE = 0x00000010
 
 
 def launch_restart_helper(helper: Path) -> None:
-    """Start the apply-update helper detached, then caller should exit.
+    """Start the apply-update helper detached, then caller should quit.
+
+    The helper only replaces the binary; it does not relaunch the app.
 
     On Windows, ``.bat`` must be launched via ``cmd.exe /c`` — ``Popen([bat])``
     often fails to start the script at all. Use only ``CREATE_NEW_CONSOLE``

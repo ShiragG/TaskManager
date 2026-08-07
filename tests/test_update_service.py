@@ -69,13 +69,15 @@ def test_write_restart_helper_unix(tmp_path: Path):
     assert "12345" in text
     assert str(new_path) in text
     assert "taskmanager_update.log" in text
-    assert "taskmanager_update.crash.log" in text
-    assert "setsid" in text or "nohup" in text
     assert "ATTEMPT" in text
-    assert "relaunch OK" in text
-    assert "relaunch FAIL" in text
+    assert "chmod +x" in text
+    assert "replace OK" in text
+    assert "start the app manually" in text
+    assert "helper done" in text
+    assert "setsid" not in text
+    assert "nohup" not in text
+    assert "taskmanager_update.crash.log" not in text
     assert "kill -0" in text
-    assert "2>>\"$CRASH\"" in text or "2>>$CRASH" in text
     assert helper.stat().st_mode & 0o111
 
 
@@ -96,10 +98,13 @@ def test_write_restart_helper_windows_content(tmp_path: Path, monkeypatch):
     assert "timeout /t 2" in text
     assert "ATTEMPT" in text
     assert "chcp 65001" in text
-    assert f'start "" /D "{tmp_path}"' in text or 'start "" /D "%APPDIR%"' in text
-    assert "relaunch OK" in text
-    assert "relaunch FAIL" in text
-    assert "IMAGENAME eq TaskManager.exe" in text
+    assert "replace OK" in text
+    assert "start the app manually" in text
+    assert "helper done" in text
+    assert 'start ""' not in text
+    assert "relaunch OK" not in text
+    assert "relaunch FAIL" not in text
+    assert "IMAGENAME eq" not in text
 
 
 def test_launch_restart_helper_windows_uses_cmd(tmp_path: Path, monkeypatch):
