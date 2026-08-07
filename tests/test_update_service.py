@@ -28,6 +28,20 @@ def test_version_is_newer():
     assert version_is_newer("v0.2.0", "0.1.0")
     assert not version_is_newer("v0.1.0", "0.1.0")
     assert not version_is_newer("v0.0.9", "0.1.0")
+    # Patch releases must be detected (0.6.0 → 0.6.1).
+    assert version_is_newer("v0.6.1", "0.6.0")
+    assert version_is_newer("0.6.1", "0.6.0")
+    assert not version_is_newer("v0.6.0", "0.6.1")
+    assert not version_is_newer("0.6.1", "0.6.1")
+
+
+def test_update_service_is_newer_patch():
+    from taskmanager.services.update_service import UpdateService
+
+    svc = UpdateService()
+    assert svc.is_newer("v0.6.1", "0.6.0")
+    assert not svc.is_newer("v0.6.0", "0.6.1")
+    assert not svc.is_newer("not-a-version", "0.6.0")
 
 
 def test_asset_name_for_platform():
@@ -54,7 +68,54 @@ def test_write_restart_helper_unix(tmp_path: Path):
     text = helper.read_text(encoding="utf-8")
     assert "12345" in text
     assert str(new_path) in text
+    assert "taskmanager_update.log" in text
+    assert "setsid" in text or "nohup" in text
+    assert "ATTEMPT" in text
     assert helper.stat().st_mode & 0o111
+
+
+def test_write_restart_helper_windows_content(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "taskmanager.services.update_service.platform.system",
+        lambda: "Windows",
+    )
+    new_path = tmp_path / "TaskManager.exe.new"
+    target = tmp_path / "TaskManager.exe"
+    new_path.write_bytes(b"x")
+    helper = write_restart_helper(
+        new_path=new_path, target_path=target, pid=999, helper_dir=tmp_path
+    )
+    assert helper.name.endswith(".bat")
+    text = helper.read_text(encoding="utf-8")
+    assert "taskmanager_update.log" in text
+    assert "timeout /t 2" in text
+    assert "ATTEMPT" in text
+
+
+def test_launch_restart_helper_windows_uses_cmd(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        "taskmanager.services.update_service.platform.system",
+        lambda: "Windows",
+    )
+    calls: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, args, **kwargs):
+            calls.append(list(args))
+
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        FakePopen,
+    )
+    helper = tmp_path / "taskmanager_apply_update.bat"
+    helper.write_text("@echo off\n", encoding="utf-8")
+    from taskmanager.services.update_service import launch_restart_helper
+
+    launch_restart_helper(helper)
+    assert len(calls) == 1
+    assert calls[0][0].lower().endswith("cmd.exe") or calls[0][0] == "cmd.exe"
+    assert calls[0][1] == "/c"
+    assert calls[0][2] == str(helper)
 
 
 def test_parse_release_and_pick_asset():

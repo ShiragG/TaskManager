@@ -99,6 +99,40 @@ class _LinkAwareTextEdit(QTextEdit):
         super().mousePressEvent(event)
 
 
+# Local toolbar QSS: do not inherit app teal toolbutton styles so checked/hover
+# stay visible (native-like). Applied only on this dialog's toolbar.
+_RICH_TOOLBAR_QSS = """
+QToolBar {
+    background: palette(window);
+    border: none;
+    spacing: 4px;
+    padding: 4px;
+}
+QToolBar QToolButton {
+    background: transparent;
+    color: palette(window-text);
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 4px 8px;
+}
+QToolBar QToolButton:hover {
+    background: palette(midlight);
+    border-color: palette(mid);
+}
+QToolBar QToolButton:pressed {
+    background: palette(mid);
+}
+QToolBar QToolButton:checked {
+    background: palette(highlight);
+    color: palette(highlighted-text);
+    border-color: palette(dark);
+}
+QToolBar QToolButton:checked:hover {
+    background: palette(highlight);
+}
+"""
+
+
 class RichTextEditDialog(QDialog):
     """Modal rich-text editor for description/comment HTML fields."""
 
@@ -112,9 +146,12 @@ class RichTextEditDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(676, 468)
+        # Isolate dialog from app QSS so toolbar checked/hover are reliable.
+        self.setStyleSheet("")
         layout = QVBoxLayout(self)
 
         toolbar = QToolBar()
+        toolbar.setStyleSheet(_RICH_TOOLBAR_QSS)
         self.editor = _LinkAwareTextEdit()
         self.editor.setAcceptRichText(True)
         if html:

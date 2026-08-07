@@ -124,6 +124,15 @@ def parse_release_payload(payload: dict[str, Any]) -> LatestRelease:
     return LatestRelease(tag=tag, version=version, assets=assets)
 
 
+UPDATE_LOG_NAME = "taskmanager_update.log"
+
+
+def update_log_path(*, directory: Path | None = None) -> Path:
+    """Path for the restart-helper log (next to the app / staged update)."""
+    base = directory or app_dir()
+    return base / UPDATE_LOG_NAME
+
+
 def write_restart_helper(
     *,
     new_path: Path,
@@ -134,80 +143,178 @@ def write_restart_helper(
     """Write a platform helper that replaces ``target_path`` with ``new_path`` after PID exits."""
     directory = helper_dir or new_path.parent
     directory.mkdir(parents=True, exist_ok=True)
+    log_path = update_log_path(directory=directory)
     is_windows = platform.system().lower().startswith("win")
     if is_windows:
         helper = directory / "taskmanager_apply_update.bat"
         old_path = target_path.with_suffix(target_path.suffix + ".old")
+        # cmd /c launches this .bat; log every step for frozen diagnose.
         content = f"""@echo off
-setlocal
-set PID={pid}
-set NEW={new_path}
-set TARGET={target_path}
-set OLD={old_path}
+setlocal EnableExtensions EnableDelayedExpansion
+set "PID={pid}"
+set "NEW={new_path}"
+set "TARGET={target_path}"
+set "OLD={old_path}"
+set "LOG={log_path}"
+echo [%date% %time%] helper start pid=%PID% > "%LOG%"
+echo NEW=%NEW%>> "%LOG%"
+echo TARGET=%TARGET%>> "%LOG%"
 :wait
 tasklist /FI "PID eq %PID%" 2>NUL | find "%PID%" >NUL
 if not errorlevel 1 (
+  echo [%date% %time%] waiting for pid %PID%>> "%LOG%"
   timeout /t 1 /nobreak >NUL
   goto wait
 )
-if exist "%OLD%" del /f /q "%OLD%"
-if exist "%TARGET%" move /y "%TARGET%" "%OLD%"
-move /y "%NEW%" "%TARGET%"
+echo [%date% %time%] pid exited, pausing for file unlock>> "%LOG%"
+timeout /t 2 /nobreak >NUL
+set /a ATTEMPT=0
+:replace
+set /a ATTEMPT+=1
+echo [%date% %time%] replace attempt !ATTEMPT!>> "%LOG%"
+if exist "%OLD%" del /f /q "%OLD%" >> "%LOG%" 2>&1
+if exist "%TARGET%" (
+  move /y "%TARGET%" "%OLD%" >> "%LOG%" 2>&1
+  if errorlevel 1 (
+    if !ATTEMPT! LSS 15 (
+      timeout /t 1 /nobreak >NUL
+      goto replace
+    )
+    echo [%date% %time%] FAILED to move TARGET to OLD>> "%LOG%"
+    exit /b 1
+  )
+)
+move /y "%NEW%" "%TARGET%" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  if !ATTEMPT! LSS 15 (
+    timeout /t 1 /nobreak >NUL
+    goto replace
+  )
+  echo [%date% %time%] FAILED to move NEW to TARGET>> "%LOG%"
+  if exist "%OLD%" move /y "%OLD%" "%TARGET%" >> "%LOG%" 2>&1
+  exit /b 1
+)
+echo [%date% %time%] starting new binary>> "%LOG%"
 start "" "%TARGET%"
-if exist "%OLD%" del /f /q "%OLD%"
+if exist "%OLD%" del /f /q "%OLD%" >> "%LOG%" 2>&1
+echo [%date% %time%] helper done>> "%LOG%"
 del /f /q "%~f0"
 """
         helper.write_text(content, encoding="utf-8", newline="\r\n")
+        logger.info("Wrote Windows update helper %s (log=%s)", helper, log_path)
         return helper
 
     helper = directory / "taskmanager_apply_update.sh"
     old_path = Path(str(target_path) + ".old")
+    # Quote paths; retry mv on ETXTBSY/busy; log to taskmanager_update.log.
     content = f"""#!/bin/sh
+set -eu
 PID={pid}
 NEW="{new_path}"
 TARGET="{target_path}"
 OLD="{old_path}"
+LOG="{log_path}"
+log() {{
+  echo "$(date -Iseconds 2>/dev/null || date) $*" >> "$LOG"
+}}
+log "helper start pid=$PID"
+log "NEW=$NEW"
+log "TARGET=$TARGET"
 while kill -0 "$PID" 2>/dev/null; do
+  log "waiting for pid $PID"
   sleep 1
 done
-rm -f "$OLD"
-if [ -e "$TARGET" ]; then
-  mv -f "$TARGET" "$OLD"
+log "pid exited, pausing for file unlock"
+sleep 2
+ATTEMPT=0
+while true; do
+  ATTEMPT=$((ATTEMPT + 1))
+  log "replace attempt $ATTEMPT"
+  rm -f "$OLD" || true
+  if [ -e "$TARGET" ]; then
+    if ! mv -f "$TARGET" "$OLD" 2>>"$LOG"; then
+      if [ "$ATTEMPT" -lt 15 ]; then
+        sleep 1
+        continue
+      fi
+      log "FAILED to move TARGET to OLD"
+      exit 1
+    fi
+  fi
+  if mv -f "$NEW" "$TARGET" 2>>"$LOG"; then
+    break
+  fi
+  if [ -e "$OLD" ]; then
+    mv -f "$OLD" "$TARGET" 2>>"$LOG" || true
+  fi
+  if [ "$ATTEMPT" -lt 15 ]; then
+    sleep 1
+    continue
+  fi
+  log "FAILED to move NEW to TARGET"
+  exit 1
+done
+chmod +x "$TARGET" || true
+log "starting new binary"
+# Detach from this helper's session so the new app outlives the script.
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$TARGET" </dev/null >/dev/null 2>&1 &
+else
+  nohup "$TARGET" </dev/null >/dev/null 2>&1 &
 fi
-mv -f "$NEW" "$TARGET"
-chmod +x "$TARGET"
-"$TARGET" &
-rm -f "$OLD"
+rm -f "$OLD" || true
+log "helper done"
 rm -f -- "$0"
 """
     helper.write_text(content, encoding="utf-8")
     mode = helper.stat().st_mode
     helper.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    logger.info("Wrote Unix update helper %s (log=%s)", helper, log_path)
     return helper
 
 
 def launch_restart_helper(helper: Path) -> None:
-    """Start the apply-update helper detached, then caller should exit."""
+    """Start the apply-update helper detached, then caller should exit.
+
+    On Windows, ``.bat`` must be launched via ``cmd.exe /c`` — ``Popen([bat])``
+    often fails to start the script at all.
+    """
     import subprocess
 
+    helper = Path(helper)
     is_windows = platform.system().lower().startswith("win")
     if is_windows:
-        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-        creationflags = 0x00000008 | 0x00000200
+        # CREATE_NEW_CONSOLE | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        # NEW_CONSOLE helps cmd keep running after the parent exits.
+        creationflags = 0x00000010 | 0x00000008 | 0x00000200
+        cmd = os_environ_comspec()
+        popen_args = [cmd, "/c", str(helper)]
+        logger.info("Launching Windows update helper via %s /c %s", cmd, helper)
         subprocess.Popen(  # noqa: S603
-            [str(helper)],
+            popen_args,
             cwd=str(helper.parent),
             creationflags=creationflags,
             close_fds=True,
         )
         return
 
+    logger.info("Launching Unix update helper %s", helper)
     subprocess.Popen(  # noqa: S603
         ["/bin/sh", str(helper)],
         cwd=str(helper.parent),
         start_new_session=True,
         close_fds=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
+
+
+def os_environ_comspec() -> str:
+    """Resolve ``cmd.exe`` for Windows helper launch."""
+    import os
+
+    return os.environ.get("COMSPEC") or "cmd.exe"
 
 
 class UpdateService:

@@ -12,13 +12,14 @@ _configured = False
 
 
 def setup_logging(*, debug: bool = False, log_path: Path | None = None) -> Path:
-    """Configure root file logging. ERROR+ always; DEBUG when debug is True."""
+    """Configure root file logging. WARNING+ always; DEBUG when debug is True."""
     global _configured
     path = Path(log_path) if log_path is not None else default_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
-    level = logging.DEBUG if debug else logging.ERROR
+    # WARNING+ always (theme/update diagnostics); DEBUG when debug is True.
+    level = logging.DEBUG if debug else logging.WARNING
     root.setLevel(level)
 
     # Replace existing FileHandlers we own to allow reconfigure after settings save.

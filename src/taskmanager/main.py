@@ -35,9 +35,9 @@ def run(argv: list[str] | None = None) -> int:
 
     settings_store = SettingsStore(default_settings_path())
     settings = settings_store.load()
-    apply_stylesheet(app, settings.theme_mode)
     setup_logging(debug=settings.debug_logging)
     install_qt_message_handler()
+    apply_stylesheet(app, settings.theme_mode)
     logger.debug("TaskManager starting")
 
     work_dir = resolve_work_dir(settings.work_dir)

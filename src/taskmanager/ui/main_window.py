@@ -975,11 +975,21 @@ class MainWindow(QMainWindow):
         assert isinstance(release, LatestRelease)
         current = get_version()
         updater = UpdateService()
+        logger.info(
+            "Update check: current=%s remote=%s (tag=%s)",
+            current,
+            release.version,
+            release.tag,
+        )
         if not updater.is_newer(release.tag, current):
             self.statusBar().showMessage(
-                f"Установлена актуальная версия ({current})"
+                f"Установлена актуальная версия ({current}; remote {release.version})"
             )
-            logger.debug("Already up to date: %s", current)
+            logger.info(
+                "Already up to date: current=%s remote=%s",
+                current,
+                release.version,
+            )
             self._update_busy = False
             return
 
