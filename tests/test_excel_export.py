@@ -50,3 +50,68 @@ def test_export_excel(tmp_path: Path):
     assert cell.fill.fgColor.rgb in ("00FFFF00", "FFFF00")
     assert cell.font.color.rgb in ("00FF0000", "FF0000")
     repo.close()
+
+
+def test_export_excel_archive_month_filter(tmp_path: Path):
+    work = tmp_path / "work"
+    work.mkdir()
+    settings = Settings(work_dir=str(work))
+    repo = SqliteRepository(tmp_path / "e2.db")
+    service = TaskService(repo, settings, TaskFilesystem(settings))
+    project = service.create_project("ProjB")
+    assert project.id is not None
+    active = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="A",
+            description="active",
+            create_folder=False,
+        )
+    )
+    old = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="OLD",
+            description="old archived",
+            create_folder=False,
+        )
+    )
+    new = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="NEW",
+            description="new archived",
+            create_folder=False,
+        )
+    )
+    service.archive_task(old.id)
+    service.archive_task(new.id)
+    # Force distinct months in DB
+    repo._conn.execute(
+        "UPDATE tasks SET archive_month = ? WHERE id = ?",
+        ("2025_01", old.id),
+    )
+    repo._conn.execute(
+        "UPDATE tasks SET archive_month = ? WHERE id = ?",
+        ("2026_08", new.id),
+    )
+    repo._conn.commit()
+    months = repo.list_archive_months(project.id)
+    assert months == ["2026_08", "2025_01"]
+
+    dest = tmp_path / "filtered.xlsx"
+    path = export_tasks_to_excel(
+        service,
+        dest,
+        project_ids=[project.id],
+        include_archived=True,
+        archive_months_by_project={project.id: ["2026_08"]},
+    )
+    from openpyxl import load_workbook
+
+    rows = list(load_workbook(path)["ProjB"].iter_rows(values_only=True))
+    numbers = {r[2] for r in rows[1:]}
+    assert active.number in numbers
+    assert "NEW" in numbers
+    assert "OLD" not in numbers
+    repo.close()

@@ -12,13 +12,18 @@ _configured = False
 
 
 def setup_logging(*, debug: bool = False, log_path: Path | None = None) -> Path:
-    """Configure root file logging. WARNING+ always; DEBUG when debug is True."""
+    """Configure root file logging.
+
+    Without debug: WARNING+ only (errors and warnings).
+    With debug: DEBUG — UI actions, host calls, HTTP method/URL (no secrets),
+    and brief result summaries from TaskManager and Source modules.
+    """
     global _configured
     path = Path(log_path) if log_path is not None else default_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     root = logging.getLogger()
-    # WARNING+ always (theme/update diagnostics); DEBUG when debug is True.
+    # WARNING+ always; DEBUG (UI / host / HTTP summaries) when debug is True.
     level = logging.DEBUG if debug else logging.WARNING
     root.setLevel(level)
 

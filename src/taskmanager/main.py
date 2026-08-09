@@ -18,6 +18,7 @@ from taskmanager.infrastructure.paths import (
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.resources import app_icon_png
 from taskmanager.services.settings_service import SettingsStore
+from taskmanager.services.source_host import SourceHost
 from taskmanager.services.task_service import TaskService
 from taskmanager.ui.main_window import MainWindow
 from taskmanager.ui.stylesheet import apply_stylesheet
@@ -53,7 +54,15 @@ def run(argv: list[str] | None = None) -> int:
 
     repo = SqliteRepository(default_db_path())
     service = TaskService(repo, settings)
-    window = MainWindow(service, settings, settings_store)
+    source_host = SourceHost(
+        repo,
+        settings,
+        service,
+        pending_migration=settings_store.pending_source_module_migration,
+    )
+    # Clear one-shot migration payload after apply
+    settings_store.pending_source_module_migration = []
+    window = MainWindow(service, settings, settings_store, source_host=source_host)
     window.setWindowIcon(app.windowIcon())
     window.show()
     code = app.exec()

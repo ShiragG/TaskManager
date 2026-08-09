@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTextEdit,
     QToolBar,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -346,6 +348,10 @@ class TaskDialog(QDialog):
         allow_template: bool = True,
         create_folder_default: bool | None = None,
         folder_validator: Callable[["TaskDialog"], str | None] | None = None,
+        initial_number: str = "",
+        initial_description: str = "",
+        initial_priority: int | None = None,
+        initial_links: list[tuple[str, str]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -357,12 +363,14 @@ class TaskDialog(QDialog):
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
-        self.number_edit = QLineEdit(task.number if task else "")
+        number_value = task.number if task else initial_number
+        self.number_edit = QLineEdit(number_value)
         form.addRow("Номер", self.number_edit)
 
+        desc_value = task.description if task else initial_description
         self.description_row = HtmlEditRow(
             title="Описание",
-            html=task.description if task else "",
+            html=desc_value,
         )
         form.addRow("Описание", self.description_row)
 
@@ -384,10 +392,13 @@ class TaskDialog(QDialog):
                 QBrush(QColor(contrast_foreground(bg))),
                 Qt.ItemDataRole.ForegroundRole,
             )
-        initial_priority = (
-            clamp_priority(task.priority) if task else PRIORITY_DEFAULT
-        )
-        self.priority_combo.setCurrentIndex(initial_priority)
+        if task:
+            initial_priority_value = clamp_priority(task.priority)
+        elif initial_priority is not None:
+            initial_priority_value = clamp_priority(initial_priority)
+        else:
+            initial_priority_value = PRIORITY_DEFAULT
+        self.priority_combo.setCurrentIndex(initial_priority_value)
         self.priority_combo.currentIndexChanged.connect(self._sync_priority_combo_color)
         self._sync_priority_combo_color()
         form.addRow("Приоритет", self.priority_combo)
@@ -469,6 +480,9 @@ class TaskDialog(QDialog):
         if task and task.links:
             for link in task.links:
                 self._add_link_row(link.name, link.target)
+        elif initial_links:
+            for name, target in initial_links:
+                self._add_link_row(name, target)
         layout.addWidget(self.links_table)
 
         link_btns = QHBoxLayout()
@@ -682,23 +696,58 @@ class MissingFoldersDialog(QDialog):
 
 
 class ExcelExportDialog(QDialog):
-    def __init__(self, projects: list[Project], parent=None) -> None:
+    def __init__(
+        self,
+        projects: list[Project],
+        parent=None,
+        *,
+        archive_months_by_project: dict[int, list[str]] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Экспорт в Excel")
-        self.setMinimumWidth(400)
+        # ~50% larger than previous 400×(implicit ~300)
+        self.setMinimumWidth(600)
+        self.resize(600, 450)
+        self._archive_months_by_project = archive_months_by_project or {}
+        self._project_items: dict[int, QTreeWidgetItem] = {}
+        self._month_items: dict[int, list[QTreeWidgetItem]] = {}
+
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("Проекты:"))
-        self.list_widget = QListWidget()
+        self.tree = QTreeWidget()
+        self.tree.setHeaderHidden(True)
+        self.tree.setRootIsDecorated(True)
         for project in projects:
-            item = QListWidgetItem(project.name)
-            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-            item.setCheckState(Qt.CheckState.Checked)
-            item.setData(Qt.ItemDataRole.UserRole, project.id)
-            self.list_widget.addItem(item)
-        layout.addWidget(self.list_widget)
+            if project.id is None:
+                continue
+            pid = int(project.id)
+            project_item = QTreeWidgetItem([project.name])
+            project_item.setFlags(
+                project_item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            project_item.setCheckState(0, Qt.CheckState.Checked)
+            project_item.setData(0, Qt.ItemDataRole.UserRole, ("project", pid))
+            self.tree.addTopLevelItem(project_item)
+            self._project_items[pid] = project_item
+            month_items: list[QTreeWidgetItem] = []
+            for month in self._archive_months_by_project.get(pid, []):
+                month_item = QTreeWidgetItem([month])
+                month_item.setFlags(
+                    month_item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                )
+                month_item.setCheckState(0, Qt.CheckState.Checked)
+                month_item.setData(0, Qt.ItemDataRole.UserRole, ("month", pid, month))
+                project_item.addChild(month_item)
+                month_items.append(month_item)
+            self._month_items[pid] = month_items
+            # Months visible only when archive is enabled
+            for child in month_items:
+                child.setHidden(True)
+        layout.addWidget(self.tree)
 
         self.hidden_cb = QCheckBox("Включить скрытые")
         self.archive_cb = QCheckBox("Включить архив")
+        self.archive_cb.toggled.connect(self._on_archive_toggled)
         layout.addWidget(self.hidden_cb)
         layout.addWidget(self.archive_cb)
 
@@ -709,6 +758,15 @@ class ExcelExportDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _on_archive_toggled(self, checked: bool) -> None:
+        for month_items in self._month_items.values():
+            for child in month_items:
+                child.setHidden(not checked)
+            if checked and month_items:
+                parent = month_items[0].parent()
+                if parent is not None:
+                    parent.setExpanded(True)
+
     def _accept(self) -> None:
         if not self.selected_project_ids:
             QMessageBox.warning(self, "Ошибка", "Выберите хотя бы один проект")
@@ -718,12 +776,9 @@ class ExcelExportDialog(QDialog):
     @property
     def selected_project_ids(self) -> list[int]:
         ids: list[int] = []
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            if item.checkState() == Qt.CheckState.Checked:
-                value = item.data(Qt.ItemDataRole.UserRole)
-                if value is not None:
-                    ids.append(int(value))
+        for pid, item in self._project_items.items():
+            if item.checkState(0) == Qt.CheckState.Checked:
+                ids.append(pid)
         return ids
 
     @property
@@ -733,3 +788,18 @@ class ExcelExportDialog(QDialog):
     @property
     def include_archived(self) -> bool:
         return self.archive_cb.isChecked()
+
+    @property
+    def selected_archive_months(self) -> dict[int, list[str]]:
+        """project_id → selected YYYY_MM months (only when archive enabled)."""
+        if not self.include_archived:
+            return {}
+        result: dict[int, list[str]] = {}
+        for pid in self.selected_project_ids:
+            month_items = self._month_items.get(pid, [])
+            result[pid] = [
+                item.text(0)
+                for item in month_items
+                if item.checkState(0) == Qt.CheckState.Checked
+            ]
+        return result

@@ -177,3 +177,4 @@ output/
 *.exe
 /TaskManager
 taskmanager.db
+modules

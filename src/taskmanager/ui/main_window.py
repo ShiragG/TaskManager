@@ -35,6 +35,7 @@ from taskmanager.domain import Project, contrast_foreground, html_to_plain, is_d
 from taskmanager.infrastructure.logging_setup import setup_logging
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.excel_export import ExcelExportError, export_tasks_to_excel
+from taskmanager.services.hotkeys import normalize_hotkeys
 from taskmanager.services.settings_service import (
     BASE_COLOR_NAMES,
     Settings,
@@ -155,11 +156,13 @@ class MainWindow(QMainWindow):
         service: TaskService,
         settings: Settings,
         settings_store: SettingsStore,
+        source_host=None,
     ) -> None:
         super().__init__()
         self.service = service
         self.settings = settings
         self.settings_store = settings_store
+        self.source_host = source_host
         self._show_hidden = False
         self._show_archive = False
         self._search_query = ""
@@ -193,6 +196,10 @@ class MainWindow(QMainWindow):
         self.act_add_task = QAction("Заявка", self)
         self.act_add_task.triggered.connect(self.add_task)
         tb.addAction(self.act_add_task)
+
+        self.act_import_source = QAction("Импорт…", self)
+        self.act_import_source.triggered.connect(self.import_from_source)
+        tb.addAction(self.act_import_source)
 
         self.act_edit = QAction("Изменить", self)
         self.act_edit.triggered.connect(self.edit_selected_task)
@@ -372,9 +379,19 @@ class MainWindow(QMainWindow):
         self._rebuild_color_palette()
 
     def _build_shortcuts(self) -> None:
-        QShortcut(QKeySequence.StandardKey.Find, self, activated=self.focus_search)
-        QShortcut(QKeySequence("Ctrl+N"), self, activated=self.add_task)
-        QShortcut(QKeySequence("F5"), self, activated=self.reload_current_tab)
+        for sc in getattr(self, "_shortcuts", []):
+            sc.setParent(None)
+            sc.deleteLater()
+        self._shortcuts: list[QShortcut] = []
+        hotkeys = normalize_hotkeys(self.settings.hotkeys)
+        mapping = {
+            "focus_search": self.focus_search,
+            "add_task": self.add_task,
+            "reload_current_tab": self.reload_current_tab,
+        }
+        for action_id, slot in mapping.items():
+            seq = QKeySequence(hotkeys[action_id])
+            self._shortcuts.append(QShortcut(seq, self, activated=slot))
 
     def focus_search(self) -> None:
         self.search_edit.setFocus()
@@ -383,6 +400,7 @@ class MainWindow(QMainWindow):
     def _sync_mode_actions(self) -> None:
         archive = self._show_archive
         self.act_add_task.setEnabled(not archive)
+        self.act_import_source.setEnabled(not archive)
         self.act_archive.setVisible(not archive)
         self.act_restore.setVisible(archive)
         self.act_edit.setEnabled(not archive)
@@ -752,6 +770,163 @@ class MainWindow(QMainWindow):
         )
         self.reload_current_tab()
 
+    def import_from_source(self) -> None:
+        if self.source_host is None:
+            QMessageBox.information(
+                self, "Импорт", "Модули источников недоступны"
+            )
+            return
+        if self._show_archive:
+            QMessageBox.information(
+                self, "Уведомление", "В режиме архива нельзя создавать заявки"
+            )
+            return
+        project_id = self.current_project_id()
+        if project_id is None:
+            QMessageBox.information(self, "Уведомление", "Сначала создайте проект")
+            return
+        if not self.source_host.enabled_modules():
+            QMessageBox.information(
+                self,
+                "Импорт",
+                "Нет включённых модулей. Установите и включите модуль в Настройках.",
+            )
+            return
+
+        from taskmanager.ui.source_import_dialog import (
+            SourceImportDialog,
+            draft_to_dialog_kwargs,
+        )
+
+        logger.debug("UI: open import dialog project_id=%s", project_id)
+        picker = SourceImportDialog(self.source_host, self)
+        if picker.exec() != SourceImportDialog.DialogCode.Accepted:
+            logger.debug("UI: import dialog cancelled")
+            return
+        draft = picker.draft
+        module_id = picker.module_id
+        if draft is None or not module_id:
+            return
+
+        kwargs = draft_to_dialog_kwargs(draft)
+        dialog = TaskDialog(
+            self.settings,
+            self,
+            folder_validator=self._make_create_folder_validator(project_id),
+            **kwargs,
+        )
+        if dialog.exec() != TaskDialog.DialogCode.Accepted:
+            logger.debug("UI: import TaskDialog cancelled")
+            return
+        logger.debug(
+            "UI: import create module=%s external_id=%s number=%r",
+            module_id,
+            draft.external_id,
+            dialog.number,
+        )
+        try:
+            task = self.source_host.create_task_from_draft(
+                project_id=project_id,
+                module_id=module_id,
+                draft=draft,
+                create_folder=dialog.create_folder,
+                create_notes_file=dialog.create_notes_file,
+                by_template=dialog.by_template,
+                download_files=False,
+                comment=dialog.comment,
+                date_end=dialog.date_end,
+                hidden=dialog.hidden,
+                description_html=dialog.description,
+                priority=dialog.priority,
+                number=dialog.number,
+                links=dialog.links,
+            )
+            if picker.download_files:
+                try:
+                    self.source_host.download_task_files(
+                        task.id,  # type: ignore[arg-type]
+                        create_folder_if_missing=True,
+                    )
+                except Exception as exc:
+                    logger.warning("Download after import: %s", exc)
+                    QMessageBox.warning(
+                        self,
+                        "Файлы",
+                        f"Заявка создана, но файлы не скачались:\n{exc}",
+                    )
+        except Exception as exc:
+            from taskmanager.services.source_protocol import SourceModuleError
+
+            if not isinstance(exc, (ServiceError, SourceModuleError)):
+                logger.exception("Import create failed")
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        self.reload_current_tab()
+
+    def refresh_selected_from_source(self) -> None:
+        if self.source_host is None:
+            return
+        task_id = self.selected_task_id()
+        if task_id is None:
+            QMessageBox.information(self, "Уведомление", "Выберите заявку")
+            return
+        try:
+            task = self.service.get_task(task_id)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        if not task.has_source:
+            QMessageBox.information(
+                self, "Источник", "У заявки нет привязки к источнику"
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            "Обновить из источника",
+            "Перезаписать описание, приоритет и служебные ссылки из источника?\n"
+            "Комментарий не изменится.",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        logger.debug("UI: refresh from source task_id=%s", task_id)
+        try:
+            self.source_host.refresh_task_from_source(task_id)
+        except Exception as exc:
+            logger.warning("Refresh from source failed: %s", exc)
+            QMessageBox.warning(self, "Источник", str(exc))
+            return
+        logger.debug("UI: refresh from source done task_id=%s", task_id)
+        self.reload_current_tab()
+
+    def download_selected_source_files(self) -> None:
+        if self.source_host is None:
+            return
+        task_id = self.selected_task_id()
+        if task_id is None:
+            QMessageBox.information(self, "Уведомление", "Выберите заявку")
+            return
+        logger.debug("UI: download source files task_id=%s", task_id)
+        try:
+            saved = self.source_host.download_task_files(
+                task_id, create_folder_if_missing=True
+            )
+        except Exception as exc:
+            logger.warning("Download source files failed: %s", exc)
+            QMessageBox.warning(self, "Файлы", str(exc))
+            return
+        logger.debug("UI: download source files done count=%s", len(saved))
+        if saved:
+            QMessageBox.information(
+                self,
+                "Файлы",
+                "Скачано:\n" + "\n".join(saved),
+            )
+        else:
+            QMessageBox.information(
+                self, "Файлы", "Новых файлов нет (уже скачаны или список пуст)."
+            )
+        self.reload_current_tab()
+
     def _make_create_folder_validator(self, project_id: int):
         def validate(dialog: TaskDialog) -> str | None:
             need_folder = (
@@ -893,12 +1068,36 @@ class MainWindow(QMainWindow):
         else:
             self.reload_current_tab()
 
+    def copy_selected_task_number(self) -> None:
+        task_id = self.selected_task_id()
+        if task_id is None:
+            QMessageBox.information(self, "Уведомление", "Выберите заявку")
+            return
+        try:
+            task = self.service.get_task(task_id)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        QApplication.clipboard().setText(task.number)
+        self.statusBar().showMessage("Номер скопирован")
+
     def export_excel(self) -> None:
         projects = self.service.list_projects()
         if not projects:
             QMessageBox.information(self, "Уведомление", "Нет проектов для экспорта")
             return
-        dialog = ExcelExportDialog(projects, self)
+        archive_months_by_project: dict[int, list[str]] = {}
+        for project in projects:
+            if project.id is None:
+                continue
+            archive_months_by_project[int(project.id)] = (
+                self.service.repo.list_archive_months(int(project.id))
+            )
+        dialog = ExcelExportDialog(
+            projects,
+            self,
+            archive_months_by_project=archive_months_by_project,
+        )
         if dialog.exec() != ExcelExportDialog.DialogCode.Accepted:
             return
         dest, _ = QFileDialog.getSaveFileName(
@@ -918,6 +1117,7 @@ class MainWindow(QMainWindow):
                 project_ids=dialog.selected_project_ids,
                 include_hidden=dialog.include_hidden,
                 include_archived=dialog.include_archived,
+                archive_months_by_project=dialog.selected_archive_months,
             )
         except ExcelExportError as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
@@ -931,12 +1131,16 @@ class MainWindow(QMainWindow):
             self.settings_store,
             self,
             on_check_updates=self.start_update_check,
+            source_host=self.source_host,
         )
         if dialog.exec() != SettingsDialog.DialogCode.Accepted:
             return
         self.settings = dialog.settings
         self.service.settings = self.settings
         self.service.fs.settings = self.settings
+        if self.source_host is not None:
+            self.source_host.settings = self.settings
+            self.source_host.reload()
         setup_logging(debug=self.settings.debug_logging)
         app = QApplication.instance()
         if isinstance(app, QApplication):
@@ -947,6 +1151,7 @@ class MainWindow(QMainWindow):
             self.settings.theme_mode,
         )
         self._rebuild_color_palette()
+        self._build_shortcuts()
         self.reload_projects()
 
     def start_update_check(self) -> None:
@@ -1217,6 +1422,7 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         if not self._show_archive:
             menu.addAction("Изменить", self.edit_selected_task)
+        menu.addAction("Копировать номер", self.copy_selected_task_number)
         menu.addAction("Открыть папку", self.open_selected_folder)
         if self._show_archive:
             menu.addAction("Вернуть", self.restore_selected_task)
@@ -1229,6 +1435,14 @@ class MainWindow(QMainWindow):
                 task = self.service.get_task(task_id)
             except ServiceError:
                 task = None
+            if task and task.has_source and not self._show_archive:
+                menu.addSeparator()
+                menu.addAction(
+                    "Обновить из источника…", self.refresh_selected_from_source
+                )
+                menu.addAction(
+                    "Скачать файлы источника…", self.download_selected_source_files
+                )
             if task and task.links:
                 links_menu = menu.addMenu("Открыть ссылку")
                 for link in task.links:

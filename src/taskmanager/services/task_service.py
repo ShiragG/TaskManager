@@ -43,6 +43,9 @@ class CreateTaskRequest:
     create_notes_file: bool = False
     create_folder: bool | None = None
     links: list[tuple[str, str]] | None = None
+    source_module_id: str | None = None
+    external_id: str | None = None
+    source_label: str | None = None
 
 
 @dataclass
@@ -58,6 +61,10 @@ class UpdateTaskRequest:
     has_folder: bool | None = None
     links: list[tuple[str, str]] | None = None
     clear_date_end: bool = False
+    source_module_id: str | None = None
+    external_id: str | None = None
+    source_label: str | None = None
+    clear_source: bool = False
 
 
 class TaskService:
@@ -296,6 +303,9 @@ class TaskService:
             hidden=request.hidden,
             has_folder=create_folder,
             created_at=datetime.now(),
+            source_module_id=request.source_module_id,
+            external_id=request.external_id,
+            source_label=request.source_label,
         )
         try:
             task = self.repo.add_task(task)
@@ -368,6 +378,17 @@ class TaskService:
             task.hidden = request.hidden
         if request.has_folder is not None:
             task.has_folder = request.has_folder
+        if request.clear_source:
+            task.source_module_id = None
+            task.external_id = None
+            task.source_label = None
+        else:
+            if request.source_module_id is not None:
+                task.source_module_id = request.source_module_id
+            if request.external_id is not None:
+                task.external_id = request.external_id
+            if request.source_label is not None:
+                task.source_label = request.source_label
 
         try:
             self.repo.update_task(task)

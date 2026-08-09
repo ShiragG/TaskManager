@@ -35,6 +35,7 @@ def export_tasks_to_excel(
     project_ids: list[int],
     include_hidden: bool = False,
     include_archived: bool = False,
+    archive_months_by_project: dict[int, list[str]] | None = None,
 ) -> Path:
     """Export selected projects to an .xlsx workbook (one sheet per project)."""
     try:
@@ -62,15 +63,22 @@ def export_tasks_to_excel(
 
     settings = service.settings
     today = date.today()
+    months_map = archive_months_by_project or {}
 
     for project in selected:
         ws = wb.create_sheet(title=_safe_sheet_name(project.name))
         ws.append(list(HEADERS))
+        pid = project.id  # type: ignore[arg-type]
         for task in _collect_tasks(
             service,
-            project.id,  # type: ignore[arg-type]
+            pid,
             include_hidden=include_hidden,
             include_archived=include_archived,
+            archive_months=(
+                months_map.get(pid, [])
+                if include_archived and archive_months_by_project is not None
+                else None
+            ),
         ):
             row_values = _task_row(task)
             ws.append(row_values)
@@ -115,6 +123,7 @@ def _collect_tasks(
     *,
     include_hidden: bool,
     include_archived: bool,
+    archive_months: list[str] | None = None,
 ) -> list[Task]:
     tasks: list[Task] = []
     active = service.repo.list_tasks(
@@ -128,7 +137,13 @@ def _collect_tasks(
         archived = service.repo.list_tasks(
             project_id, status=TaskStatus.ARCHIVED, only_hidden=None
         )
-        tasks.extend(archived)
+        if archive_months is None:
+            tasks.extend(archived)
+        else:
+            month_filter = set(archive_months)
+            for task in archived:
+                if task.archive_month and task.archive_month in month_filter:
+                    tasks.append(task)
     tasks.sort(key=lambda t: t.number.casefold())
     return tasks
 

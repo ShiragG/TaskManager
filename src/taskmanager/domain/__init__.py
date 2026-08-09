@@ -143,7 +143,14 @@ class Task:
     archive_project_folder: str | None = None
     created_at: datetime | None = None
     links: list[Link] = field(default_factory=list)
+    source_module_id: str | None = None
+    external_id: str | None = None
+    source_label: str | None = None
 
     @property
     def is_archived(self) -> bool:
         return self.status == TaskStatus.ARCHIVED
+
+    @property
+    def has_source(self) -> bool:
+        return bool(self.source_module_id and self.external_id)

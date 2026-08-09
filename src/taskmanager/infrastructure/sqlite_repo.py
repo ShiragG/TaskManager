@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     archive_month TEXT,
     archive_project_folder TEXT,
     created_at TEXT NOT NULL,
+    source_module_id TEXT,
+    external_id TEXT,
+    source_label TEXT,
     UNIQUE(directory_id, number)
 );
 
@@ -38,6 +41,22 @@ CREATE TABLE IF NOT EXISTS links (
     name TEXT NOT NULL,
     target TEXT NOT NULL,
     UNIQUE(task_id, name)
+);
+
+CREATE TABLE IF NOT EXISTS source_credentials (
+    module_id TEXT PRIMARY KEY,
+    login TEXT NOT NULL,
+    password_ciphertext TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS source_modules (
+    module_id TEXT PRIMARY KEY,
+    github_repo TEXT NOT NULL DEFAULT '',
+    display_name TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 0,
+    installed_version TEXT NOT NULL DEFAULT '',
+    update_asset_name TEXT NOT NULL DEFAULT '',
+    update_asset_pattern TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_directory ON tasks(directory_id);
@@ -108,6 +127,42 @@ class SqliteRepository:
                 "UPDATE tasks SET color = NULL "
                 "WHERE color IS NOT NULL AND lower(color) IN ('#ffffff', '#fff', 'ffffff')"
             )
+
+        # Provenance columns after color rebuild so they are not dropped
+        cols = {
+            row[1]: row
+            for row in self._conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        col_names = set(cols)
+        if "source_module_id" not in col_names:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN source_module_id TEXT")
+        if "external_id" not in col_names:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN external_id TEXT")
+        if "source_label" not in col_names:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN source_label TEXT")
+
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_credentials (
+                module_id TEXT PRIMARY KEY,
+                login TEXT NOT NULL,
+                password_ciphertext TEXT NOT NULL
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_modules (
+                module_id TEXT PRIMARY KEY,
+                github_repo TEXT NOT NULL DEFAULT '',
+                display_name TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 0,
+                installed_version TEXT NOT NULL DEFAULT '',
+                update_asset_name TEXT NOT NULL DEFAULT '',
+                update_asset_pattern TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
 
     def _rebuild_tasks_for_nullable_color(self) -> None:
         """Recreate tasks so ``color`` is nullable; migrate ``#ffffff`` → NULL."""
@@ -252,6 +307,21 @@ class SqliteRepository:
         ).fetchall()
         return [self._task_from_row(r) for r in rows]
 
+    def list_archive_months(self, project_id: int) -> list[str]:
+        """Distinct archive_month values for archived tasks of a project."""
+        rows = self._conn.execute(
+            """
+            SELECT DISTINCT archive_month FROM tasks
+            WHERE directory_id = ?
+              AND status = ?
+              AND archive_month IS NOT NULL
+              AND archive_month != ''
+            ORDER BY archive_month DESC
+            """,
+            (project_id, TaskStatus.ARCHIVED.value),
+        ).fetchall()
+        return [str(r["archive_month"]) for r in rows]
+
     def find_task_by_number(
         self, project_id: int, number: str
     ) -> Task | None:
@@ -278,8 +348,9 @@ class SqliteRepository:
             INSERT INTO tasks (
                 directory_id, number, description, comment, date_end, color, priority,
                 hidden, has_folder, status, folder_name, archive_month,
-                archive_project_folder, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                archive_project_folder, created_at,
+                source_module_id, external_id, source_label
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.project_id,
@@ -296,6 +367,9 @@ class SqliteRepository:
                 task.archive_month,
                 task.archive_project_folder,
                 created.isoformat(timespec="seconds"),
+                task.source_module_id,
+                task.external_id,
+                task.source_label,
             ),
         )
         self._conn.commit()
@@ -311,7 +385,8 @@ class SqliteRepository:
                 directory_id = ?, number = ?, description = ?, comment = ?,
                 date_end = ?, color = ?, priority = ?, hidden = ?, has_folder = ?,
                 status = ?, folder_name = ?, archive_month = ?,
-                archive_project_folder = ?
+                archive_project_folder = ?,
+                source_module_id = ?, external_id = ?, source_label = ?
             WHERE id = ?
             """,
             (
@@ -328,6 +403,9 @@ class SqliteRepository:
                 task.folder_name,
                 task.archive_month,
                 task.archive_project_folder,
+                task.source_module_id,
+                task.external_id,
+                task.source_label,
                 task.id,
             ),
         )
@@ -381,6 +459,11 @@ class SqliteRepository:
             else None
         )
         color = row["color"]
+        source_module_id = (
+            row["source_module_id"] if "source_module_id" in keys else None
+        )
+        external_id = row["external_id"] if "external_id" in keys else None
+        source_label = row["source_label"] if "source_label" in keys else None
         return Task(
             id=row["id"],
             project_id=row["directory_id"],
@@ -397,4 +480,131 @@ class SqliteRepository:
             archive_month=row["archive_month"],
             archive_project_folder=archive_project_folder,
             created_at=created_at,
+            source_module_id=source_module_id,
+            external_id=external_id,
+            source_label=source_label,
         )
+
+    # --- source credentials ---
+
+    def upsert_source_credentials(
+        self, module_id: str, login: str, password_ciphertext: str
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO source_credentials (module_id, login, password_ciphertext)
+            VALUES (?, ?, ?)
+            ON CONFLICT(module_id) DO UPDATE SET
+                login = excluded.login,
+                password_ciphertext = excluded.password_ciphertext
+            """,
+            (module_id, login, password_ciphertext),
+        )
+        self._conn.commit()
+
+    def get_source_credentials(self, module_id: str) -> tuple[str, str] | None:
+        row = self._conn.execute(
+            "SELECT login, password_ciphertext FROM source_credentials WHERE module_id = ?",
+            (module_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["login"]), str(row["password_ciphertext"])
+
+    def delete_source_credentials(self, module_id: str) -> None:
+        self._conn.execute(
+            "DELETE FROM source_credentials WHERE module_id = ?", (module_id,)
+        )
+        self._conn.commit()
+
+    # --- source modules registry ---
+
+    def list_source_modules(self) -> list[dict]:
+        rows = self._conn.execute(
+            """
+            SELECT module_id, github_repo, display_name, enabled, installed_version,
+                   update_asset_name, update_asset_pattern
+            FROM source_modules
+            ORDER BY display_name, module_id
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_source_module(self, module_id: str) -> dict | None:
+        row = self._conn.execute(
+            """
+            SELECT module_id, github_repo, display_name, enabled, installed_version,
+                   update_asset_name, update_asset_pattern
+            FROM source_modules WHERE module_id = ?
+            """,
+            (module_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def upsert_source_module(
+        self,
+        *,
+        module_id: str,
+        github_repo: str = "",
+        display_name: str = "",
+        enabled: bool = False,
+        installed_version: str = "",
+        update_asset_name: str = "",
+        update_asset_pattern: str = "",
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO source_modules (
+                module_id, github_repo, display_name, enabled, installed_version,
+                update_asset_name, update_asset_pattern
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(module_id) DO UPDATE SET
+                github_repo = excluded.github_repo,
+                display_name = excluded.display_name,
+                enabled = excluded.enabled,
+                installed_version = excluded.installed_version,
+                update_asset_name = excluded.update_asset_name,
+                update_asset_pattern = excluded.update_asset_pattern
+            """,
+            (
+                module_id,
+                github_repo,
+                display_name,
+                1 if enabled else 0,
+                installed_version,
+                update_asset_name,
+                update_asset_pattern,
+            ),
+        )
+        self._conn.commit()
+
+    def delete_source_module(self, module_id: str) -> None:
+        self._conn.execute(
+            "DELETE FROM source_modules WHERE module_id = ?", (module_id,)
+        )
+        self._conn.commit()
+
+    def count_tasks_for_source_module(self, module_id: str) -> int:
+        row = self._conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM tasks
+            WHERE source_module_id = ?
+            """,
+            (module_id,),
+        ).fetchone()
+        return int(row["n"]) if row is not None else 0
+
+    def clear_task_source_links(self, module_id: str) -> int:
+        """Clear provenance fields on Tasks linked to module_id; return affected count."""
+        cur = self._conn.execute(
+            """
+            UPDATE tasks SET
+                source_module_id = NULL,
+                external_id = NULL,
+                source_label = NULL
+            WHERE source_module_id = ?
+            """,
+            (module_id,),
+        )
+        self._conn.commit()
+        return int(cur.rowcount)
