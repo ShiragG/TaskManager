@@ -47,8 +47,11 @@ from taskmanager.domain import (
     PRIORITY_MIN,
     Project,
     Task,
+    WORKFLOW_STATUS_LABELS,
+    WorkflowStatus,
     clamp_priority,
     contrast_foreground,
+    parse_workflow_status,
     priority_color_hex,
 )
 from taskmanager.services.settings_service import Settings
@@ -352,6 +355,8 @@ class TaskDialog(QDialog):
         initial_description: str = "",
         initial_priority: int | None = None,
         initial_links: list[tuple[str, str]] | None = None,
+        source_linked: bool = False,
+        initial_source_status: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -359,6 +364,9 @@ class TaskDialog(QDialog):
         self._settings = settings
         self._task = task
         self._folder_validator = folder_validator
+        self._source_linked = bool(
+            source_linked or (task is not None and task.has_source)
+        )
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -402,6 +410,31 @@ class TaskDialog(QDialog):
         self.priority_combo.currentIndexChanged.connect(self._sync_priority_combo_color)
         self._sync_priority_combo_color()
         form.addRow("Приоритет", self.priority_combo)
+
+        self.workflow_combo = QComboBox()
+        for status, label in WORKFLOW_STATUS_LABELS.items():
+            self.workflow_combo.addItem(label, status.value)
+        self.source_status_edit = QLineEdit()
+        self.source_status_edit.setReadOnly(True)
+        if self._source_linked:
+            if task and task.has_source:
+                src_text = (
+                    task.source_status_label or task.source_status_id or ""
+                ).strip()
+            else:
+                src_text = (initial_source_status or "").strip()
+            self.source_status_edit.setText(src_text)
+            self.source_status_edit.setPlaceholderText("Нет данных из источника")
+            form.addRow("Статус источника", self.source_status_edit)
+            self.workflow_combo.setVisible(False)
+        else:
+            initial_wf = (
+                task.workflow_status if task else WorkflowStatus.NEW
+            )
+            idx = self.workflow_combo.findData(initial_wf.value)
+            self.workflow_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            form.addRow("Статус работы", self.workflow_combo)
+            self.source_status_edit.setVisible(False)
 
         self.date_end_edit = QDateEdit()
         self.date_end_edit.setCalendarPopup(True)
@@ -560,6 +593,14 @@ class TaskDialog(QDialog):
     @property
     def priority(self) -> int:
         return clamp_priority(self.priority_combo.currentData())
+
+    @property
+    def workflow_status(self) -> WorkflowStatus:
+        if self._source_linked:
+            if self._task is not None:
+                return self._task.workflow_status
+            return WorkflowStatus.NEW
+        return parse_workflow_status(self.workflow_combo.currentData())
 
     @property
     def date_end(self) -> date | None:

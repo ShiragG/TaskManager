@@ -147,6 +147,43 @@ QCheckBox::indicator:checked {
     border: 1px solid #0f766e;
 }
 
+QCheckBox:disabled {
+    color: #94a3b8;
+}
+
+QCheckBox::indicator:disabled {
+    background-color: #e2e8f0;
+    border: 1px solid #cbd5e1;
+}
+
+QCheckBox::indicator:checked:disabled {
+    background-color: #99f6e4;
+    border: 1px solid #94a3b8;
+}
+
+QListWidget {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    outline: none;
+}
+
+QListWidget::item:disabled {
+    color: #94a3b8;
+}
+
+QProgressBar {
+    background-color: #e2e8f0;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    text-align: center;
+    color: #0f172a;
+}
+
+QProgressBar::chunk {
+    background-color: #0d9488;
+}
+
 QGroupBox {
     border: 1px solid #cbd5e1;
     border-radius: 4px;

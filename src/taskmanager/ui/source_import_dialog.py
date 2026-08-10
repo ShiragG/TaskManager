@@ -1,12 +1,13 @@
-"""Import Source item → TaskDialog; pick by list or number."""
+"""Import Source item → TaskDialog or bulk create; pick by list or number."""
 
 from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QToolButton,
     QVBoxLayout,
@@ -34,18 +36,34 @@ from taskmanager.services.source_protocol import (
 
 logger = logging.getLogger(__name__)
 
+# UserRole+1: True when the Source item is already linked in this Project.
+_ROLE_ALREADY_IMPORTED = Qt.ItemDataRole.UserRole + 1
+
 
 class SourceImportDialog(QDialog):
-    """Choose enabled module, then list or number → returns a SourceDraft."""
+    """Choose enabled module, then list or number → returns a SourceDraft.
 
-    def __init__(self, source_host: SourceHost, parent=None) -> None:
+    Bulk path emits ``bulk_import_requested`` and keeps the dialog open.
+    """
+
+    bulk_import_requested = Signal(str, list)  # module_id, external_ids
+
+    def __init__(
+        self,
+        source_host: SourceHost,
+        parent=None,
+        *,
+        project_id: int | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Импорт из источника")
         self.setMinimumSize(640, 480)
         self._host = source_host
+        self._project_id = project_id
         self.draft: SourceDraft | None = None
         self.module_id: str | None = None
         self.download_files = False
+        self._imported_ids: set[str] = set()
         self._status_checks: dict[str, QCheckBox] = {}
         self._status_options: list[SourceStatusOption] = []
         self._catalog_error: str | None = None
@@ -71,9 +89,9 @@ class SourceImportDialog(QDialog):
         self.number_edit.setPlaceholderText("Номер элемента источника…")
         num_row = QHBoxLayout()
         num_row.addWidget(self.number_edit)
-        fetch_btn = QPushButton("Открыть номер")
-        fetch_btn.clicked.connect(self._fetch_by_number)
-        num_row.addWidget(fetch_btn)
+        self.fetch_btn = QPushButton("Открыть номер")
+        self.fetch_btn.clicked.connect(self._fetch_by_number)
+        num_row.addWidget(self.fetch_btn)
         form.addRow("По номеру", num_row)
 
         layout.addLayout(form)
@@ -85,18 +103,31 @@ class SourceImportDialog(QDialog):
         self._status_menu = QMenu(self)
         self.status_btn.setMenu(self._status_menu)
         list_row.addWidget(self.status_btn)
-        load_btn = QPushButton("Загрузить список")
-        load_btn.setObjectName("secondaryButton")
-        load_btn.clicked.connect(self._load_list)
-        list_row.addWidget(load_btn)
+        self.load_btn = QPushButton("Загрузить список")
+        self.load_btn.setObjectName("secondaryButton")
+        self.load_btn.clicked.connect(self._load_list)
+        list_row.addWidget(self.load_btn)
         layout.addLayout(list_row)
 
         self.list_widget = QListWidget()
         self.list_widget.itemDoubleClicked.connect(self._pick_list_item)
+        self.list_widget.itemChanged.connect(self._on_item_changed)
         self.list_widget.verticalScrollBar().valueChanged.connect(
             self._on_list_scroll
         )
         layout.addWidget(self.list_widget)
+
+        action_row = QHBoxLayout()
+        self.select_all_btn = QPushButton("Выделить все")
+        self.select_all_btn.setObjectName("secondaryButton")
+        self.select_all_btn.clicked.connect(self._select_all_selectable)
+        action_row.addWidget(self.select_all_btn)
+        self.import_btn = QPushButton("Импортировать")
+        self.import_btn.setEnabled(False)
+        self.import_btn.clicked.connect(self._bulk_import)
+        action_row.addWidget(self.import_btn)
+        action_row.addStretch(1)
+        layout.addLayout(action_row)
 
         self.download_cb = QCheckBox("Скачать файлы после создания (если есть папка)")
         self.download_cb.setChecked(True)
@@ -110,9 +141,16 @@ class SourceImportDialog(QDialog):
         self.hint.setStyleSheet("color: #64748b;")
         layout.addWidget(self.hint)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        self.progress.setTextVisible(True)
+        self.progress.setMinimumHeight(18)
+        layout.addWidget(self.progress)
+
+        self._buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        self._buttons.rejected.connect(self.reject)
+        layout.addWidget(self._buttons)
+        self._busy = False
 
         if self.module_combo.count() == 0:
             self.hint.setText("Нет включённых модулей — настройте их в Настройках.")
@@ -121,16 +159,93 @@ class SourceImportDialog(QDialog):
         else:
             self._on_module_changed()
 
+    def refresh_imported_marks(self) -> None:
+        """Reload already-imported ids and update list item flags."""
+        self._reload_imported_ids()
+        self.list_widget.blockSignals(True)
+        try:
+            for i in range(self.list_widget.count()):
+                item = self.list_widget.item(i)
+                external_id = item.data(Qt.ItemDataRole.UserRole)
+                if external_id is None:
+                    continue
+                self._apply_import_state(item, str(external_id))
+        finally:
+            self.list_widget.blockSignals(False)
+        self._sync_import_button()
+
+    def begin_bulk_progress(self, total: int) -> None:
+        """Show progress UI and lock controls for a bulk import run."""
+        self._busy = True
+        self._set_controls_enabled(False)
+        self.progress.setVisible(True)
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(0)
+        self.progress.setFormat(f"%v / {total}")
+        self.hint.setText(f"Импорт: 0 из {total}…")
+        QApplication.processEvents()
+
+    def update_bulk_progress(
+        self, current: int, total: int, external_id: str = ""
+    ) -> None:
+        self.progress.setRange(0, max(total, 1))
+        self.progress.setValue(current)
+        self.progress.setFormat(f"%v / {total}")
+        if external_id:
+            self.hint.setText(f"Импорт: {current} из {total} — {external_id}")
+        else:
+            self.hint.setText(f"Импорт: {current} из {total}…")
+        QApplication.processEvents()
+
+    def end_bulk_progress(self) -> None:
+        self._busy = False
+        self.progress.setVisible(False)
+        self.progress.setValue(0)
+        self._set_controls_enabled(True)
+        self._sync_import_button()
+        QApplication.processEvents()
+
+    def _set_controls_enabled(self, enabled: bool) -> None:
+        self.module_combo.setEnabled(enabled)
+        self.number_edit.setEnabled(enabled)
+        self.fetch_btn.setEnabled(enabled)
+        self.load_btn.setEnabled(enabled)
+        self.status_btn.setEnabled(enabled and not self._catalog_error)
+        self.select_all_btn.setEnabled(enabled)
+        self.download_cb.setEnabled(enabled)
+        self.list_widget.setEnabled(enabled)
+        self._buttons.setEnabled(enabled)
+        if enabled:
+            self._sync_import_button()
+        else:
+            self.import_btn.setEnabled(False)
+
+    def reject(self) -> None:
+        if self._busy:
+            return
+        super().reject()
+
+    def _reload_imported_ids(self) -> None:
+        module_id = self._current_module_id()
+        if self._project_id is None or not module_id:
+            self._imported_ids = set()
+            return
+        self._imported_ids = self._host.repo.list_source_external_ids(
+            self._project_id, module_id
+        )
+
     def _reset_list_pagination(self) -> None:
         self.list_widget.clear()
         self._page = 0
         self._has_more = False
         self._loading = False
         self._loaded_filters = None
+        self._sync_import_button()
 
     def _on_module_changed(self, *_args) -> None:
         module_id = self._current_module_id()
         self._reset_list_pagination()
+        self._reload_imported_ids()
         self._status_options = []
         self._catalog_error = None
         if not module_id:
@@ -296,21 +411,28 @@ class SourceImportDialog(QDialog):
 
         if not append:
             self.list_widget.clear()
+            self._reload_imported_ids()
 
-        for item in result.items:
-            title = item.title or item.external_id
-            label = f"{item.external_id}: {title}"
-            if item.status:
-                label = f"[{item.status}] {label}"
-            lw = QListWidgetItem(label)
-            lw.setData(Qt.ItemDataRole.UserRole, item.external_id)
-            self.list_widget.addItem(lw)
+        self.list_widget.blockSignals(True)
+        try:
+            for item in result.items:
+                title = item.title or item.external_id
+                label = f"{item.external_id}: {title}"
+                if item.status:
+                    label = f"[{item.status}] {label}"
+                lw = QListWidgetItem(label)
+                lw.setData(Qt.ItemDataRole.UserRole, item.external_id)
+                self._apply_import_state(lw, item.external_id)
+                self.list_widget.addItem(lw)
+        finally:
+            self.list_widget.blockSignals(False)
 
         # Stop when items empty or has_more=false (host does not invent cursors).
         self._page = result.page
         self._has_more = bool(result.has_more) and bool(result.items)
         self._loaded_filters = filters
         self._loading = False
+        self._sync_import_button()
 
         total = self.list_widget.count()
         if total == 0:
@@ -326,9 +448,107 @@ class SourceImportDialog(QDialog):
             self._has_more,
         )
 
+    def _apply_import_state(self, item: QListWidgetItem, external_id: str) -> None:
+        already = external_id in self._imported_ids
+        item.setData(_ROLE_ALREADY_IMPORTED, already)
+        flags = (
+            Qt.ItemFlag.ItemIsSelectable
+            | Qt.ItemFlag.ItemIsUserCheckable
+            | Qt.ItemFlag.ItemIsEnabled
+        )
+        if already:
+            flags = (
+                Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            item.setFlags(flags)
+            item.setCheckState(Qt.CheckState.Checked)
+        else:
+            # setCheckState is required for the checkbox to appear (flags alone
+            # leave Unchecked as a silent default with no indicator).
+            was_checked = item.checkState() == Qt.CheckState.Checked
+            item.setFlags(flags)
+            item.setCheckState(
+                Qt.CheckState.Checked
+                if was_checked
+                else Qt.CheckState.Unchecked
+            )
+
+    def _is_already_imported(self, item: QListWidgetItem) -> bool:
+        return bool(item.data(_ROLE_ALREADY_IMPORTED))
+
+    def _selectable_checked_ids(self) -> list[str]:
+        ids: list[str] = []
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            if self._is_already_imported(item):
+                continue
+            if item.checkState() != Qt.CheckState.Checked:
+                continue
+            external_id = item.data(Qt.ItemDataRole.UserRole)
+            if external_id is not None:
+                ids.append(str(external_id))
+        return ids
+
+    def _on_item_changed(self, _item: QListWidgetItem) -> None:
+        self._sync_import_button()
+
+    def _sync_import_button(self) -> None:
+        self.import_btn.setEnabled(bool(self._selectable_checked_ids()))
+
+    def _select_all_selectable(self) -> None:
+        self.list_widget.blockSignals(True)
+        try:
+            for i in range(self.list_widget.count()):
+                item = self.list_widget.item(i)
+                if self._is_already_imported(item):
+                    continue
+                item.setCheckState(Qt.CheckState.Checked)
+        finally:
+            self.list_widget.blockSignals(False)
+        self._sync_import_button()
+
+    def _bulk_import(self) -> None:
+        module_id = self._current_module_id()
+        if not module_id:
+            return
+        candidates = self._selectable_checked_ids()
+        # Skip any that became imported since load (belt and suspenders).
+        importable = [eid for eid in candidates if eid not in self._imported_ids]
+        skipped = len(candidates) - len(importable)
+        if not importable:
+            QMessageBox.information(
+                self,
+                "Импорт",
+                "Нет выбранных элементов для импорта.",
+            )
+            return
+        if len(importable) >= 2:
+            msg = f"Импортировать {len(importable)} элементов?"
+            if skipped:
+                msg += f"\nПропущено уже импортированных: {skipped}."
+            reply = QMessageBox.question(
+                self,
+                "Импорт",
+                msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        self.download_files = self.download_cb.isChecked()
+        self.bulk_import_requested.emit(module_id, importable)
+
     def _pick_list_item(self, item: QListWidgetItem) -> None:
         external_id = item.data(Qt.ItemDataRole.UserRole)
         if external_id is None:
+            return
+        if self._is_already_imported(item) or str(external_id) in self._imported_ids:
+            QMessageBox.information(
+                self,
+                "Импорт",
+                "Этот элемент уже импортирован в текущий проект.",
+            )
             return
         self._fetch(str(external_id))
 
@@ -337,11 +557,25 @@ class SourceImportDialog(QDialog):
         if not number:
             QMessageBox.warning(self, "Импорт", "Введите номер")
             return
+        if number in self._imported_ids:
+            QMessageBox.information(
+                self,
+                "Импорт",
+                "Этот элемент уже импортирован в текущий проект.",
+            )
+            return
         self._fetch(number)
 
     def _fetch(self, external_id: str) -> None:
         module_id = self._current_module_id()
         if not module_id:
+            return
+        if external_id in self._imported_ids:
+            QMessageBox.information(
+                self,
+                "Импорт",
+                "Этот элемент уже импортирован в текущий проект.",
+            )
             return
         logger.debug(
             "UI: import get_item module=%s external_id=%s",

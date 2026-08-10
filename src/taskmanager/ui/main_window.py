@@ -31,7 +31,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taskmanager.domain import Project, contrast_foreground, html_to_plain, is_deadline_warning, priority_color_hex
+from taskmanager.domain import (
+    Project,
+    contrast_foreground,
+    html_to_plain,
+    is_deadline_warning,
+    priority_color_hex,
+)
 from taskmanager.infrastructure.logging_setup import setup_logging
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.excel_export import ExcelExportError, export_tasks_to_excel
@@ -76,12 +82,14 @@ SORT_ROLE = Qt.ItemDataRole.UserRole + 1
 
 COL_PRIORITY = 0
 COL_NUMBER = 1
-COL_DATE = 2
-COL_DESCRIPTION = 3
-COL_COMMENT = 4
+COL_STATUS = 2
+COL_DATE = 3
+COL_DESCRIPTION = 4
+COL_COMMENT = 5
 
 SWATCH_SIZE = 22
 DESC_COL_WIDTH = 360
+MSG_SELECT_ONE = "Выберите одну заявку"
 
 
 def _format_bytes(n: int) -> str:
@@ -213,6 +221,14 @@ class MainWindow(QMainWindow):
         self.act_restore.triggered.connect(self.restore_selected_task)
         tb.addAction(self.act_restore)
 
+        self.act_hide = QAction("Скрыть", self)
+        self.act_hide.triggered.connect(self.hide_selected_tasks)
+        tb.addAction(self.act_hide)
+
+        self.act_unhide = QAction("Показать", self)
+        self.act_unhide.triggered.connect(self.unhide_selected_tasks)
+        tb.addAction(self.act_unhide)
+
         self.act_delete = QAction("Удалить", self)
         self.act_delete.triggered.connect(self.delete_selected_task)
         tb.addAction(self.act_delete)
@@ -341,19 +357,53 @@ class MainWindow(QMainWindow):
         self.palette_layout.addStretch()
 
     def _apply_color_to_selection(self, color: str | None) -> None:
-        task_id = self.selected_task_id()
-        if task_id is None:
+        task_ids = self.selected_task_ids()
+        if not task_ids:
             self.statusBar().showMessage("Выберите заявку, чтобы задать цвет")
             return
-        try:
-            if color is None:
-                self.service.update_task(task_id, UpdateTaskRequest(clear_color=True))
-            else:
-                self.service.update_task(task_id, UpdateTaskRequest(color=color))
-        except ServiceError as exc:
-            QMessageBox.warning(self, "Ошибка", str(exc))
-            return
+        errors: list[str] = []
+        updated = 0
+        for task_id in task_ids:
+            try:
+                if color is None:
+                    self.service.update_task(
+                        task_id, UpdateTaskRequest(clear_color=True)
+                    )
+                else:
+                    self.service.update_task(
+                        task_id, UpdateTaskRequest(color=color)
+                    )
+                updated += 1
+            except ServiceError as exc:
+                number = self._task_number_for_error(task_id)
+                errors.append(f"{number}: {exc}")
         self.reload_current_tab()
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Не удалось изменить цвет у части заявок:\n"
+                + "\n".join(errors[:10]),
+            )
+        elif updated:
+            self.statusBar().showMessage(
+                "Цвет обновлён"
+                if updated == 1
+                else f"Цвет обновлён для заявок: {updated}"
+            )
+
+    def _task_number_for_error(self, task_id: int) -> str:
+        try:
+            return self.service.get_task(task_id).number
+        except ServiceError:
+            return f"#{task_id}"
+
+    def _require_single_task_id(self) -> int | None:
+        ids = self.selected_task_ids()
+        if len(ids) != 1:
+            QMessageBox.information(self, "Уведомление", MSG_SELECT_ONE)
+            return None
+        return ids[0]
 
     def _add_custom_color(self) -> None:
         initial = QColor("#cccccc")
@@ -399,11 +449,16 @@ class MainWindow(QMainWindow):
 
     def _sync_mode_actions(self) -> None:
         archive = self._show_archive
+        hidden = self._show_hidden
         self.act_add_task.setEnabled(not archive)
         self.act_import_source.setEnabled(not archive)
         self.act_archive.setVisible(not archive)
         self.act_restore.setVisible(archive)
+        self.act_hide.setVisible(not archive and not hidden)
+        self.act_unhide.setVisible(not archive and hidden)
         self.act_edit.setEnabled(not archive)
+        self.act_delete.setEnabled(not archive)
+        self.act_delete.setVisible(not archive)
 
     # --- data loading ---
 
@@ -449,12 +504,12 @@ class MainWindow(QMainWindow):
         self._fill_table(table, project)
 
     def _make_table(self) -> QTableWidget:
-        table = QTableWidget(0, 5)
+        table = QTableWidget(0, 6)
         table.setHorizontalHeaderLabels(
-            ["Приоритет", "Номер", "Срок", "Описание", "Комментарий"]
+            ["Приоритет", "Номер", "Статус", "Срок", "Описание", "Комментарий"]
         )
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.setAlternatingRowColors(False)
         table.setSortingEnabled(True)
@@ -462,6 +517,7 @@ class MainWindow(QMainWindow):
         header.setStretchLastSection(False)
         header.setSectionResizeMode(COL_PRIORITY, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(COL_NUMBER, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(COL_STATUS, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(COL_DATE, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(COL_DESCRIPTION, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(COL_COMMENT, QHeaderView.ResizeMode.Stretch)
@@ -475,6 +531,9 @@ class MainWindow(QMainWindow):
         table.customContextMenuRequested.connect(
             lambda pos, t=table: self._show_context_menu(t, pos)
         )
+        delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, table)
+        delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        delete_shortcut.activated.connect(self.delete_selected_task)
         return table
 
     def _fill_table(self, table: QTableWidget, project: Project) -> None:
@@ -489,7 +548,14 @@ class MainWindow(QMainWindow):
         table.setSortingEnabled(False)
         table.setRowCount(0)
         today = date.today()
-        all_cols = (COL_PRIORITY, COL_NUMBER, COL_DATE, COL_DESCRIPTION, COL_COMMENT)
+        all_cols = (
+            COL_PRIORITY,
+            COL_NUMBER,
+            COL_STATUS,
+            COL_DATE,
+            COL_DESCRIPTION,
+            COL_COMMENT,
+        )
         for task in tasks:
             row = table.rowCount()
             table.insertRow(row)
@@ -504,6 +570,11 @@ class MainWindow(QMainWindow):
             number_item.setData(TASK_ID_ROLE, task.id)
             number_item.setData(SORT_ROLE, task.number.casefold())
             table.setItem(row, COL_NUMBER, number_item)
+
+            status_text = task.display_status
+            status_item = SortableItem(status_text)
+            status_item.setData(SORT_ROLE, status_text.casefold())
+            table.setItem(row, COL_STATUS, status_item)
 
             date_text = task.date_end.strftime("%d.%m.%Y") if task.date_end else ""
             date_item = SortableItem(date_text)
@@ -595,9 +666,8 @@ class MainWindow(QMainWindow):
                 self, "Уведомление", "Архивные заявки нельзя редактировать — сначала верните"
             )
             return
-        task_id = self.selected_task_id()
+        task_id = self._require_single_task_id()
         if task_id is None:
-            QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
         try:
             task = self.service.get_task(task_id)
@@ -635,17 +705,31 @@ class MainWindow(QMainWindow):
         return widget if isinstance(widget, QTableWidget) else None
 
     def selected_task_id(self) -> int | None:
+        ids = self.selected_task_ids()
+        return ids[0] if ids else None
+
+    def selected_task_ids(self) -> list[int]:
         table = self.current_table()
         if table is None:
-            return None
-        row = table.currentRow()
-        if row < 0:
-            return None
-        item = table.item(row, COL_NUMBER)
-        if item is None:
-            return None
-        value = item.data(TASK_ID_ROLE)
-        return int(value) if value is not None else None
+            return []
+        model = table.selectionModel()
+        if model is None:
+            return []
+        ids: list[int] = []
+        seen: set[int] = set()
+        for index in model.selectedRows(COL_NUMBER):
+            item = table.item(index.row(), COL_NUMBER)
+            if item is None:
+                continue
+            value = item.data(TASK_ID_ROLE)
+            if value is None:
+                continue
+            task_id = int(value)
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            ids.append(task_id)
+        return ids
 
     # --- actions ---
 
@@ -756,6 +840,7 @@ class MainWindow(QMainWindow):
                     create_notes_file=dialog.create_notes_file,
                     create_folder=dialog.create_folder,
                     links=dialog.links,
+                    workflow_status=dialog.workflow_status,
                 )
             )
         except ServiceError as exc:
@@ -799,7 +884,14 @@ class MainWindow(QMainWindow):
         )
 
         logger.debug("UI: open import dialog project_id=%s", project_id)
-        picker = SourceImportDialog(self.source_host, self)
+        picker = SourceImportDialog(
+            self.source_host, self, project_id=project_id
+        )
+        picker.bulk_import_requested.connect(
+            lambda mid, ids, dlg=picker, pid=project_id: self._bulk_import_from_source(
+                dlg, pid, mid, ids
+            )
+        )
         if picker.exec() != SourceImportDialog.DialogCode.Accepted:
             logger.debug("UI: import dialog cancelled")
             return
@@ -813,6 +905,10 @@ class MainWindow(QMainWindow):
             self.settings,
             self,
             folder_validator=self._make_create_folder_validator(project_id),
+            source_linked=True,
+            initial_source_status=(
+                draft.source_status_label or draft.source_status_id or ""
+            ),
             **kwargs,
         )
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
@@ -863,12 +959,94 @@ class MainWindow(QMainWindow):
             return
         self.reload_current_tab()
 
+    def _bulk_import_from_source(
+        self,
+        picker,
+        project_id: int,
+        module_id: str,
+        external_ids: list[str],
+    ) -> None:
+        """Create Tasks from snapshots without TaskDialog; keep picker open."""
+        from taskmanager.services.source_protocol import SourceModuleError
+
+        if self.source_host is None:
+            return
+        created = 0
+        skipped = 0
+        errors: list[str] = []
+        download = bool(picker.download_files)
+        create_folder = self.settings.create_task_folder
+        create_notes = self.settings.create_notes_file
+        total = len(external_ids)
+        picker.begin_bulk_progress(total)
+        self.statusBar().showMessage(f"Импорт: 0 из {total}…")
+        try:
+            for index, external_id in enumerate(external_ids, start=1):
+                picker.update_bulk_progress(index - 1, total, external_id)
+                self.statusBar().showMessage(
+                    f"Импорт: {index - 1} из {total} — {external_id}"
+                )
+                try:
+                    draft = self.source_host.get_item(module_id, external_id)
+                    task = self.source_host.create_task_from_draft(
+                        project_id=project_id,
+                        module_id=module_id,
+                        draft=draft,
+                        create_folder=create_folder,
+                        create_notes_file=create_notes,
+                        by_template=False,
+                        download_files=False,
+                    )
+                    if download:
+                        try:
+                            self.source_host.download_task_files(
+                                task.id,  # type: ignore[arg-type]
+                                create_folder_if_missing=True,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Download after bulk import %s: %s", external_id, exc
+                            )
+                            errors.append(f"{external_id}: файлы — {exc}")
+                    created += 1
+                except ServiceError as exc:
+                    msg = str(exc)
+                    if "уже импортирован" in msg.lower():
+                        skipped += 1
+                    else:
+                        errors.append(f"{external_id}: {exc}")
+                except SourceModuleError as exc:
+                    errors.append(f"{external_id}: {exc}")
+                except Exception as exc:
+                    logger.exception("Bulk import failed for %s", external_id)
+                    errors.append(f"{external_id}: {exc}")
+                picker.update_bulk_progress(index, total, external_id)
+                self.statusBar().showMessage(f"Импорт: {index} из {total}")
+        finally:
+            picker.end_bulk_progress()
+
+        lines = [f"Создано: {created}"]
+        if skipped:
+            lines.append(f"Пропущено (уже импортированы): {skipped}")
+        if errors:
+            lines.append(f"Ошибки: {len(errors)}")
+            lines.extend(errors[:10])
+            if len(errors) > 10:
+                lines.append(f"…и ещё {len(errors) - 10}")
+        QMessageBox.information(self, "Импорт", "\n".join(lines))
+        picker.refresh_imported_marks()
+        self.reload_current_tab()
+        self.statusBar().showMessage(
+            f"Импорт завершён: создано {created}"
+            + (f", пропущено {skipped}" if skipped else "")
+            + (f", ошибок {len(errors)}" if errors else "")
+        )
+
     def refresh_selected_from_source(self) -> None:
         if self.source_host is None:
             return
-        task_id = self.selected_task_id()
+        task_id = self._require_single_task_id()
         if task_id is None:
-            QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
         try:
             task = self.service.get_task(task_id)
@@ -901,9 +1079,8 @@ class MainWindow(QMainWindow):
     def download_selected_source_files(self) -> None:
         if self.source_host is None:
             return
-        task_id = self.selected_task_id()
+        task_id = self._require_single_task_id()
         if task_id is None:
-            QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
         logger.debug("UI: download source files task_id=%s", task_id)
         try:
@@ -951,9 +1128,8 @@ class MainWindow(QMainWindow):
                 self, "Уведомление", "Архивные заявки нельзя редактировать — сначала верните"
             )
             return
-        task_id = self.selected_task_id()
+        task_id = self._require_single_task_id()
         if task_id is None:
-            QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
         try:
             task = self.service.get_task(task_id)
@@ -990,6 +1166,9 @@ class MainWindow(QMainWindow):
                     priority=dialog.priority,
                     hidden=dialog.hidden,
                     links=dialog.links,
+                    workflow_status=(
+                        None if task.has_source else dialog.workflow_status
+                    ),
                 ),
             )
         except ServiceError as exc:
@@ -1000,65 +1179,172 @@ class MainWindow(QMainWindow):
         self.reload_current_tab()
 
     def archive_selected_task(self) -> None:
-        task_id = self.selected_task_id()
-        if task_id is None:
+        task_ids = self.selected_task_ids()
+        if not task_ids:
             QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
-        answer = QMessageBox.question(
-            self,
-            "Архив",
-            "Перед переносом закройте файлы заявки (если есть папка). Продолжить?",
-        )
+        if len(task_ids) == 1:
+            prompt = (
+                "Перед переносом закройте файлы заявки (если есть папка). Продолжить?"
+            )
+        else:
+            prompt = (
+                f"Перед переносом закройте файлы {len(task_ids)} заявок "
+                "(если есть папки). Продолжить?"
+            )
+        answer = QMessageBox.question(self, "Архив", prompt)
         if answer != QMessageBox.StandardButton.Yes:
             return
-        try:
-            self.service.archive_task(task_id)
-        except ServiceError as exc:
-            logger.debug("Archive task failed: %s", exc)
-            QMessageBox.warning(self, "Ошибка", str(exc))
-            return
-        logger.debug("UI: task archived id=%s", task_id)
+        errors: list[str] = []
+        archived = 0
+        for task_id in task_ids:
+            try:
+                self.service.archive_task(task_id)
+                archived += 1
+            except ServiceError as exc:
+                logger.debug("Archive task failed id=%s: %s", task_id, exc)
+                errors.append(f"{self._task_number_for_error(task_id)}: {exc}")
+        logger.debug(
+            "UI: tasks archived count=%s errors=%s", archived, len(errors)
+        )
         self.reload_current_tab()
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Не удалось заархивировать часть заявок:\n" + "\n".join(errors[:10]),
+            )
+        elif archived:
+            self.statusBar().showMessage(
+                "Заявка в архиве"
+                if archived == 1
+                else f"В архиве заявок: {archived}"
+            )
 
     def restore_selected_task(self) -> None:
-        task_id = self.selected_task_id()
-        if task_id is None:
+        task_ids = self.selected_task_ids()
+        if not task_ids:
             QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
-        try:
-            self.service.restore_task(task_id)
-        except ServiceError as exc:
-            logger.debug("Restore task failed: %s", exc)
-            QMessageBox.warning(self, "Ошибка", str(exc))
-            return
-        logger.debug("UI: task restored id=%s", task_id)
+        errors: list[str] = []
+        restored = 0
+        for task_id in task_ids:
+            try:
+                self.service.restore_task(task_id)
+                restored += 1
+            except ServiceError as exc:
+                logger.debug("Restore task failed id=%s: %s", task_id, exc)
+                errors.append(f"{self._task_number_for_error(task_id)}: {exc}")
+        logger.debug(
+            "UI: tasks restored count=%s errors=%s", restored, len(errors)
+        )
         self.reload_current_tab()
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Не удалось вернуть часть заявок:\n" + "\n".join(errors[:10]),
+            )
+        elif restored:
+            self.statusBar().showMessage(
+                "Заявка возвращена"
+                if restored == 1
+                else f"Возвращено заявок: {restored}"
+            )
+
+    def hide_selected_tasks(self) -> None:
+        self._set_hidden_on_selection(True)
+
+    def unhide_selected_tasks(self) -> None:
+        self._set_hidden_on_selection(False)
+
+    def _set_hidden_on_selection(self, hidden: bool) -> None:
+        if self._show_archive:
+            return
+        task_ids = self.selected_task_ids()
+        if not task_ids:
+            QMessageBox.information(self, "Уведомление", "Выберите заявку")
+            return
+        errors: list[str] = []
+        changed = 0
+        for task_id in task_ids:
+            try:
+                self.service.update_task(
+                    task_id, UpdateTaskRequest(hidden=hidden)
+                )
+                changed += 1
+            except ServiceError as exc:
+                errors.append(f"{self._task_number_for_error(task_id)}: {exc}")
+        self.reload_current_tab()
+        if errors:
+            title = "Скрыть" if hidden else "Показать"
+            QMessageBox.warning(
+                self,
+                title,
+                "Не удалось изменить часть заявок:\n" + "\n".join(errors[:10]),
+            )
+        elif changed:
+            if hidden:
+                msg = (
+                    "Заявка скрыта"
+                    if changed == 1
+                    else f"Скрыто заявок: {changed}"
+                )
+            else:
+                msg = (
+                    "Заявка показана"
+                    if changed == 1
+                    else f"Показано заявок: {changed}"
+                )
+            self.statusBar().showMessage(msg)
 
     def delete_selected_task(self) -> None:
-        task_id = self.selected_task_id()
-        if task_id is None:
+        if self._show_archive:
+            QMessageBox.information(
+                self,
+                "Уведомление",
+                "В режиме архива удаление недоступно — сначала верните заявку",
+            )
+            return
+        task_ids = self.selected_task_ids()
+        if not task_ids:
             QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
-        answer = QMessageBox.question(
-            self,
-            "Удаление",
-            "Удалить заявку и её папку (если есть)? Действие необратимо.",
-        )
+        if len(task_ids) == 1:
+            prompt = "Удалить заявку и её папку (если есть)? Действие необратимо."
+        else:
+            prompt = (
+                f"Удалить {len(task_ids)} заявок и их папки (если есть)? "
+                "Действие необратимо."
+            )
+        answer = QMessageBox.question(self, "Удаление", prompt)
         if answer != QMessageBox.StandardButton.Yes:
             return
-        try:
-            self.service.delete_task(task_id)
-        except ServiceError as exc:
-            logger.debug("Delete task failed: %s", exc)
-            QMessageBox.warning(self, "Ошибка", str(exc))
-            return
-        logger.debug("UI: task deleted id=%s", task_id)
+        errors: list[str] = []
+        deleted = 0
+        for task_id in task_ids:
+            try:
+                self.service.delete_task(task_id)
+                deleted += 1
+            except ServiceError as exc:
+                logger.debug("Delete task failed id=%s: %s", task_id, exc)
+                errors.append(f"{self._task_number_for_error(task_id)}: {exc}")
+        logger.debug("UI: tasks deleted count=%s errors=%s", deleted, len(errors))
         self.reload_current_tab()
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Ошибка",
+                "Не удалось удалить часть заявок:\n" + "\n".join(errors[:10]),
+            )
+        elif deleted:
+            self.statusBar().showMessage(
+                "Заявка удалена" if deleted == 1 else f"Удалено заявок: {deleted}"
+            )
 
     def open_selected_folder(self) -> None:
-        task_id = self.selected_task_id()
+        task_id = self._require_single_task_id()
         if task_id is None:
-            QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
         try:
             path = self.service.open_task_folder(task_id)
@@ -1069,9 +1355,8 @@ class MainWindow(QMainWindow):
             self.reload_current_tab()
 
     def copy_selected_task_number(self) -> None:
-        task_id = self.selected_task_id()
+        task_id = self._require_single_task_id()
         if task_id is None:
-            QMessageBox.information(self, "Уведомление", "Выберите заявку")
             return
         try:
             task = self.service.get_task(task_id)
@@ -1414,11 +1699,22 @@ class MainWindow(QMainWindow):
         menu.addAction("Удалить", self.delete_current_project)
         menu.exec(tab_bar.mapToGlobal(pos))
 
+    def _ensure_context_row_selected(self, table: QTableWidget, index) -> None:
+        """Select the clicked row only if it is not already in the selection."""
+        if not index.isValid():
+            return
+        model = table.selectionModel()
+        selected_rows = (
+            {i.row() for i in model.selectedRows()} if model is not None else set()
+        )
+        if index.row() not in selected_rows:
+            table.selectRow(index.row())
+
     def _show_context_menu(self, table: QTableWidget, pos) -> None:
         index = table.indexAt(pos)
-        if index.isValid():
-            table.selectRow(index.row())
-        task_id = self.selected_task_id()
+        self._ensure_context_row_selected(table, index)
+        task_ids = self.selected_task_ids()
+        task_id = task_ids[0] if len(task_ids) == 1 else None
         menu = QMenu(self)
         if not self._show_archive:
             menu.addAction("Изменить", self.edit_selected_task)
@@ -1428,7 +1724,11 @@ class MainWindow(QMainWindow):
             menu.addAction("Вернуть", self.restore_selected_task)
         else:
             menu.addAction("В архив", self.archive_selected_task)
-        menu.addAction("Удалить", self.delete_selected_task)
+            if self._show_hidden:
+                menu.addAction("Показать", self.unhide_selected_tasks)
+            else:
+                menu.addAction("Скрыть", self.hide_selected_tasks)
+            menu.addAction("Удалить", self.delete_selected_task)
 
         if task_id is not None:
             try:

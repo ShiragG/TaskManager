@@ -65,6 +65,8 @@ def test_refresh_preserves_comment(tmp_path: Path, monkeypatch):
             links=[("Razr", "https://example/9")],
             files=[],
             source_label="Fake",
+            source_status_id="3",
+            source_status_label="В работе",
         )
     )
     host._by_id["fake"] = type(
@@ -92,6 +94,8 @@ def test_refresh_preserves_comment(tmp_path: Path, monkeypatch):
             source_module_id="fake",
             external_id="9",
             source_label="Fake",
+            source_status_id="10",
+            source_status_label="Старое",
             links=[("Razr", "https://old"), ("Заметки", "/tmp/n")],
         )
     )
@@ -99,6 +103,9 @@ def test_refresh_preserves_comment(tmp_path: Path, monkeypatch):
     assert refreshed.comment == "<b>keep me</b>"
     assert "from source" in refreshed.description
     assert refreshed.priority == 0
+    assert refreshed.source_status_id == "3"
+    assert refreshed.source_status_label == "В работе"
+    assert refreshed.display_status == "В работе"
     names = {lnk.name: lnk.target for lnk in refreshed.links}
     assert names["Razr"] == "https://example/9"
     assert names["Заметки"] == "/tmp/n"

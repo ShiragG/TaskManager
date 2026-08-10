@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -10,8 +11,10 @@ from taskmanager.domain import (
     Project,
     Task,
     TaskStatus,
+    WorkflowStatus,
     clamp_priority,
     make_folder_name,
+    parse_workflow_status,
     sanitize_for_folder,
 )
 from taskmanager.infrastructure.filesystem import (
@@ -46,6 +49,9 @@ class CreateTaskRequest:
     source_module_id: str | None = None
     external_id: str | None = None
     source_label: str | None = None
+    workflow_status: WorkflowStatus | str | None = None
+    source_status_id: str | None = None
+    source_status_label: str | None = None
 
 
 @dataclass
@@ -65,6 +71,10 @@ class UpdateTaskRequest:
     external_id: str | None = None
     source_label: str | None = None
     clear_source: bool = False
+    workflow_status: WorkflowStatus | str | None = None
+    source_status_id: str | None = None
+    source_status_label: str | None = None
+    clear_source_status: bool = False
 
 
 class TaskService:
@@ -306,19 +316,38 @@ class TaskService:
             source_module_id=request.source_module_id,
             external_id=request.external_id,
             source_label=request.source_label,
+            workflow_status=parse_workflow_status(
+                request.workflow_status.value
+                if isinstance(request.workflow_status, WorkflowStatus)
+                else request.workflow_status
+            ),
+            source_status_id=request.source_status_id,
+            source_status_label=request.source_status_label,
         )
         try:
             task = self.repo.add_task(task)
             if link_pairs:
                 links = [Link(None, task.id, n, t) for n, t in link_pairs]
                 task.links = self.repo.replace_links(task.id, links)  # type: ignore[arg-type]
-        except Exception:
+        except Exception as exc:
             logger.exception("Failed to persist new task number=%r", number)
             if create_folder:
                 try:
                     self.fs.remove_task_folder(project, task)
                 except Exception:
                     pass
+            if isinstance(exc, sqlite3.IntegrityError):
+                msg = str(exc).lower()
+                if "idx_tasks_source_link" in msg or (
+                    "source_module_id" in msg and "external_id" in msg
+                ):
+                    raise ServiceError(
+                        "Элемент источника уже импортирован в этот проект"
+                    ) from exc
+                if "number" in msg or "unique" in msg:
+                    raise ServiceError(
+                        f"Заявка с номером «{number}» уже существует"
+                    ) from exc
             raise
         logger.debug(
             "Created task id=%s number=%r project=%s has_folder=%s priority=%s",
@@ -382,6 +411,8 @@ class TaskService:
             task.source_module_id = None
             task.external_id = None
             task.source_label = None
+            task.source_status_id = None
+            task.source_status_label = None
         else:
             if request.source_module_id is not None:
                 task.source_module_id = request.source_module_id
@@ -389,6 +420,24 @@ class TaskService:
                 task.external_id = request.external_id
             if request.source_label is not None:
                 task.source_label = request.source_label
+            if request.clear_source_status:
+                task.source_status_id = None
+                task.source_status_label = None
+            else:
+                if request.source_status_id is not None:
+                    task.source_status_id = request.source_status_id
+                if request.source_status_label is not None:
+                    task.source_status_label = request.source_status_label
+        if request.workflow_status is not None:
+            if task.has_source and not request.clear_source:
+                raise ServiceError(
+                    "Статус работы нельзя менять у заявки с привязкой к источнику"
+                )
+            task.workflow_status = parse_workflow_status(
+                request.workflow_status.value
+                if isinstance(request.workflow_status, WorkflowStatus)
+                else request.workflow_status
+            )
 
         try:
             self.repo.update_task(task)

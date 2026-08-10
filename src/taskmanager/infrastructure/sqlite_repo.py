@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
-from taskmanager.domain import Link, Project, Task, TaskStatus
+from taskmanager.domain import (
+    Link,
+    Project,
+    Task,
+    TaskStatus,
+    WorkflowStatus,
+    parse_workflow_status,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS directories (
@@ -32,6 +40,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     source_module_id TEXT,
     external_id TEXT,
     source_label TEXT,
+    workflow_status TEXT NOT NULL DEFAULT 'new',
+    source_status_id TEXT,
+    source_status_label TEXT,
     UNIQUE(directory_id, number)
 );
 
@@ -62,6 +73,14 @@ CREATE TABLE IF NOT EXISTS source_modules (
 CREATE INDEX IF NOT EXISTS idx_tasks_directory ON tasks(directory_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_links_task ON links(task_id);
+-- Unique source link index: see SOURCE_LINK_UNIQUE_INDEX (applied in _migrate).
+"""
+
+# Applied in _migrate after source columns exist and duplicates are renamed.
+SOURCE_LINK_UNIQUE_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_link
+ON tasks(directory_id, source_module_id, external_id)
+WHERE source_module_id IS NOT NULL AND external_id IS NOT NULL;
 """
 
 
@@ -140,6 +159,16 @@ class SqliteRepository:
             self._conn.execute("ALTER TABLE tasks ADD COLUMN external_id TEXT")
         if "source_label" not in col_names:
             self._conn.execute("ALTER TABLE tasks ADD COLUMN source_label TEXT")
+        if "workflow_status" not in col_names:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN workflow_status TEXT NOT NULL DEFAULT 'new'"
+            )
+        if "source_status_id" not in col_names:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN source_status_id TEXT")
+        if "source_status_label" not in col_names:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN source_status_label TEXT"
+            )
 
         self._conn.execute(
             """
@@ -162,6 +191,80 @@ class SqliteRepository:
                 update_asset_pattern TEXT NOT NULL DEFAULT ''
             )
             """
+        )
+        self._dedupe_source_links()
+        self._conn.executescript(SOURCE_LINK_UNIQUE_INDEX)
+
+    def _dedupe_source_links(self) -> None:
+        """Rename duplicate source links so the unique index can be created.
+
+        Canon = min(id) keeps the original external_id; others get
+        ``{original}_Дубль_{8hex}`` (sha256 of task id, retry on clash).
+        """
+        groups = self._conn.execute(
+            """
+            SELECT directory_id, source_module_id, external_id, COUNT(*) AS n
+            FROM tasks
+            WHERE source_module_id IS NOT NULL AND external_id IS NOT NULL
+            GROUP BY directory_id, source_module_id, external_id
+            HAVING n > 1
+            """
+        ).fetchall()
+        for group in groups:
+            rows = self._conn.execute(
+                """
+                SELECT id, external_id FROM tasks
+                WHERE directory_id = ?
+                  AND source_module_id = ?
+                  AND external_id = ?
+                ORDER BY id
+                """,
+                (
+                    group["directory_id"],
+                    group["source_module_id"],
+                    group["external_id"],
+                ),
+            ).fetchall()
+            original = group["external_id"]
+            for row in rows[1:]:
+                self._rename_duplicate_external_id(
+                    row["id"],
+                    original,
+                    directory_id=group["directory_id"],
+                    source_module_id=group["source_module_id"],
+                )
+
+    def _rename_duplicate_external_id(
+        self,
+        task_id: int,
+        original: str,
+        *,
+        directory_id: int,
+        source_module_id: str,
+    ) -> None:
+        digest = hashlib.sha256(str(task_id).encode()).hexdigest()
+        for end in range(8, len(digest) + 1):
+            candidate = f"{original}_Дубль_{digest[:end]}"
+            clash = self._conn.execute(
+                """
+                SELECT 1 FROM tasks
+                WHERE directory_id = ?
+                  AND source_module_id = ?
+                  AND external_id = ?
+                  AND id != ?
+                LIMIT 1
+                """,
+                (directory_id, source_module_id, candidate, task_id),
+            ).fetchone()
+            if clash is None:
+                self._conn.execute(
+                    "UPDATE tasks SET external_id = ? WHERE id = ?",
+                    (candidate, task_id),
+                )
+                return
+        self._conn.execute(
+            "UPDATE tasks SET external_id = ? WHERE id = ?",
+            (f"{original}_Дубль_{digest}_{task_id}", task_id),
         )
 
     def _rebuild_tasks_for_nullable_color(self) -> None:
@@ -333,6 +436,19 @@ class SqliteRepository:
             return None
         return self._task_from_row(row)
 
+    def list_source_external_ids(self, project_id: int, module_id: str) -> set[str]:
+        """All external_ids linked to *module_id* in the Project (any status/hidden)."""
+        rows = self._conn.execute(
+            """
+            SELECT external_id FROM tasks
+            WHERE directory_id = ?
+              AND source_module_id = ?
+              AND external_id IS NOT NULL
+            """,
+            (project_id, module_id),
+        ).fetchall()
+        return {str(r["external_id"]) for r in rows}
+
     def get_task(self, task_id: int) -> Task | None:
         row = self._conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         if row is None:
@@ -349,8 +465,9 @@ class SqliteRepository:
                 directory_id, number, description, comment, date_end, color, priority,
                 hidden, has_folder, status, folder_name, archive_month,
                 archive_project_folder, created_at,
-                source_module_id, external_id, source_label
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_module_id, external_id, source_label,
+                workflow_status, source_status_id, source_status_label
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.project_id,
@@ -370,6 +487,9 @@ class SqliteRepository:
                 task.source_module_id,
                 task.external_id,
                 task.source_label,
+                task.workflow_status.value,
+                task.source_status_id,
+                task.source_status_label,
             ),
         )
         self._conn.commit()
@@ -386,7 +506,8 @@ class SqliteRepository:
                 date_end = ?, color = ?, priority = ?, hidden = ?, has_folder = ?,
                 status = ?, folder_name = ?, archive_month = ?,
                 archive_project_folder = ?,
-                source_module_id = ?, external_id = ?, source_label = ?
+                source_module_id = ?, external_id = ?, source_label = ?,
+                workflow_status = ?, source_status_id = ?, source_status_label = ?
             WHERE id = ?
             """,
             (
@@ -406,6 +527,9 @@ class SqliteRepository:
                 task.source_module_id,
                 task.external_id,
                 task.source_label,
+                task.workflow_status.value,
+                task.source_status_id,
+                task.source_status_label,
                 task.id,
             ),
         )
@@ -464,6 +588,17 @@ class SqliteRepository:
         )
         external_id = row["external_id"] if "external_id" in keys else None
         source_label = row["source_label"] if "source_label" in keys else None
+        workflow_status = (
+            parse_workflow_status(row["workflow_status"])
+            if "workflow_status" in keys
+            else WorkflowStatus.NEW
+        )
+        source_status_id = (
+            row["source_status_id"] if "source_status_id" in keys else None
+        )
+        source_status_label = (
+            row["source_status_label"] if "source_status_label" in keys else None
+        )
         return Task(
             id=row["id"],
             project_id=row["directory_id"],
@@ -483,6 +618,9 @@ class SqliteRepository:
             source_module_id=source_module_id,
             external_id=external_id,
             source_label=source_label,
+            workflow_status=workflow_status,
+            source_status_id=source_status_id,
+            source_status_label=source_status_label,
         )
 
     # --- source credentials ---

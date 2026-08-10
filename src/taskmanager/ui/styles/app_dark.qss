@@ -167,6 +167,32 @@ QCheckBox::indicator:unchecked:hover {
     border: 1px solid #cbd5e1;
 }
 
+QCheckBox:disabled {
+    color: #64748b;
+}
+
+QCheckBox::indicator:disabled {
+    background-color: #0f172a;
+    border: 1px solid #475569;
+}
+
+QCheckBox::indicator:checked:disabled {
+    background-color: #334155;
+    border: 1px solid #64748b;
+}
+
+QListWidget {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 4px;
+    color: #e2e8f0;
+    outline: none;
+}
+
+QListWidget::item:disabled {
+    color: #64748b;
+}
+
 QGroupBox {
     border: 1px solid #334155;
     border-radius: 4px;

@@ -60,9 +60,13 @@ _Avoid_: integration, connector, ticket API
 A record in an external system before it becomes a Task.
 _Avoid_: заявка, Task, ticket (for the external object)
 
+**Workflow status** (статус работы):
+Closed local set on a Task without a source link: Новая, В работе, Ждёт, Готово, Отменена. Independent of Archive; not shown or edited when the Task has a source link.
+_Avoid_: Source status, archive, Task status
+
 **Source status** (статус источника):
-A catalog entry from a Source module (`id` + label) used to filter Import lists; `default_selected` marks which statuses are checked by default. Distinct from Task archive/active status.
-_Avoid_: Task status, archive
+A Source module catalog entry (`id` + label; `default_selected` for Import filters). On a linked Task, also the read-only snapshot of that id/label written on Import and Refresh from source (not background sync).
+_Avoid_: Workflow status, archive
 
 **Source priority** (приоритет источника):
 A catalog entry from a Source module whose `mapped_priority` is already on the Task **Priority** scale (0..10). Used when mapping a Source item into a Task; not a separate Task field.
@@ -73,7 +77,7 @@ SQLite rows for installed Source modules (id, GitHub repo, display name, enabled
 _Avoid_: settings list, plugin folder alone as source of truth
 
 **Import**:
-Placing a Source item into the create-Task dialog as a snapshot. Status/priority catalogs are session-cached by the host; on catalog failure Import shows an error and does not call `list_items`.
+Bringing a Source item into the current Project as a Task. The single path snapshots the item into the create-Task dialog; the bulk path creates Tasks from snapshots without that dialog (settings defaults for folder/notes; honors «Скачать файлы…»). A Source item is already imported when the Project has a Task with the same `(source_module_id, external_id)` (any status/hidden). Status/priority catalogs are session-cached by the host; on catalog failure Import shows an error and does not call `list_items`.
 _Avoid_: sync, clone
 
 **Refresh from source**:

@@ -13,6 +13,43 @@ class TaskStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class WorkflowStatus(StrEnum):
+    """Local work progress for Tasks without a source link."""
+
+    NEW = "new"
+    IN_PROGRESS = "in_progress"
+    WAITING = "waiting"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
+WORKFLOW_STATUS_LABELS: dict[WorkflowStatus, str] = {
+    WorkflowStatus.NEW: "Новая",
+    WorkflowStatus.IN_PROGRESS: "В работе",
+    WorkflowStatus.WAITING: "Ждёт",
+    WorkflowStatus.DONE: "Готово",
+    WorkflowStatus.CANCELLED: "Отменена",
+}
+
+
+def parse_workflow_status(value: str | None) -> WorkflowStatus:
+    if not value:
+        return WorkflowStatus.NEW
+    try:
+        return WorkflowStatus(value)
+    except ValueError:
+        return WorkflowStatus.NEW
+
+
+def workflow_status_label(value: str | WorkflowStatus | None) -> str:
+    status = (
+        value
+        if isinstance(value, WorkflowStatus)
+        else parse_workflow_status(value)
+    )
+    return WORKFLOW_STATUS_LABELS[status]
+
+
 FORBIDDEN_PATH_CHARS = '\\/:*?"<>|()'
 
 
@@ -146,6 +183,9 @@ class Task:
     source_module_id: str | None = None
     external_id: str | None = None
     source_label: str | None = None
+    workflow_status: WorkflowStatus = WorkflowStatus.NEW
+    source_status_id: str | None = None
+    source_status_label: str | None = None
 
     @property
     def is_archived(self) -> bool:
@@ -154,3 +194,13 @@ class Task:
     @property
     def has_source(self) -> bool:
         return bool(self.source_module_id and self.external_id)
+
+    @property
+    def display_status(self) -> str:
+        """Single UI status column: Source snapshot when linked, else Workflow."""
+        if self.has_source:
+            label = (self.source_status_label or "").strip()
+            if label:
+                return label
+            return (self.source_status_id or "").strip()
+        return workflow_status_label(self.workflow_status)

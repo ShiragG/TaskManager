@@ -615,6 +615,8 @@ class SourceHost:
                 source_module_id=module_id,
                 external_id=draft.external_id,
                 source_label=label,
+                source_status_id=draft.source_status_id or None,
+                source_status_label=draft.source_status_label or None,
             )
         )
         if download_files and task.has_folder:
@@ -652,6 +654,8 @@ class SourceHost:
                 description=plain_text_to_html(draft.description),
                 priority=clamp_priority(draft.priority),
                 links=ordered,
+                source_status_id=draft.source_status_id or "",
+                source_status_label=draft.source_status_label or "",
                 # comment intentionally omitted
             ),
         )

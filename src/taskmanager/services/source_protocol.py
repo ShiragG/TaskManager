@@ -34,6 +34,8 @@ class SourceDraft:
     links: list[tuple[str, str]] = field(default_factory=list)
     files: list[SourceFileMeta] = field(default_factory=list)
     source_label: str = ""
+    source_status_id: str = ""
+    source_status_label: str = ""
 
 
 @dataclass(frozen=True)

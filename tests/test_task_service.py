@@ -413,3 +413,149 @@ def test_restore_falls_back_to_legacy_archive_path(tmp_path: Path):
     assert (work / "FbProj" / "7").is_dir()
     assert not legacy.exists()
     repo.close()
+
+
+def test_migration_dedupes_source_links_and_unique_index(tmp_path: Path):
+    import hashlib
+    import sqlite3
+
+    db = tmp_path / "dup-source.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE directories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            directory_id INTEGER NOT NULL REFERENCES directories(id) ON DELETE CASCADE,
+            number TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            comment TEXT NOT NULL DEFAULT '',
+            date_end TEXT,
+            color TEXT,
+            priority INTEGER NOT NULL DEFAULT 10,
+            hidden INTEGER NOT NULL DEFAULT 0,
+            has_folder INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'active',
+            folder_name TEXT NOT NULL,
+            archive_month TEXT,
+            archive_project_folder TEXT,
+            created_at TEXT NOT NULL,
+            source_module_id TEXT,
+            external_id TEXT,
+            source_label TEXT,
+            UNIQUE(directory_id, number)
+        );
+        INSERT INTO directories (name, sort_order) VALUES ('P', 0);
+        INSERT INTO tasks (
+            directory_id, number, description, folder_name, created_at,
+            source_module_id, external_id
+        ) VALUES
+            (1, 'a', '', 'a', '2026-01-01T00:00:00', 'mod', 'ext-1'),
+            (1, 'b', '', 'b', '2026-01-01T00:00:00', 'mod', 'ext-1'),
+            (1, 'c', '', 'c', '2026-01-01T00:00:00', 'mod', 'ext-1');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SqliteRepository(db)
+    t1 = repo.get_task(1)
+    t2 = repo.get_task(2)
+    t3 = repo.get_task(3)
+    assert t1 is not None and t1.external_id == "ext-1"
+    assert t2 is not None and t2.external_id is not None
+    assert t3 is not None and t3.external_id is not None
+    assert t2.external_id.startswith("ext-1_Дубль_")
+    assert t3.external_id.startswith("ext-1_Дубль_")
+    assert t2.external_id != t3.external_id
+    digest2 = hashlib.sha256(b"2").hexdigest()[:8]
+    assert t2.external_id == f"ext-1_Дубль_{digest2}"
+
+    ids = repo.list_source_external_ids(1, "mod")
+    assert "ext-1" in ids
+    assert t2.external_id in ids
+
+    with pytest.raises(sqlite3.IntegrityError):
+        from datetime import datetime
+
+        from taskmanager.domain import Task, TaskStatus
+
+        repo.add_task(
+            Task(
+                id=None,
+                project_id=1,
+                number="dup",
+                description="",
+                folder_name="dup",
+                status=TaskStatus.ACTIVE,
+                source_module_id="mod",
+                external_id="ext-1",
+                created_at=datetime(2026, 1, 2),
+            )
+        )
+    repo.close()
+
+
+def test_create_task_duplicate_source_link_raises(service: TaskService):
+    project = service.create_project("SrcDup")
+    service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="1",
+            description="first",
+            create_folder=False,
+            source_module_id="mod",
+            external_id="42",
+        )
+    )
+    with pytest.raises(ServiceError, match="уже импортирован"):
+        service.create_task(
+            CreateTaskRequest(
+                project_id=project.id,
+                number="2",
+                description="second",
+                create_folder=False,
+                source_module_id="mod",
+                external_id="42",
+            )
+        )
+
+
+def test_workflow_status_local_and_blocked_when_sourced(service: TaskService):
+    from taskmanager.domain import WorkflowStatus
+
+    project = service.create_project("Wf")
+    local = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="1",
+            create_folder=False,
+            workflow_status=WorkflowStatus.WAITING,
+        )
+    )
+    assert local.workflow_status == WorkflowStatus.WAITING
+    assert local.display_status == "Ждёт"
+    updated = service.update_task(
+        local.id, UpdateTaskRequest(workflow_status=WorkflowStatus.DONE)
+    )
+    assert updated.display_status == "Готово"
+
+    sourced = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="2",
+            create_folder=False,
+            source_module_id="m",
+            external_id="1",
+            source_status_label="НАЗНАЧЕНО",
+        )
+    )
+    assert sourced.display_status == "НАЗНАЧЕНО"
+    with pytest.raises(ServiceError, match="привязкой"):
+        service.update_task(
+            sourced.id, UpdateTaskRequest(workflow_status=WorkflowStatus.DONE)
+        )
