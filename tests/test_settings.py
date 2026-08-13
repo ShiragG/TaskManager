@@ -20,6 +20,7 @@ def test_settings_roundtrip(tmp_path: Path):
     assert loaded.warning_lead_days == 3
     assert loaded.create_notes_file is True
     assert loaded.create_task_folder is True
+    assert loaded.autonumber_on_create is False
     assert loaded.theme_mode == "system"
     assert "Белый" in loaded.colors
 
@@ -117,3 +118,31 @@ def test_settings_drops_unknown_keys(tmp_path: Path):
     assert "dsn" not in data
     assert "far" not in data
     assert data["work_dir"] == str(work) or data["work_dir"] == work.as_posix()
+
+
+def test_event_settings_roundtrip_and_invalid_snooze(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(
+        work_dir=str(tmp_path / "work"),
+        event_sound_enabled=False,
+        event_os_notification=False,
+        event_snooze_minutes=60,
+    )
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.event_sound_enabled is False
+    assert loaded.event_os_notification is False
+    assert loaded.event_snooze_minutes == 60
+
+    work = tmp_path / "w2"
+    work.mkdir()
+    path2 = tmp_path / "settings2.json"
+    path2.write_text(
+        f'{{"work_dir": "{work.as_posix()}", "event_snooze_minutes": 7}}',
+        encoding="utf-8",
+    )
+    loaded2 = SettingsStore(path2).load()
+    assert loaded2.event_snooze_minutes == 15
+    assert loaded2.event_sound_enabled is True
+    assert loaded2.event_os_notification is True

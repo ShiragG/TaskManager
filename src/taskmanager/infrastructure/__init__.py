@@ -1,1 +1,1 @@
-"""Infrastructure adapters: SQLite, filesystem, platform open."""
+"""Infrastructure adapters: SQLite, filesystem, platform open, event sounds."""

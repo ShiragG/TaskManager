@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from taskmanager.infrastructure.event_sounds import parse_event_sound_path
 from taskmanager.infrastructure.paths import resolve_work_dir
 from taskmanager.services.hotkeys import default_hotkeys_copy, normalize_hotkeys
 
@@ -22,6 +23,29 @@ THEME_LIGHT = "light"
 THEME_DARK = "dark"
 THEME_SYSTEM = "system"
 THEME_MODES = frozenset({THEME_LIGHT, THEME_DARK, THEME_SYSTEM})
+
+SNOOZE_MINUTES: tuple[int, ...] = (1, 5, 10, 15, 30, 60, 120, 180)
+SNOOZE_LABELS: dict[int, str] = {
+    1: "1 мин",
+    5: "5 мин",
+    10: "10 мин",
+    15: "15 мин",
+    30: "30 мин",
+    60: "1 ч",
+    120: "2 ч",
+    180: "3 ч",
+}
+DEFAULT_SNOOZE_MINUTES = 15
+
+
+def parse_snooze_minutes(value: Any) -> int:
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_SNOOZE_MINUTES
+    if minutes in SNOOZE_MINUTES:
+        return minutes
+    return DEFAULT_SNOOZE_MINUTES
 
 
 @dataclass
@@ -90,9 +114,14 @@ class Settings:
     warning_lead_days: int = 1
     create_notes_file: bool = True
     create_task_folder: bool = True
+    autonumber_on_create: bool = False
     show_priority_colors: bool = True
     debug_logging: bool = False
     theme_mode: str = THEME_SYSTEM
+    event_sound_enabled: bool = True
+    event_sound_path: str = ""
+    event_os_notification: bool = True
+    event_snooze_minutes: int = DEFAULT_SNOOZE_MINUTES
     colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLORS))
     hotkeys: dict[str, str] = field(default_factory=default_hotkeys_copy)
 
@@ -115,6 +144,14 @@ class Settings:
         merged["hotkeys"] = normalize_hotkeys(
             raw_hotkeys if isinstance(raw_hotkeys, dict) else None
         )
+        merged["event_sound_enabled"] = bool(merged.get("event_sound_enabled", True))
+        merged["event_sound_path"] = parse_event_sound_path(
+            merged.get("event_sound_path")
+        )
+        merged["event_os_notification"] = bool(merged.get("event_os_notification", True))
+        merged["event_snooze_minutes"] = parse_snooze_minutes(
+            merged.get("event_snooze_minutes")
+        )
         return cls(**merged)
 
 
@@ -128,7 +165,7 @@ class SettingsStore:
 
     def load(self) -> Settings:
         if not self.path.is_file():
-            settings = Settings()
+            settings = Settings.from_dict({})
             self.pending_source_module_migration = []
             self.save(settings)
             self._ensure_work_dir(settings)

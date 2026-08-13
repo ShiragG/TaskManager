@@ -28,9 +28,21 @@ _Avoid_: shortcut, bookmark, reference
 The root filesystem path under which project folders, templates, and the archive live when used.
 _Avoid_: workspace root, project root, home
 
+**Number** (номер):
+The Task identifier unique within a Project (text; also the folder name). Autofill proposes the next whole number after the Project high-water mark; the mark advances only when a Task is created with that proposed number.
+_Avoid_: id, title
+
 **Folder name**:
-The on-disk name of a task folder when one exists, equal to the task **number** (sanitized). When the number changes and a folder is present, the folder is renamed and `folder_name` is updated in SQLite. Description is metadata only and is not part of the folder name.
+The on-disk name of a task folder when one exists, equal to the task **Number** (sanitized). When the number changes and a folder is present, the folder is renamed and `folder_name` is updated in SQLite. Description is metadata only and is not part of the folder name.
 _Avoid_: path, title, display name
+
+**Срок**:
+An optional date on a Task (no time of day) when the work should be done. Distinct from an Event.
+_Avoid_: reminder, event, deadline (as a separate entity)
+
+**Event** (событие):
+A calendar record (text, local date/time, repeat rule) that may be linked to a Task. Not Срок and not a notification toast; the Calendar window is where occurrences are browsed. The UI never says «серия» — delete is «Удалить событие»; snooze («Напомнить через») delays a ping and is not a second entity.
+_Avoid_: reminder, серия, срок, toast, notification (the UI chrome)
 
 **Hidden** (скрытая):
 A task flag: in the default view the task is omitted; in «Скрытые» mode only hidden active tasks are listed. Mutually exclusive with archive browsing mode.

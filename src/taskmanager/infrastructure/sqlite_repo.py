@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 
 from taskmanager.domain import (
     Link,
     Project,
+    ReminderRule,
+    ReminderSeries,
     Task,
     TaskStatus,
     WorkflowStatus,
+    html_to_plain,
+    parse_reminder_rule,
+    parse_whole_number,
     parse_workflow_status,
 )
 
@@ -18,7 +24,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS directories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    number_high_water INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -27,6 +34,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     number TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     comment TEXT NOT NULL DEFAULT '',
+    description_plain TEXT NOT NULL DEFAULT '',
+    comment_plain TEXT NOT NULL DEFAULT '',
     date_end TEXT,
     color TEXT,
     priority INTEGER NOT NULL DEFAULT 10,
@@ -70,11 +79,33 @@ CREATE TABLE IF NOT EXISTS source_modules (
     update_asset_pattern TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+    text TEXT NOT NULL DEFAULT '',
+    time_of_day TEXT NOT NULL,
+    rule TEXT NOT NULL,
+    once_date TEXT,
+    weekdays TEXT NOT NULL DEFAULT '[]',
+    month_day INTEGER,
+    last_acknowledged_occurrence TEXT,
+    skipped_occurrences TEXT NOT NULL DEFAULT '[]'
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_directory ON tasks(directory_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_links_task ON links(task_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_task ON reminders(task_id);
 -- Unique source link index: see SOURCE_LINK_UNIQUE_INDEX (applied in _migrate).
 """
+
+def _parse_time_of_day(value: str) -> time:
+    text = (value or "00:00").strip()
+    parts = text.split(":")
+    hour = int(parts[0]) if parts and parts[0].isdigit() else 0
+    minute = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    return time(hour=min(hour, 23), minute=min(minute, 59))
+
 
 # Applied in _migrate after source columns exist and duplicates are renamed.
 SOURCE_LINK_UNIQUE_INDEX = """
@@ -194,6 +225,137 @@ class SqliteRepository:
         )
         self._dedupe_source_links()
         self._conn.executescript(SOURCE_LINK_UNIQUE_INDEX)
+
+        self._migrate_plain_columns()
+        self._migrate_number_high_water()
+        self._migrate_reminders_table()
+        self._migrate_reminders_task_id_nullable()
+
+    def _migrate_plain_columns(self) -> None:
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        added = False
+        if "description_plain" not in cols:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN description_plain TEXT NOT NULL DEFAULT ''"
+            )
+            added = True
+        if "comment_plain" not in cols:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN comment_plain TEXT NOT NULL DEFAULT ''"
+            )
+            added = True
+        if not added:
+            empty = self._conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM tasks
+                WHERE (description != '' AND description_plain = '')
+                   OR (comment != '' AND comment_plain = '')
+                """
+            ).fetchone()
+            if empty is None or int(empty["n"]) == 0:
+                return
+        rows = self._conn.execute(
+            "SELECT id, description, comment FROM tasks"
+        ).fetchall()
+        for row in rows:
+            self._conn.execute(
+                """
+                UPDATE tasks SET description_plain = ?, comment_plain = ?
+                WHERE id = ?
+                """,
+                (
+                    html_to_plain(row["description"] or ""),
+                    html_to_plain(row["comment"] or ""),
+                    row["id"],
+                ),
+            )
+
+    def _migrate_number_high_water(self) -> None:
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(directories)").fetchall()
+        }
+        if "number_high_water" in cols:
+            return
+        self._conn.execute(
+            "ALTER TABLE directories ADD COLUMN number_high_water "
+            "INTEGER NOT NULL DEFAULT 0"
+        )
+        projects = self._conn.execute("SELECT id FROM directories").fetchall()
+        for project in projects:
+            numbers = self._conn.execute(
+                "SELECT number FROM tasks WHERE directory_id = ?",
+                (project["id"],),
+            ).fetchall()
+            water = 0
+            for row in numbers:
+                parsed = parse_whole_number(str(row["number"]))
+                if parsed is not None and parsed > water:
+                    water = parsed
+            self._conn.execute(
+                "UPDATE directories SET number_high_water = ? WHERE id = ?",
+                (water, project["id"]),
+            )
+
+    def _migrate_reminders_table(self) -> None:
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+                text TEXT NOT NULL DEFAULT '',
+                time_of_day TEXT NOT NULL,
+                rule TEXT NOT NULL,
+                once_date TEXT,
+                weekdays TEXT NOT NULL DEFAULT '[]',
+                month_day INTEGER,
+                last_acknowledged_occurrence TEXT,
+                skipped_occurrences TEXT NOT NULL DEFAULT '[]'
+            )
+            """
+        )
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminders_task ON reminders(task_id)"
+        )
+
+    def _migrate_reminders_task_id_nullable(self) -> None:
+        cols = {
+            row["name"]: row
+            for row in self._conn.execute("PRAGMA table_info(reminders)").fetchall()
+        }
+        task_col = cols.get("task_id")
+        if task_col is None or int(task_col["notnull"]) == 0:
+            return
+        self._conn.executescript(
+            """
+            CREATE TABLE reminders_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+                text TEXT NOT NULL DEFAULT '',
+                time_of_day TEXT NOT NULL,
+                rule TEXT NOT NULL,
+                once_date TEXT,
+                weekdays TEXT NOT NULL DEFAULT '[]',
+                month_day INTEGER,
+                last_acknowledged_occurrence TEXT,
+                skipped_occurrences TEXT NOT NULL DEFAULT '[]'
+            );
+            INSERT INTO reminders_new (
+                id, task_id, text, time_of_day, rule, once_date, weekdays,
+                month_day, last_acknowledged_occurrence, skipped_occurrences
+            )
+            SELECT
+                id, task_id, text, time_of_day, rule, once_date, weekdays,
+                month_day, last_acknowledged_occurrence, skipped_occurrences
+            FROM reminders;
+            DROP TABLE reminders;
+            ALTER TABLE reminders_new RENAME TO reminders;
+            CREATE INDEX IF NOT EXISTS idx_reminders_task ON reminders(task_id);
+            """
+        )
 
     def _dedupe_source_links(self) -> None:
         """Rename duplicate source links so the unique index can be created.
@@ -320,27 +482,30 @@ class SqliteRepository:
 
     def list_projects(self) -> list[Project]:
         rows = self._conn.execute(
-            "SELECT id, name, sort_order FROM directories ORDER BY sort_order, name"
+            "SELECT id, name, sort_order, number_high_water "
+            "FROM directories ORDER BY sort_order, name"
         ).fetchall()
-        return [Project(id=r["id"], name=r["name"], sort_order=r["sort_order"]) for r in rows]
+        return [self._project_from_row(r) for r in rows]
 
     def get_project(self, project_id: int) -> Project | None:
         row = self._conn.execute(
-            "SELECT id, name, sort_order FROM directories WHERE id = ?",
+            "SELECT id, name, sort_order, number_high_water "
+            "FROM directories WHERE id = ?",
             (project_id,),
         ).fetchone()
         if row is None:
             return None
-        return Project(id=row["id"], name=row["name"], sort_order=row["sort_order"])
+        return self._project_from_row(row)
 
     def get_project_by_name(self, name: str) -> Project | None:
         row = self._conn.execute(
-            "SELECT id, name, sort_order FROM directories WHERE name = ?",
+            "SELECT id, name, sort_order, number_high_water "
+            "FROM directories WHERE name = ?",
             (name,),
         ).fetchone()
         if row is None:
             return None
-        return Project(id=row["id"], name=row["name"], sort_order=row["sort_order"])
+        return self._project_from_row(row)
 
     def add_project(self, name: str, sort_order: int | None = None) -> Project:
         if sort_order is None:
@@ -349,11 +514,32 @@ class SqliteRepository:
             ).fetchone()
             sort_order = int(row["next_order"])
         cur = self._conn.execute(
-            "INSERT INTO directories (name, sort_order) VALUES (?, ?)",
+            "INSERT INTO directories (name, sort_order, number_high_water) "
+            "VALUES (?, ?, 0)",
             (name, sort_order),
         )
         self._conn.commit()
-        return Project(id=cur.lastrowid, name=name, sort_order=sort_order)
+        return Project(
+            id=cur.lastrowid, name=name, sort_order=sort_order, number_high_water=0
+        )
+
+    @staticmethod
+    def _project_from_row(row: sqlite3.Row) -> Project:
+        keys = row.keys()
+        water = int(row["number_high_water"]) if "number_high_water" in keys else 0
+        return Project(
+            id=row["id"],
+            name=row["name"],
+            sort_order=row["sort_order"],
+            number_high_water=water,
+        )
+
+    def set_number_high_water(self, project_id: int, value: int) -> None:
+        self._conn.execute(
+            "UPDATE directories SET number_high_water = ? WHERE id = ?",
+            (int(value), project_id),
+        )
+        self._conn.commit()
 
     def rename_project(self, project_id: int, name: str) -> None:
         self._conn.execute(
@@ -400,7 +586,7 @@ class SqliteRepository:
         if query:
             like = f"%{query}%"
             clauses.append(
-                "(number LIKE ? OR description LIKE ? OR comment LIKE ?)"
+                "(number LIKE ? OR description_plain LIKE ? OR comment_plain LIKE ?)"
             )
             params.extend([like, like, like])
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -462,18 +648,22 @@ class SqliteRepository:
         cur = self._conn.execute(
             """
             INSERT INTO tasks (
-                directory_id, number, description, comment, date_end, color, priority,
+                directory_id, number, description, comment,
+                description_plain, comment_plain,
+                date_end, color, priority,
                 hidden, has_folder, status, folder_name, archive_month,
                 archive_project_folder, created_at,
                 source_module_id, external_id, source_label,
                 workflow_status, source_status_id, source_status_label
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.project_id,
                 task.number,
                 task.description,
                 task.comment,
+                task.description_plain,
+                task.comment_plain,
                 task.date_end.isoformat() if task.date_end else None,
                 task.color,
                 task.priority,
@@ -503,6 +693,7 @@ class SqliteRepository:
             """
             UPDATE tasks SET
                 directory_id = ?, number = ?, description = ?, comment = ?,
+                description_plain = ?, comment_plain = ?,
                 date_end = ?, color = ?, priority = ?, hidden = ?, has_folder = ?,
                 status = ?, folder_name = ?, archive_month = ?,
                 archive_project_folder = ?,
@@ -515,6 +706,8 @@ class SqliteRepository:
                 task.number,
                 task.description,
                 task.comment,
+                task.description_plain,
+                task.comment_plain,
                 task.date_end.isoformat() if task.date_end else None,
                 task.color,
                 task.priority,
@@ -599,6 +792,16 @@ class SqliteRepository:
         source_status_label = (
             row["source_status_label"] if "source_status_label" in keys else None
         )
+        description_plain = (
+            row["description_plain"]
+            if "description_plain" in keys and row["description_plain"] is not None
+            else ""
+        )
+        comment_plain = (
+            row["comment_plain"]
+            if "comment_plain" in keys and row["comment_plain"] is not None
+            else ""
+        )
         return Task(
             id=row["id"],
             project_id=row["directory_id"],
@@ -621,6 +824,8 @@ class SqliteRepository:
             workflow_status=workflow_status,
             source_status_id=source_status_id,
             source_status_label=source_status_label,
+            description_plain=description_plain,
+            comment_plain=comment_plain,
         )
 
     # --- source credentials ---
@@ -721,6 +926,136 @@ class SqliteRepository:
             "DELETE FROM source_modules WHERE module_id = ?", (module_id,)
         )
         self._conn.commit()
+
+    def list_task_numbers(self, project_id: int) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT number FROM tasks WHERE directory_id = ?",
+            (project_id,),
+        ).fetchall()
+        return [str(r["number"]) for r in rows]
+
+    # --- reminders ---
+
+    def list_reminders(
+        self, *, task_id: int | None = None
+    ) -> list[ReminderSeries]:
+        if task_id is None:
+            rows = self._conn.execute(
+                "SELECT * FROM reminders ORDER BY id"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM reminders WHERE task_id = ? ORDER BY id",
+                (task_id,),
+            ).fetchall()
+        return [self._reminder_from_row(r) for r in rows]
+
+    def get_reminder(self, reminder_id: int) -> ReminderSeries | None:
+        row = self._conn.execute(
+            "SELECT * FROM reminders WHERE id = ?", (reminder_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        return self._reminder_from_row(row)
+
+    def add_reminder(self, series: ReminderSeries) -> ReminderSeries:
+        cur = self._conn.execute(
+            """
+            INSERT INTO reminders (
+                task_id, text, time_of_day, rule, once_date, weekdays,
+                month_day, last_acknowledged_occurrence, skipped_occurrences
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            self._reminder_row_values(series),
+        )
+        self._conn.commit()
+        series.id = cur.lastrowid
+        return series
+
+    def update_reminder(self, series: ReminderSeries) -> None:
+        assert series.id is not None
+        values = self._reminder_row_values(series)
+        self._conn.execute(
+            """
+            UPDATE reminders SET
+                task_id = ?, text = ?, time_of_day = ?, rule = ?,
+                once_date = ?, weekdays = ?, month_day = ?,
+                last_acknowledged_occurrence = ?, skipped_occurrences = ?
+            WHERE id = ?
+            """,
+            (*values, series.id),
+        )
+        self._conn.commit()
+
+    def delete_reminder(self, reminder_id: int) -> None:
+        self._conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        self._conn.commit()
+
+    def delete_reminders_for_task(self, task_id: int) -> None:
+        self._conn.execute("DELETE FROM reminders WHERE task_id = ?", (task_id,))
+        self._conn.commit()
+
+    @staticmethod
+    def _reminder_row_values(series: ReminderSeries) -> tuple[object, ...]:
+        skipped = [
+            occ.isoformat(timespec="seconds") for occ in series.skipped_occurrences
+        ]
+        acked = (
+            series.last_acknowledged_occurrence.isoformat(timespec="seconds")
+            if series.last_acknowledged_occurrence
+            else None
+        )
+        return (
+            series.task_id,
+            series.text,
+            series.time_of_day.strftime("%H:%M"),
+            series.rule.value,
+            series.once_date.isoformat() if series.once_date else None,
+            json.dumps(list(series.weekdays)),
+            series.month_day,
+            acked,
+            json.dumps(skipped),
+        )
+
+    @staticmethod
+    def _reminder_from_row(row: sqlite3.Row) -> ReminderSeries:
+        clock = _parse_time_of_day(row["time_of_day"])
+        once_date = date.fromisoformat(row["once_date"]) if row["once_date"] else None
+        try:
+            weekdays_raw = json.loads(row["weekdays"] or "[]")
+        except json.JSONDecodeError:
+            weekdays_raw = []
+        weekdays = tuple(
+            int(w) for w in weekdays_raw if isinstance(w, int) and 0 <= w <= 6
+        )
+        acked = (
+            datetime.fromisoformat(row["last_acknowledged_occurrence"])
+            if row["last_acknowledged_occurrence"]
+            else None
+        )
+        try:
+            skipped_raw = json.loads(row["skipped_occurrences"] or "[]")
+        except json.JSONDecodeError:
+            skipped_raw = []
+        skipped: list[datetime] = []
+        for item in skipped_raw:
+            try:
+                skipped.append(datetime.fromisoformat(str(item)))
+            except ValueError:
+                continue
+        raw_task = row["task_id"]
+        return ReminderSeries(
+            id=row["id"],
+            task_id=int(raw_task) if raw_task is not None else None,
+            text=row["text"] or "",
+            time_of_day=clock,
+            rule=parse_reminder_rule(row["rule"]),
+            once_date=once_date,
+            weekdays=weekdays,
+            month_day=row["month_day"],
+            last_acknowledged_occurrence=acked,
+            skipped_occurrences=tuple(skipped),
+        )
 
     def count_tasks_for_source_module(self, module_id: str) -> int:
         row = self._conn.execute(

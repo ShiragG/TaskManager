@@ -357,6 +357,10 @@ class TaskDialog(QDialog):
         initial_links: list[tuple[str, str]] | None = None,
         source_linked: bool = False,
         initial_source_status: str = "",
+        reminder_rows: list[tuple[int, str]] | None = None,
+        on_delete_reminder: Callable[[int], bool] | None = None,
+        reminder_service=None,
+        on_reminders_changed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -367,6 +371,9 @@ class TaskDialog(QDialog):
         self._source_linked = bool(
             source_linked or (task is not None and task.has_source)
         )
+        self._on_delete_reminder = on_delete_reminder
+        self._reminder_service = reminder_service
+        self._on_reminders_changed = on_reminders_changed
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -530,6 +537,32 @@ class TaskDialog(QDialog):
         link_btns.addStretch()
         layout.addLayout(link_btns)
 
+        self.reminders_list = QListWidget()
+        self.add_reminder_btn = QPushButton("Добавить событие")
+        self.add_reminder_btn.setObjectName("secondaryButton")
+        self.delete_reminder_btn = QPushButton("Удалить событие")
+        self.delete_reminder_btn.setObjectName("secondaryButton")
+        if reminder_rows is not None:
+            layout.addWidget(QLabel("События"))
+            self.reminders_list.setMinimumHeight(80)
+            for rid, label in reminder_rows:
+                item = QListWidgetItem(label)
+                item.setData(Qt.ItemDataRole.UserRole, rid)
+                self.reminders_list.addItem(item)
+            layout.addWidget(self.reminders_list)
+            rem_btns = QHBoxLayout()
+            self.add_reminder_btn.clicked.connect(self._add_reminder)
+            self.delete_reminder_btn.clicked.connect(self._delete_selected_reminder)
+            self.reminders_list.itemDoubleClicked.connect(self._edit_reminder)
+            rem_btns.addWidget(self.add_reminder_btn)
+            rem_btns.addWidget(self.delete_reminder_btn)
+            rem_btns.addStretch()
+            layout.addLayout(rem_btns)
+        else:
+            self.reminders_list.hide()
+            self.add_reminder_btn.hide()
+            self.delete_reminder_btn.hide()
+
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
@@ -566,6 +599,81 @@ class TaskDialog(QDialog):
         row = self.links_table.currentRow()
         if row >= 0:
             self.links_table.removeRow(row)
+
+    def _append_reminder_row(self, reminder_id: int, label: str) -> None:
+        item = QListWidgetItem(label)
+        item.setData(Qt.ItemDataRole.UserRole, reminder_id)
+        self.reminders_list.addItem(item)
+
+    def _add_reminder(self) -> None:
+        if self._task is None or self._task.id is None or self._reminder_service is None:
+            return
+        from taskmanager.services.task_service import ServiceError
+        from taskmanager.ui.reminders_window import (
+            ReminderEditDialog,
+            format_reminder_series,
+        )
+
+        edit = ReminderEditDialog(self._reminder_service, self, task=self._task)
+        if edit.exec() != ReminderEditDialog.DialogCode.Accepted:
+            return
+        try:
+            series = edit.save_to_service()
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        if series.id is None:
+            return
+        self._append_reminder_row(series.id, format_reminder_series(series))
+        if self._on_reminders_changed is not None:
+            self._on_reminders_changed()
+
+    def _edit_reminder(self, item: QListWidgetItem) -> None:
+        if self._reminder_service is None:
+            return
+        rid = item.data(Qt.ItemDataRole.UserRole)
+        if rid is None:
+            return
+        from taskmanager.services.task_service import ServiceError
+        from taskmanager.ui.reminders_window import (
+            ReminderEditDialog,
+            format_reminder_series,
+        )
+
+        try:
+            series = self._reminder_service.get_reminder(int(rid))
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        edit = ReminderEditDialog(
+            self._reminder_service, self, task=self._task, series=series
+        )
+        if edit.exec() != ReminderEditDialog.DialogCode.Accepted:
+            return
+        try:
+            updated = edit.save_to_service()
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        if self._task is not None and updated.task_id != self._task.id:
+            self.reminders_list.takeItem(self.reminders_list.row(item))
+        else:
+            item.setText(format_reminder_series(updated))
+        if self._on_reminders_changed is not None:
+            self._on_reminders_changed()
+
+    def _delete_selected_reminder(self) -> None:
+        item = self.reminders_list.currentItem()
+        if item is None or self._on_delete_reminder is None:
+            return
+        rid = item.data(Qt.ItemDataRole.UserRole)
+        if rid is None:
+            return
+        answer = QMessageBox.question(self, "Удаление", "Удалить событие?")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if self._on_delete_reminder(int(rid)):
+            self.reminders_list.takeItem(self.reminders_list.row(item))
 
     def _accept(self) -> None:
         if not self.number_edit.text().strip():

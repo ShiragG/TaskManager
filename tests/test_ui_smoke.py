@@ -28,6 +28,55 @@ def app_env(tmp_path: Path, qtbot):
     repo.close()
 
 
+def test_reload_projects_fills_only_current_tab(app_env, qtbot, monkeypatch):
+    window, service = app_env
+    first = service.create_project("First")
+    second = service.create_project("Second")
+    service.create_task(
+        CreateTaskRequest(project_id=first.id, number="1", create_folder=False)
+    )
+    service.create_task(
+        CreateTaskRequest(project_id=second.id, number="2", create_folder=False)
+    )
+    filled: list[str] = []
+    original = window._fill_table
+
+    def spy(table, project):
+        filled.append(project.name)
+        return original(table, project)
+
+    monkeypatch.setattr(window, "_fill_table", spy)
+    window.reload_projects()
+    assert window.tabs.count() == 2
+    assert filled == [window.tabs.tabText(window.tabs.currentIndex())]
+    other = 1 if window.tabs.currentIndex() == 0 else 0
+    window.tabs.setCurrentIndex(other)
+    assert window.tabs.tabText(other) in filled
+    assert filled.count(window.tabs.tabText(other)) >= 1
+
+
+def test_plain_cell_is_truncated(app_env, qtbot):
+    from taskmanager.ui.main_window import COL_DESCRIPTION
+
+    window, service = app_env
+    project = service.create_project("Long")
+    long_text = "x" * 200
+    service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="1",
+            description=long_text,
+            create_folder=False,
+        )
+    )
+    window.reload_projects()
+    table = window.tabs.widget(0)
+    cell = table.item(0, COL_DESCRIPTION).text()
+    assert cell.endswith("...")
+    assert len(cell) == 123
+    assert service.get_task(service.list_tasks(project.id)[0].id).description_plain == long_text
+
+
 def test_main_window_creates_project_and_task(app_env, qtbot):
     window, service = app_env
     project = service.create_project("UIDir")
@@ -570,3 +619,41 @@ def test_status_column_workflow_vs_source(app_env, qtbot):
     assert by_number["S1"] == "НАЗНАЧЕНО"
     assert local.display_status == "В работе"
     assert sourced.display_status == "НАЗНАЧЕНО"
+
+
+def test_number_column_sorts_naturally(app_env, qtbot):
+    from PySide6.QtCore import Qt
+
+    window, service = app_env
+    project = service.create_project("NatSort")
+    for number in ("10а", "2", "10", "2а", "INC-10", "INC-9"):
+        service.create_task(
+            CreateTaskRequest(
+                project_id=project.id, number=number, create_folder=False
+            )
+        )
+    window.reload_projects()
+    table = window.current_table()
+    assert table is not None
+    table.sortItems(COL_NUMBER, Qt.SortOrder.AscendingOrder)
+    numbers = [table.item(r, COL_NUMBER).text() for r in range(table.rowCount())]
+    assert numbers == ["2", "2а", "10", "10а", "INC-9", "INC-10"]
+
+
+def test_settings_dialog_tabs_and_event_defaults(app_env, qtbot):
+    from PySide6.QtWidgets import QTabWidget
+
+    from taskmanager.ui.settings_dialog import SettingsDialog
+
+    window, _service = app_env
+    dialog = SettingsDialog(window.settings, window.settings_store, window)
+    qtbot.addWidget(dialog)
+    tabs = dialog.findChildren(QTabWidget)
+    assert tabs
+    tab = tabs[0]
+    titles = [tab.tabText(i) for i in range(tab.count())]
+    assert titles == ["Общие", "Заявки", "События", "Горячие клавиши"]
+    assert dialog.event_sound_cb.isChecked()
+    assert dialog.event_os_notification_cb.isChecked()
+    assert dialog.snooze_combo.currentData() == 15
+    assert dialog._update_panel.isHidden()

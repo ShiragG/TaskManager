@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -16,13 +16,22 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
+from taskmanager.infrastructure.event_sounds import (
+    CUSTOM_SOUND_SENTINEL,
+    first_preferred_sound_path,
+    list_system_sound_files,
+    sound_choice_label,
+)
 from taskmanager.infrastructure.paths import resolve_work_dir
 from taskmanager.services.hotkeys import (
     DEFAULT_HOTKEYS,
@@ -33,18 +42,25 @@ from taskmanager.services.hotkeys import (
     validate_hotkeys,
 )
 from taskmanager.services.settings_service import (
+    SNOOZE_LABELS,
+    SNOOZE_MINUTES,
     THEME_DARK,
     THEME_LIGHT,
     THEME_SYSTEM,
     Settings,
     SettingsStore,
+    parse_snooze_minutes,
 )
 from taskmanager.ui.about_dialog import AboutDialog
+from taskmanager.ui.event_sound_player import EventSoundPlayer
 from taskmanager.ui.source_modules_dialog import SourceModulesSettingsDialog
 from taskmanager.version import get_version
 
 
 class SettingsDialog(QDialog):
+    cancel_update_requested = Signal()
+    install_update_requested = Signal()
+
     def __init__(
         self,
         settings: Settings,
@@ -56,13 +72,40 @@ class SettingsDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Настройки")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(620)
+        self.setMinimumHeight(520)
         self._store = store
         self._settings = settings
         self._on_check_updates = on_check_updates
         self._source_host = source_host
 
         layout = QVBoxLayout(self)
+        tabs = QTabWidget()
+        layout.addWidget(tabs, stretch=1)
+
+        general = QWidget()
+        tasks = QWidget()
+        events = QWidget()
+        hotkeys_page = QWidget()
+        tabs.addTab(general, "Общие")
+        tabs.addTab(tasks, "Заявки")
+        tabs.addTab(events, "События")
+        tabs.addTab(hotkeys_page, "Горячие клавиши")
+
+        self._build_general(general, settings)
+        self._build_tasks(tasks, settings)
+        self._build_events(events, settings)
+        self._build_hotkeys(hotkeys_page, settings)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _build_general(self, page: QWidget, settings: Settings) -> None:
+        layout = QVBoxLayout(page)
         form = QFormLayout()
 
         self.work_dir_edit = QLineEdit(settings.work_dir)
@@ -89,41 +132,6 @@ class SettingsDialog(QDialog):
         self.theme_combo.setCurrentIndex(idx if idx >= 0 else 2)
         form.addRow("Тема", self.theme_combo)
 
-        self.highlight_cb = QCheckBox("Подсвечивать сроки (включая ближайшие)")
-        self.highlight_cb.setChecked(settings.highlight_warnings)
-        form.addRow(self.highlight_cb)
-
-        self.lead_days_spin = QSpinBox()
-        self.lead_days_spin.setRange(0, 365)
-        self.lead_days_spin.setValue(settings.warning_lead_days)
-        self.lead_days_spin.setSuffix(" дн.")
-        self.lead_days_spin.setMinimumWidth(120)
-        form.addRow("За сколько дней предупреждать", self.lead_days_spin)
-
-        self.warning_color_edit = QLineEdit(settings.warning_color)
-        self.warning_color_btn = QPushButton()
-        self.warning_color_btn.setFixedSize(28, 28)
-        self.warning_color_btn.setToolTip("Выбрать цвет")
-        self.warning_color_btn.clicked.connect(self._pick_warning_color)
-        self.warning_color_edit.textChanged.connect(self._sync_warning_swatch)
-        color_row = QHBoxLayout()
-        color_row.addWidget(self.warning_color_btn)
-        color_row.addWidget(self.warning_color_edit)
-        form.addRow("Цвет предупреждения", color_row)
-        self._sync_warning_swatch(self.warning_color_edit.text())
-
-        self.create_folder_cb = QCheckBox("Создавать папку заявки по умолчанию")
-        self.create_folder_cb.setChecked(settings.create_task_folder)
-        form.addRow(self.create_folder_cb)
-
-        self.create_notes_cb = QCheckBox("Создавать файл заметок по умолчанию")
-        self.create_notes_cb.setChecked(settings.create_notes_file)
-        form.addRow(self.create_notes_cb)
-
-        self.show_priority_colors_cb = QCheckBox("Цвета приоритета в таблице")
-        self.show_priority_colors_cb.setChecked(settings.show_priority_colors)
-        form.addRow(self.show_priority_colors_cb)
-
         self.debug_logging_cb = QCheckBox("Подробный лог (DEBUG/INFO)")
         self.debug_logging_cb.setChecked(settings.debug_logging)
         form.addRow(self.debug_logging_cb)
@@ -137,41 +145,6 @@ class SettingsDialog(QDialog):
         modules_row.addWidget(modules_btn)
         modules_row.addStretch()
         layout.addLayout(modules_row)
-
-        hotkeys_label = QLabel("Горячие клавиши")
-        hotkeys_label.setStyleSheet("font-weight: 600; margin-top: 8px;")
-        layout.addWidget(hotkeys_label)
-
-        self.hotkeys_table = QTableWidget(len(HOTKEY_ORDER), 3)
-        self.hotkeys_table.setHorizontalHeaderLabels(["Действие", "Сочетание", ""])
-        self.hotkeys_table.verticalHeader().setVisible(False)
-        self.hotkeys_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self.hotkeys_table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
-        )
-        self.hotkeys_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
-        self.hotkeys_table.horizontalHeader().setSectionResizeMode(
-            2, QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.hotkeys_table.setMinimumHeight(120)
-        current_hotkeys = normalize_hotkeys(settings.hotkeys)
-        self._hotkey_edits: dict[str, QKeySequenceEdit] = {}
-        for row, action_id in enumerate(HOTKEY_ORDER):
-            name_item = QTableWidgetItem(HOTKEY_LABELS[action_id])
-            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.hotkeys_table.setItem(row, 0, name_item)
-            edit = QKeySequenceEdit(QKeySequence(current_hotkeys[action_id]))
-            self._hotkey_edits[action_id] = edit
-            self.hotkeys_table.setCellWidget(row, 1, edit)
-            reset_btn = QPushButton("Сброс")
-            reset_btn.setObjectName("secondaryButton")
-            reset_btn.clicked.connect(
-                lambda _checked=False, aid=action_id: self._reset_hotkey(aid)
-            )
-            self.hotkeys_table.setCellWidget(row, 2, reset_btn)
-        layout.addWidget(self.hotkeys_table)
 
         hint = QLabel(
             "Метаданные заявок хранятся в SQLite рядом с исполняемым файлом. "
@@ -196,12 +169,143 @@ class SettingsDialog(QDialog):
         footer.addWidget(about_btn)
         layout.addLayout(footer)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        self._update_panel = QWidget()
+        update_row = QHBoxLayout(self._update_panel)
+        update_row.setContentsMargins(0, 0, 0, 0)
+        self._update_label = QLabel("Загрузка обновления…")
+        self._update_label.setWordWrap(True)
+        self._update_progress = QProgressBar()
+        self._update_progress.setMinimum(0)
+        self._update_progress.setMaximum(100)
+        self._update_progress.setValue(0)
+        self._update_cancel_btn = QPushButton("Отмена")
+        self._update_cancel_btn.setObjectName("secondaryButton")
+        self._update_cancel_btn.clicked.connect(self.cancel_update_requested.emit)
+        self._update_restart_btn = QPushButton("Установить и закрыть")
+        self._update_restart_btn.clicked.connect(self.install_update_requested.emit)
+        self._update_restart_btn.hide()
+        update_row.addWidget(self._update_label, stretch=1)
+        update_row.addWidget(self._update_progress, stretch=2)
+        update_row.addWidget(self._update_cancel_btn)
+        update_row.addWidget(self._update_restart_btn)
+        self._update_panel.hide()
+        layout.addWidget(self._update_panel)
+
+        layout.addStretch()
+
+    def _build_tasks(self, page: QWidget, settings: Settings) -> None:
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+
+        self.create_folder_cb = QCheckBox("Создавать папку заявки по умолчанию")
+        self.create_folder_cb.setChecked(settings.create_task_folder)
+        form.addRow(self.create_folder_cb)
+
+        self.create_notes_cb = QCheckBox("Создавать файл заметок по умолчанию")
+        self.create_notes_cb.setChecked(settings.create_notes_file)
+        form.addRow(self.create_notes_cb)
+
+        self.autonumber_cb = QCheckBox("Автонумерация при создании")
+        self.autonumber_cb.setChecked(settings.autonumber_on_create)
+        form.addRow(self.autonumber_cb)
+
+        self.show_priority_colors_cb = QCheckBox("Цвета приоритета в таблице")
+        self.show_priority_colors_cb.setChecked(settings.show_priority_colors)
+        form.addRow(self.show_priority_colors_cb)
+
+        self.highlight_cb = QCheckBox("Подсвечивать сроки (включая ближайшие)")
+        self.highlight_cb.setChecked(settings.highlight_warnings)
+        form.addRow(self.highlight_cb)
+
+        self.lead_days_spin = QSpinBox()
+        self.lead_days_spin.setRange(0, 365)
+        self.lead_days_spin.setValue(settings.warning_lead_days)
+        self.lead_days_spin.setSuffix(" дн.")
+        self.lead_days_spin.setMinimumWidth(120)
+        form.addRow("За сколько дней предупреждать", self.lead_days_spin)
+
+        self.warning_color_edit = QLineEdit(settings.warning_color)
+        self.warning_color_btn = QPushButton()
+        self.warning_color_btn.setFixedSize(28, 28)
+        self.warning_color_btn.setToolTip("Выбрать цвет")
+        self.warning_color_btn.clicked.connect(self._pick_warning_color)
+        self.warning_color_edit.textChanged.connect(self._sync_warning_swatch)
+        color_row = QHBoxLayout()
+        color_row.addWidget(self.warning_color_btn)
+        color_row.addWidget(self.warning_color_edit)
+        form.addRow("Цвет предупреждения", color_row)
+        self._sync_warning_swatch(self.warning_color_edit.text())
+
+        layout.addLayout(form)
+        layout.addStretch()
+
+    def _build_events(self, page: QWidget, settings: Settings) -> None:
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+
+        self.event_sound_cb = QCheckBox("Звук при событии")
+        self.event_sound_cb.setChecked(settings.event_sound_enabled)
+        form.addRow(self.event_sound_cb)
+
+        self.event_sound_combo = QComboBox()
+        self.preview_sound_btn = QPushButton("Прослушать")
+        self.preview_sound_btn.setObjectName("secondaryButton")
+        self.preview_sound_btn.clicked.connect(self._preview_event_sound)
+        sound_row = QHBoxLayout()
+        sound_row.addWidget(self.event_sound_combo, stretch=1)
+        sound_row.addWidget(self.preview_sound_btn)
+        form.addRow("Файл звука", sound_row)
+        self._sound_player = EventSoundPlayer(self)
+        self._fill_sound_combo(settings.event_sound_path)
+        self.event_sound_combo.currentIndexChanged.connect(self._on_sound_combo_changed)
+
+        self.event_os_notification_cb = QCheckBox("Системное уведомление ОС")
+        self.event_os_notification_cb.setChecked(settings.event_os_notification)
+        form.addRow(self.event_os_notification_cb)
+
+        self.snooze_combo = QComboBox()
+        for minutes in SNOOZE_MINUTES:
+            self.snooze_combo.addItem(SNOOZE_LABELS[minutes], minutes)
+        snooze_idx = self.snooze_combo.findData(
+            parse_snooze_minutes(settings.event_snooze_minutes)
         )
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        self.snooze_combo.setCurrentIndex(snooze_idx if snooze_idx >= 0 else 3)
+        form.addRow("«Напомнить через» по умолчанию", self.snooze_combo)
+
+        layout.addLayout(form)
+        layout.addStretch()
+
+    def _build_hotkeys(self, page: QWidget, settings: Settings) -> None:
+        layout = QVBoxLayout(page)
+        self.hotkeys_table = QTableWidget(len(HOTKEY_ORDER), 3)
+        self.hotkeys_table.setHorizontalHeaderLabels(["Действие", "Сочетание", ""])
+        self.hotkeys_table.verticalHeader().setVisible(False)
+        self.hotkeys_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.hotkeys_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.hotkeys_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.hotkeys_table.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.ResizeToContents
+        )
+        current_hotkeys = normalize_hotkeys(settings.hotkeys)
+        self._hotkey_edits: dict[str, QKeySequenceEdit] = {}
+        for row, action_id in enumerate(HOTKEY_ORDER):
+            name_item = QTableWidgetItem(HOTKEY_LABELS[action_id])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.hotkeys_table.setItem(row, 0, name_item)
+            edit = QKeySequenceEdit(QKeySequence(current_hotkeys[action_id]))
+            self._hotkey_edits[action_id] = edit
+            self.hotkeys_table.setCellWidget(row, 1, edit)
+            reset_btn = QPushButton("Сброс")
+            reset_btn.setObjectName("secondaryButton")
+            reset_btn.clicked.connect(
+                lambda _checked=False, aid=action_id: self._reset_hotkey(aid)
+            )
+            self.hotkeys_table.setCellWidget(row, 2, reset_btn)
+        layout.addWidget(self.hotkeys_table)
 
     def _open_modules(self) -> None:
         dialog = SourceModulesSettingsDialog(
@@ -225,6 +329,68 @@ class SettingsDialog(QDialog):
 
     def _open_about(self) -> None:
         AboutDialog(self).exec()
+
+    def _fill_sound_combo(self, selected_path: str) -> None:
+        self.event_sound_combo.blockSignals(True)
+        self.event_sound_combo.clear()
+        paths = [str(path) for path in list_system_sound_files()]
+        if selected_path and selected_path not in paths:
+            paths.insert(0, selected_path)
+        for path in paths:
+            self.event_sound_combo.addItem(sound_choice_label(path), path)
+        self.event_sound_combo.addItem("Свой файл…", CUSTOM_SOUND_SENTINEL)
+        if selected_path:
+            idx = self.event_sound_combo.findData(selected_path)
+            self.event_sound_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            preferred = first_preferred_sound_path()
+            idx = self.event_sound_combo.findData(preferred) if preferred else -1
+            if idx >= 0:
+                self.event_sound_combo.setCurrentIndex(idx)
+            elif self.event_sound_combo.count() > 1:
+                self.event_sound_combo.setCurrentIndex(0)
+        self._sound_combo_index = self.event_sound_combo.currentIndex()
+        self.event_sound_combo.blockSignals(False)
+
+    def _on_sound_combo_changed(self, index: int) -> None:
+        if self.event_sound_combo.itemData(index) != CUSTOM_SOUND_SENTINEL:
+            self._sound_combo_index = index
+            return
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Звук события",
+            "",
+            "Звук (*.wav *.ogg *.oga *.flac);;Все файлы (*)",
+        )
+        if chosen:
+            self._ensure_sound_combo_path(chosen)
+            self._sound_combo_index = self.event_sound_combo.currentIndex()
+            return
+        self.event_sound_combo.blockSignals(True)
+        self.event_sound_combo.setCurrentIndex(self._sound_combo_index)
+        self.event_sound_combo.blockSignals(False)
+
+    def _ensure_sound_combo_path(self, path: str) -> None:
+        idx = self.event_sound_combo.findData(path)
+        if idx < 0:
+            insert_at = max(0, self.event_sound_combo.count() - 1)
+            self.event_sound_combo.insertItem(
+                insert_at, sound_choice_label(path), path
+            )
+            idx = insert_at
+        self.event_sound_combo.setCurrentIndex(idx)
+
+    def _preview_event_sound(self) -> None:
+        path = self.event_sound_combo.currentData()
+        if not path or path == CUSTOM_SOUND_SENTINEL:
+            return
+        self._sound_player.play(str(path))
+
+    def _current_event_sound_path(self) -> str:
+        path = self.event_sound_combo.currentData()
+        if not path or path == CUSTOM_SOUND_SENTINEL:
+            return self._settings.event_sound_path
+        return str(path)
 
     def _browse_work_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -302,8 +468,15 @@ class SettingsDialog(QDialog):
         self._settings.warning_color = warning_color
         self._settings.create_task_folder = self.create_folder_cb.isChecked()
         self._settings.create_notes_file = self.create_notes_cb.isChecked()
+        self._settings.autonumber_on_create = self.autonumber_cb.isChecked()
         self._settings.show_priority_colors = self.show_priority_colors_cb.isChecked()
         self._settings.debug_logging = self.debug_logging_cb.isChecked()
+        self._settings.event_sound_enabled = self.event_sound_cb.isChecked()
+        self._settings.event_sound_path = self._current_event_sound_path()
+        self._settings.event_os_notification = self.event_os_notification_cb.isChecked()
+        self._settings.event_snooze_minutes = parse_snooze_minutes(
+            self.snooze_combo.currentData()
+        )
         self._settings.hotkeys = hotkeys
         self._store.save(self._settings)
         self.accept()

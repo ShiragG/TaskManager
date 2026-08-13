@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from taskmanager.infrastructure.github_http import (
+    github_urlopen,
+    wrap_github_url_error,
+)
 from taskmanager.infrastructure.paths import app_dir
 
 
@@ -378,7 +382,7 @@ class UpdateService:
             if self._opener is not None:
                 response_cm = self._opener.open(request)
             else:
-                response_cm = urllib.request.urlopen(request, timeout=120)
+                response_cm = github_urlopen(request, timeout=120)
             with response_cm as resp, dest.open("wb") as out:
                 total = asset.size
                 if total is None:
@@ -410,7 +414,7 @@ class UpdateService:
         except urllib.error.URLError as exc:
             logger.exception("Update download failed")
             self._cleanup_partial(dest)
-            raise UpdateError(f"Не удалось скачать обновление: {exc}") from exc
+            raise UpdateError(wrap_github_url_error(exc, download=True)) from exc
         except OSError as exc:
             logger.exception("Update save failed")
             self._cleanup_partial(dest)
@@ -451,14 +455,14 @@ class UpdateService:
                 with self._opener.open(request) as resp:
                     body = resp.read()
             else:
-                with urllib.request.urlopen(request, timeout=30) as resp:
+                with github_urlopen(request, timeout=30) as resp:
                     body = resp.read()
         except urllib.error.HTTPError as exc:
             logger.exception("GitHub API HTTP error")
             raise UpdateError(f"GitHub API: HTTP {exc.code}") from exc
         except urllib.error.URLError as exc:
             logger.exception("GitHub API network error")
-            raise UpdateError(f"Нет сети или GitHub недоступен: {exc}") from exc
+            raise UpdateError(wrap_github_url_error(exc)) from exc
         try:
             return json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:

@@ -6,6 +6,7 @@ from taskmanager.domain import (
     is_deadline_warning,
     make_folder_name,
     sanitize_for_folder,
+    truncate_plain,
 )
 
 
@@ -49,6 +50,20 @@ def test_html_to_plain_with_urls():
         == "https://ex.com"
     )
     assert html_to_plain_with_urls("") == ""
+
+
+def test_truncate_plain_adds_ellipsis():
+    assert truncate_plain("short") == "short"
+    assert truncate_plain("x" * 120) == "x" * 120
+    assert truncate_plain("x" * 121) == ("x" * 120) + "..."
+
+
+def test_natural_sort_key_orders_numbers_and_letter_suffixes():
+    from taskmanager.domain import natural_sort_key
+
+    values = ["10а", "2", "10", "2а"]
+    assert sorted(values, key=natural_sort_key) == ["2", "2а", "10", "10а"]
+    assert sorted(["INC-10", "INC-9"], key=natural_sort_key) == ["INC-9", "INC-10"]
 
 
 def test_contrast_foreground():

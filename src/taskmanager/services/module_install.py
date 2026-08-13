@@ -11,6 +11,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
+from taskmanager.infrastructure.github_http import (
+    github_urlopen,
+    wrap_github_url_error,
+)
 from taskmanager.services.module_loader import modules_dir
 from taskmanager.services.source_protocol import SourceModuleError
 
@@ -63,7 +67,7 @@ def _http_json(url: str) -> dict | list:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with github_urlopen(req, timeout=60) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")[:300]
@@ -71,7 +75,7 @@ def _http_json(url: str) -> dict | list:
             f"GitHub API ошибка {exc.code}: {body or exc.reason}"
         ) from exc
     except urllib.error.URLError as exc:
-        raise SourceModuleError(f"Сеть: {exc.reason}") from exc
+        raise SourceModuleError(wrap_github_url_error(exc)) from exc
 
 
 def fetch_latest_module_release(github_repo: str) -> ModuleLatestRelease:
@@ -118,12 +122,12 @@ def pick_module_zip_asset(assets: list[ModuleReleaseAsset]) -> ModuleReleaseAsse
 def download_bytes(url: str) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with github_urlopen(req, timeout=120) as resp:
             return resp.read()
     except urllib.error.HTTPError as exc:
         raise SourceModuleError(f"Скачивание не удалось ({exc.code})") from exc
     except urllib.error.URLError as exc:
-        raise SourceModuleError(f"Сеть при скачивании: {exc.reason}") from exc
+        raise SourceModuleError(wrap_github_url_error(exc, download=True)) from exc
 
 
 def install_module_zip(

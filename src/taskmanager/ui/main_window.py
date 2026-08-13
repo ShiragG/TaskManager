@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QModelIndex, Qt, QThread
+from PySide6.QtCore import QModelIndex, Qt, QThread, QTimer
 from PySide6.QtGui import QAction, QColor, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
+    QSystemTrayIcon,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -36,7 +37,9 @@ from taskmanager.domain import (
     contrast_foreground,
     html_to_plain,
     is_deadline_warning,
+    natural_sort_key,
     priority_color_hex,
+    truncate_plain,
 )
 from taskmanager.infrastructure.logging_setup import setup_logging
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
@@ -69,6 +72,13 @@ from taskmanager.ui.dialogs import (
     ProjectDialog,
     RichTextEditDialog,
     TaskDialog,
+)
+from taskmanager.ui.event_sound_player import EventSoundPlayer
+from taskmanager.ui.reminders_window import (
+    ReminderEditDialog,
+    ReminderNotifyDialog,
+    RemindersWindow,
+    format_reminder_series,
 )
 from taskmanager.ui.settings_dialog import SettingsDialog
 from taskmanager.ui.stylesheet import apply_stylesheet
@@ -179,6 +189,12 @@ class MainWindow(QMainWindow):
         self._download_worker: UpdateDownloadWorker | None = None
         self._update_busy = False
         self._pending_update_path: Path | None = None
+        self._reminders_window: RemindersWindow | None = None
+        self._notified_occurrences: set[tuple[int, str]] = set()
+        self._session_started_at = datetime.now()
+        self._reminder_tray: QSystemTrayIcon | None = None
+        self._event_sound_player = EventSoundPlayer(self)
+        self._update_ui: SettingsDialog | None = None
 
         self.setWindowTitle("TaskManager")
         self.resize(1100, 640)
@@ -187,6 +203,7 @@ class MainWindow(QMainWindow):
         self._build_central()
         self._build_shortcuts()
         self._sync_mode_actions()
+        self._setup_reminder_notifications()
 
         self.reload_projects()
         self._check_missing_folders()
@@ -238,6 +255,10 @@ class MainWindow(QMainWindow):
         tb.addAction(self.act_open_folder)
 
         tb.addSeparator()
+
+        self.act_reminders = QAction("Календарь", self)
+        self.act_reminders.triggered.connect(self.open_reminders)
+        tb.addAction(self.act_reminders)
 
         self.act_export = QAction("Excel…", self)
         self.act_export.triggered.connect(self.export_excel)
@@ -471,7 +492,6 @@ class MainWindow(QMainWindow):
             table = self._make_table()
             self.tabs.addTab(table, project.name)
             self.tabs.tabBar().setTabData(self.tabs.count() - 1, project.id)
-            self._fill_table(table, project)
         self.tabs.tabBar().blockSignals(False)
         self.tabs.blockSignals(False)
 
@@ -482,6 +502,7 @@ class MainWindow(QMainWindow):
                     break
         elif self.tabs.count():
             self.tabs.setCurrentIndex(0)
+        self.reload_current_tab()
 
     # Alias used by older tests
     def reload_directories(self) -> None:
@@ -548,6 +569,7 @@ class MainWindow(QMainWindow):
         table.setSortingEnabled(False)
         table.setRowCount(0)
         today = date.today()
+        missed_ids = self.service.task_ids_with_missed_reminders()
         all_cols = (
             COL_PRIORITY,
             COL_NUMBER,
@@ -566,9 +588,14 @@ class MainWindow(QMainWindow):
             priority_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             table.setItem(row, COL_PRIORITY, priority_item)
 
-            number_item = SortableItem(task.number)
+            number_text = task.number
+            if task.id in missed_ids:
+                number_text = f"● {task.number}"
+            number_item = SortableItem(number_text)
             number_item.setData(TASK_ID_ROLE, task.id)
-            number_item.setData(SORT_ROLE, task.number.casefold())
+            number_item.setData(SORT_ROLE, natural_sort_key(task.number))
+            if task.id in missed_ids:
+                number_item.setToolTip("Есть пропущенное событие")
             table.setItem(row, COL_NUMBER, number_item)
 
             status_text = task.display_status
@@ -584,14 +611,14 @@ class MainWindow(QMainWindow):
             )
             table.setItem(row, COL_DATE, date_item)
 
-            desc_plain = html_to_plain(task.description)
-            desc_item = SortableItem(desc_plain)
+            desc_plain = task.description_plain
+            desc_item = SortableItem(truncate_plain(desc_plain))
             desc_item.setData(TASK_ID_ROLE, task.id)
             desc_item.setData(SORT_ROLE, desc_plain.casefold())
             table.setItem(row, COL_DESCRIPTION, desc_item)
 
-            comment_plain = html_to_plain(task.comment)
-            comment_item = SortableItem(comment_plain)
+            comment_plain = task.comment_plain
+            comment_item = SortableItem(truncate_plain(comment_plain))
             comment_item.setData(TASK_ID_ROLE, task.id)
             comment_item.setData(SORT_ROLE, comment_plain.casefold())
             table.setItem(row, COL_COMMENT, comment_item)
@@ -817,11 +844,17 @@ class MainWindow(QMainWindow):
         if project_id is None:
             QMessageBox.information(self, "Уведомление", "Сначала создайте проект")
             return
+        proposed: str | None = None
+        initial_number = ""
+        if self.settings.autonumber_on_create:
+            proposed = self.service.propose_next_number(project_id)
+            initial_number = proposed
         dialog = TaskDialog(
             self.settings,
             self,
             title="Новая заявка",
             folder_validator=self._make_create_folder_validator(project_id),
+            initial_number=initial_number,
         )
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return
@@ -830,6 +863,7 @@ class MainWindow(QMainWindow):
                 CreateTaskRequest(
                     project_id=project_id,
                     number=dialog.number,
+                    proposed_number=proposed,
                     description=dialog.description,
                     comment=dialog.comment,
                     date_end=dialog.date_end,
@@ -1144,6 +1178,26 @@ class MainWindow(QMainWindow):
                 return str(exc)
             return None
 
+        reminder_rows = [
+            (series.id, format_reminder_series(series))
+            for series in self.service.list_reminders(task_id)
+            if series.id is not None
+        ]
+
+        def on_delete_reminder(reminder_id: int) -> bool:
+            try:
+                self.service.delete_reminder(reminder_id)
+            except ServiceError as exc:
+                QMessageBox.warning(self, "Ошибка", str(exc))
+                return False
+            if self._reminders_window is not None:
+                self._reminders_window.reload()
+            return True
+
+        def on_reminders_changed() -> None:
+            if self._reminders_window is not None:
+                self._reminders_window.reload()
+
         dialog = TaskDialog(
             self.settings,
             self,
@@ -1151,6 +1205,10 @@ class MainWindow(QMainWindow):
             title="Изменить заявку",
             allow_template=False,
             folder_validator=validate,
+            reminder_rows=reminder_rows,
+            on_delete_reminder=on_delete_reminder,
+            reminder_service=self.service,
+            on_reminders_changed=on_reminders_changed,
         )
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return
@@ -1418,6 +1476,10 @@ class MainWindow(QMainWindow):
             on_check_updates=self.start_update_check,
             source_host=self.source_host,
         )
+        self._update_ui = dialog
+        dialog.cancel_update_requested.connect(self._cancel_update_download)
+        dialog.install_update_requested.connect(self._restart_with_update)
+        dialog.finished.connect(self._on_settings_finished)
         if dialog.exec() != SettingsDialog.DialogCode.Accepted:
             return
         self.settings = dialog.settings
@@ -1439,12 +1501,40 @@ class MainWindow(QMainWindow):
         self._build_shortcuts()
         self.reload_projects()
 
+    def _on_settings_finished(self, _result: int = 0) -> None:
+        self._update_ui = None
+        if self._update_busy or self._pending_update_path is not None:
+            self._update_panel.show()
+
+    def _update_parent(self) -> QWidget:
+        host = self._update_ui
+        if host is not None and host.isVisible():
+            return host
+        return self
+
+    def _update_host(self) -> QWidget:
+        host = self._update_ui
+        if host is not None and host.isVisible():
+            return host
+        return self
+
     def start_update_check(self) -> None:
         if self._update_busy:
+            QMessageBox.information(
+                self._update_parent(),
+                "Обновления",
+                "Обновление уже выполняется…",
+            )
             self.statusBar().showMessage("Обновление уже выполняется…")
             return
         logger.debug("Starting update check")
         self._update_busy = True
+        host = self._update_host()
+        host._update_panel.show()
+        host._update_label.setText("Проверка обновлений…")
+        host._update_progress.hide()
+        host._update_cancel_btn.hide()
+        host._update_restart_btn.hide()
         self.statusBar().showMessage("Проверка обновлений…")
         thread = QThread(self)
         worker = UpdateCheckWorker()
@@ -1472,15 +1562,18 @@ class MainWindow(QMainWindow):
             release.tag,
         )
         if not updater.is_newer(release.tag, current):
-            self.statusBar().showMessage(
+            msg = (
                 f"Установлена актуальная версия ({current}; remote {release.version})"
             )
+            self.statusBar().showMessage(msg)
             logger.info(
                 "Already up to date: current=%s remote=%s",
                 current,
                 release.version,
             )
             self._update_busy = False
+            self._hide_update_panel()
+            QMessageBox.information(self._update_parent(), "Обновления", msg)
             return
 
         asset_name = asset_name_for_platform()
@@ -1490,10 +1583,12 @@ class MainWindow(QMainWindow):
             logger.error(msg)
             self.statusBar().showMessage(msg)
             self._update_busy = False
+            self._hide_update_panel()
+            QMessageBox.warning(self._update_parent(), "Обновления", msg)
             return
 
         answer = QMessageBox.question(
-            self,
+            self._update_parent(),
             "Обновления",
             f"Доступна версия {release.version} (сейчас {current}).\n"
             f"Скачать «{asset.name}»?",
@@ -1501,6 +1596,7 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             self.statusBar().showMessage("Загрузка обновления не начата")
             self._update_busy = False
+            self._hide_update_panel()
             return
 
         dest = staged_update_path()
@@ -1510,17 +1606,24 @@ class MainWindow(QMainWindow):
         logger.error("Update check failed: %s", message)
         self.statusBar().showMessage(f"Ошибка обновления: {message}")
         self._update_busy = False
+        self._hide_update_panel()
+        QMessageBox.warning(
+            self._update_parent(),
+            "Обновления",
+            f"Ошибка обновления: {message}",
+        )
 
     def _start_update_download(self, asset, dest: Path) -> None:
         self._pending_update_path = None
-        self._update_panel.show()
-        self._update_restart_btn.hide()
-        self._update_cancel_btn.show()
-        self._update_progress.show()
-        self._update_label.setText(f"Загрузка «{asset.name}»…")
-        self._update_progress.setRange(0, 0)
-        self._update_progress.setValue(0)
-        self._update_cancel_btn.setEnabled(True)
+        host = self._update_host()
+        host._update_panel.show()
+        host._update_restart_btn.hide()
+        host._update_cancel_btn.show()
+        host._update_progress.show()
+        host._update_label.setText(f"Загрузка «{asset.name}»…")
+        host._update_progress.setRange(0, 0)
+        host._update_progress.setValue(0)
+        host._update_cancel_btn.setEnabled(True)
         self.statusBar().showMessage("Загрузка обновления…")
 
         thread = QThread(self)
@@ -1545,17 +1648,20 @@ class MainWindow(QMainWindow):
     def _on_update_progress(
         self, bytes_done: int, total: object, speed: float
     ) -> None:
+        host = self._update_host()
         total_int = int(total) if isinstance(total, int) and total > 0 else None
         if total_int:
-            self._update_progress.setRange(0, 100)
-            self._update_progress.setValue(min(100, int(bytes_done * 100 / total_int)))
+            host._update_progress.setRange(0, 100)
+            host._update_progress.setValue(
+                min(100, int(bytes_done * 100 / total_int))
+            )
             pct = bytes_done * 100 / total_int
-            self._update_label.setText(
+            host._update_label.setText(
                 f"Загрузка… {pct:.0f}% · {_format_speed(speed)}"
             )
         else:
-            self._update_progress.setRange(0, 0)
-            self._update_label.setText(
+            host._update_progress.setRange(0, 0)
+            host._update_label.setText(
                 f"Загрузка… {_format_bytes(bytes_done)} · {_format_speed(speed)}"
             )
 
@@ -1564,24 +1670,25 @@ class MainWindow(QMainWindow):
         self._download_worker = None
         self._update_busy = False
         self._pending_update_path = path
-        self._update_progress.hide()
-        self._update_cancel_btn.hide()
-        self._update_panel.show()
+        host = self._update_host()
+        host._update_progress.hide()
+        host._update_cancel_btn.hide()
+        host._update_panel.show()
         if is_frozen():
             banner = (
                 "Обновление готово. «Установить и закрыть» — после закрытия "
                 "файл заменят; затем запустите приложение снова вручную."
             )
-            self._update_label.setText(banner)
+            host._update_label.setText(banner)
             self.statusBar().showMessage(f"Обновление готово: {path}")
-            self._update_restart_btn.show()
+            host._update_restart_btn.show()
         else:
             msg = "Загрузка обновления завершена"
-            self._update_label.setText(msg)
+            host._update_label.setText(msg)
             self.statusBar().showMessage(f"{msg}: {path}")
-            self._update_restart_btn.hide()
+            host._update_restart_btn.hide()
             QMessageBox.information(
-                self,
+                self._update_parent(),
                 "Обновления",
                 f"Файл сохранён:\n{path}\n\n"
                 "В режиме разработки замените исполняемый файл вручную "
@@ -1591,11 +1698,13 @@ class MainWindow(QMainWindow):
 
     def _restart_with_update(self) -> None:
         if self._pending_update_path is None or not self._pending_update_path.is_file():
-            QMessageBox.warning(self, "Обновления", "Файл обновления не найден")
+            QMessageBox.warning(
+                self._update_parent(), "Обновления", "Файл обновления не найден"
+            )
             return
         if not is_frozen():
             QMessageBox.information(
-                self,
+                self._update_parent(),
                 "Обновления",
                 "Автозамена доступна только в собранном приложении.",
             )
@@ -1609,7 +1718,11 @@ class MainWindow(QMainWindow):
             )
             launch_restart_helper(helper)
         except OSError as exc:
-            QMessageBox.warning(self, "Обновления", f"Не удалось запустить helper:\n{exc}")
+            QMessageBox.warning(
+                self._update_parent(),
+                "Обновления",
+                f"Не удалось запустить helper:\n{exc}",
+            )
             return
         logger.info("Install-and-close via helper %s (no relaunch)", helper)
         QApplication.instance().quit()
@@ -1620,6 +1733,9 @@ class MainWindow(QMainWindow):
         self._update_busy = False
         logger.error("Update download failed: %s", message)
         self.statusBar().showMessage(f"Ошибка загрузки: {message}")
+        QMessageBox.warning(
+            self._update_parent(), "Обновления", f"Ошибка загрузки: {message}"
+        )
 
     def _on_update_download_cancelled(self) -> None:
         self._hide_update_panel()
@@ -1629,17 +1745,19 @@ class MainWindow(QMainWindow):
 
     def _cancel_update_download(self) -> None:
         if self._download_worker is not None:
-            self._update_cancel_btn.setEnabled(False)
-            self._update_label.setText("Отмена…")
+            host = self._update_host()
+            host._update_cancel_btn.setEnabled(False)
+            host._update_label.setText("Отмена…")
             self._download_worker.request_cancel()
 
     def _hide_update_panel(self) -> None:
-        self._update_panel.hide()
-        self._update_progress.show()
-        self._update_cancel_btn.show()
-        self._update_restart_btn.hide()
-        self._update_progress.setRange(0, 100)
-        self._update_progress.setValue(0)
+        for host in {self, self._update_ui} - {None}:
+            host._update_panel.hide()
+            host._update_progress.show()
+            host._update_cancel_btn.show()
+            host._update_restart_btn.hide()
+            host._update_progress.setRange(0, 100)
+            host._update_progress.setValue(0)
         self._pending_update_path = None
 
     def _on_update_thread_finished(self) -> None:
@@ -1729,6 +1847,8 @@ class MainWindow(QMainWindow):
             else:
                 menu.addAction("Скрыть", self.hide_selected_tasks)
             menu.addAction("Удалить", self.delete_selected_task)
+            if task_id is not None:
+                menu.addAction("Событие…", self.add_reminder_for_selected)
 
         if task_id is not None:
             try:
@@ -1758,6 +1878,185 @@ class MainWindow(QMainWindow):
             open_target(target)
         except PlatformOpenError as exc:
             QMessageBox.warning(self, "Предупреждение", str(exc))
+
+    def open_reminders(self) -> None:
+        if self._reminders_window is None:
+            self._reminders_window = RemindersWindow(self.service, self)
+            self._reminders_window.open_task_requested.connect(self.reveal_task)
+        self._reminders_window.reload()
+        self._reminders_window.show()
+        self._reminders_window.raise_()
+        self._reminders_window.activateWindow()
+
+    def add_reminder_for_selected(self) -> None:
+        task_id = self._require_single_task_id()
+        if task_id is None:
+            return
+        try:
+            task = self.service.get_task(task_id)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        dialog = ReminderEditDialog(self.service, self, task=task)
+        if dialog.exec() != ReminderEditDialog.DialogCode.Accepted:
+            return
+        try:
+            dialog.save_to_service()
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        self.reload_current_tab()
+        if self._reminders_window is not None:
+            self._reminders_window.reload()
+
+    def reveal_task(self, task_id: int) -> None:
+        try:
+            task = self.service.get_task(task_id)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        if task.is_archived:
+            if not self._show_archive:
+                self.archive_cb.setChecked(True)
+        elif task.hidden:
+            if not self._show_hidden:
+                self.hidden_cb.setChecked(True)
+        else:
+            if self._show_archive:
+                self.archive_cb.setChecked(False)
+            if self._show_hidden:
+                self.hidden_cb.setChecked(False)
+        for i in range(self.tabs.count()):
+            if self.tabs.tabBar().tabData(i) == task.project_id:
+                self.tabs.setCurrentIndex(i)
+                break
+        self.reload_current_tab()
+        table = self.current_table()
+        if table is None:
+            return
+        for row in range(table.rowCount()):
+            item = table.item(row, COL_NUMBER)
+            if item is not None and int(item.data(TASK_ID_ROLE) or 0) == task_id:
+                table.selectRow(row)
+                break
+        if not task.is_archived:
+            self.edit_selected_task()
+
+    def _setup_reminder_notifications(self) -> None:
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self._reminder_tray = QSystemTrayIcon(self.windowIcon(), self)
+            self._reminder_tray.setToolTip("TaskManager")
+            self._reminder_tray.messageClicked.connect(self._on_tray_reminder_clicked)
+            self._reminder_tray.show()
+        self._reminder_timer = QTimer(self)
+        self._reminder_timer.setInterval(15_000)
+        self._reminder_timer.timeout.connect(self._poll_due_reminders)
+        self._reminder_timer.start()
+        self._pending_notify: tuple[int, datetime, int | None] | None = None
+        self._snoozed_until: dict[tuple[int, str], datetime] = {}
+
+    def _poll_due_reminders(self) -> None:
+        now = datetime.now()
+        for series, occ, task, project in self.service.list_missed_reminders(now=now):
+            if occ <= self._session_started_at:
+                continue
+            if series.id is None:
+                continue
+            key = (series.id, occ.isoformat(timespec="seconds"))
+            snooze_until = self._snoozed_until.get(key)
+            if snooze_until is not None:
+                if now < snooze_until:
+                    continue
+                self._snoozed_until.pop(key, None)
+                self._notified_occurrences.discard(key)
+            if key in self._notified_occurrences:
+                continue
+            self._notified_occurrences.add(key)
+            self._notify_reminder(series, occ, task, project)
+
+    def _notify_reminder(self, series, occ: datetime, task=None, project=None) -> None:
+        repeating = " · повторяемое" if series.is_repeating else ""
+        plain = html_to_plain(series.text) or "—"
+        if task is not None and project is not None:
+            title = f"{project.name} / №{task.number}"
+        else:
+            title = plain
+        heading = f"{occ.strftime('%d.%m.%Y %H:%M')}{repeating}"
+        body_html = f"<p>{heading}</p>{series.text or '—'}"
+        task_id = task.id if task is not None else None
+        if series.id is not None:
+            self._pending_notify = (series.id, occ, task_id)
+        if (
+            self.settings.event_os_notification
+            and self._reminder_tray is not None
+        ):
+            self._reminder_tray.showMessage(
+                title,
+                f"{heading}  {plain}",
+                QSystemTrayIcon.MessageIcon.Information,
+                8000,
+            )
+        if self.settings.event_sound_enabled:
+            self._event_sound_player.play(self.settings.event_sound_path)
+        popup = ReminderNotifyDialog(
+            title,
+            body_html,
+            self,
+            snooze_default_minutes=self.settings.event_snooze_minutes,
+        )
+        if series.id is not None:
+            popup.accepted.connect(
+                lambda sid=series.id, o=occ: self._acknowledge_occurrence(sid, o)
+            )
+            popup.snooze_requested.connect(
+                lambda minutes, sid=series.id, o=occ: self._snooze_event(
+                    sid, o, minutes
+                )
+            )
+            if task_id is not None:
+                popup.open_task_requested.connect(
+                    lambda tid=task_id: self.reveal_task(tid)
+                )
+            else:
+                popup.open_task_btn.hide()
+        popup.show()
+        self.reload_current_tab()
+        if self._reminders_window is not None:
+            self._reminders_window.reload()
+
+    def _snooze_event(
+        self, series_id: int, occ: datetime, minutes: int
+    ) -> None:
+        key = (series_id, occ.isoformat(timespec="seconds"))
+        self._snoozed_until[key] = datetime.now() + timedelta(minutes=int(minutes))
+        self._notified_occurrences.add(key)
+
+    def _acknowledge_occurrence(self, series_id: int, occ: datetime) -> None:
+        key = (series_id, occ.isoformat(timespec="seconds"))
+        self._snoozed_until.pop(key, None)
+        try:
+            self.service.acknowledge_reminder(series_id, occ)
+        except ServiceError as exc:
+            QMessageBox.warning(self, "Ошибка", str(exc))
+        self.reload_current_tab()
+        if self._reminders_window is not None:
+            self._reminders_window.reload()
+
+    def _acknowledge_and_reveal(
+        self, series_id: int, occ: datetime, task_id: int
+    ) -> None:
+        self._acknowledge_occurrence(series_id, occ)
+        self.reveal_task(task_id)
+
+    def _on_tray_reminder_clicked(self) -> None:
+        pending = self._pending_notify
+        if pending is None:
+            return
+        series_id, occ, task_id = pending
+        if task_id is None:
+            self._acknowledge_occurrence(series_id, occ)
+            return
+        self._acknowledge_and_reveal(series_id, occ, task_id)
 
     def _check_missing_folders(self) -> None:
         missing = self.service.check_missing_folders()

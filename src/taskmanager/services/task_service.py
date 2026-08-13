@@ -3,19 +3,26 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 
 from taskmanager.domain import (
     Link,
     Project,
+    ReminderRule,
+    ReminderSeries,
     Task,
     TaskStatus,
     WorkflowStatus,
+    acknowledge_series,
     clamp_priority,
+    html_to_plain,
     make_folder_name,
+    missed_occurrence,
+    parse_whole_number,
     parse_workflow_status,
     sanitize_for_folder,
+    skip_occurrence,
 )
 from taskmanager.infrastructure.filesystem import (
     NOTES_LINK_NAME,
@@ -52,6 +59,7 @@ class CreateTaskRequest:
     workflow_status: WorkflowStatus | str | None = None
     source_status_id: str | None = None
     source_status_label: str | None = None
+    proposed_number: str | None = None
 
 
 @dataclass
@@ -323,9 +331,16 @@ class TaskService:
             ),
             source_status_id=request.source_status_id,
             source_status_label=request.source_status_label,
+            description_plain=html_to_plain(request.description),
+            comment_plain=html_to_plain(request.comment),
         )
         try:
             task = self.repo.add_task(task)
+            self._advance_high_water_if_proposed(
+                project.id,  # type: ignore[arg-type]
+                number,
+                request.proposed_number,
+            )
             if link_pairs:
                 links = [Link(None, task.id, n, t) for n, t in link_pairs]
                 task.links = self.repo.replace_links(task.id, links)  # type: ignore[arg-type]
@@ -391,8 +406,10 @@ class TaskService:
 
         if request.description is not None:
             task.description = request.description
+            task.description_plain = html_to_plain(request.description)
         if request.comment is not None:
             task.comment = request.comment
+            task.comment_plain = html_to_plain(request.comment)
         if request.clear_date_end:
             task.date_end = None
         elif request.date_end is not None:
@@ -476,6 +493,7 @@ class TaskService:
         task.status = TaskStatus.ARCHIVED
         task.archive_month = archive_month
         task.archive_project_folder = archive_project_folder
+        self.repo.delete_reminders_for_task(task_id)
         self.repo.update_task(task)
         logger.debug(
             "Archived task id=%s number=%r month=%s project_folder=%r has_folder=%s",
@@ -574,6 +592,177 @@ class TaskService:
             for task in self.fs.missing_task_folders(project, tasks):
                 missing.append((project, task))
         return missing
+
+    def propose_next_number(self, project_id: int) -> str:
+        """First free whole number ≥ high-water + 1 (skips occupied integers)."""
+        project = self._require_project(project_id)
+        occupied = set(self.repo.list_task_numbers(project_id))
+        candidate = project.number_high_water + 1
+        while str(candidate) in occupied:
+            candidate += 1
+        return str(candidate)
+
+    def _advance_high_water_if_proposed(
+        self,
+        project_id: int,
+        saved_number: str,
+        proposed_number: str | None,
+    ) -> None:
+        if proposed_number is None:
+            return
+        if saved_number != proposed_number:
+            return
+        parsed = parse_whole_number(saved_number)
+        if parsed is None:
+            return
+        project = self._require_project(project_id)
+        if parsed > project.number_high_water:
+            self.repo.set_number_high_water(project_id, parsed)
+
+    # --- reminders ---
+
+    def list_reminders(self, task_id: int | None = None) -> list[ReminderSeries]:
+        return self.repo.list_reminders(task_id=task_id)
+
+    def get_reminder(self, reminder_id: int) -> ReminderSeries:
+        series = self.repo.get_reminder(reminder_id)
+        if series is None:
+            raise ServiceError("Событие не найдено")
+        return series
+
+    def create_reminder(
+        self,
+        task_id: int | None = None,
+        *,
+        text: str,
+        time_of_day: time,
+        rule: ReminderRule | str,
+        once_date: date | None = None,
+        weekdays: tuple[int, ...] = (),
+        month_day: int | None = None,
+    ) -> ReminderSeries:
+        resolved_id: int | None = None
+        if task_id is not None:
+            task = self.get_task(task_id)
+            resolved_id = task.id
+        parsed_rule = (
+            rule if isinstance(rule, ReminderRule) else ReminderRule(rule)
+        )
+        self._validate_reminder_rule(
+            parsed_rule, once_date=once_date, weekdays=weekdays, month_day=month_day
+        )
+        series = ReminderSeries(
+            id=None,
+            task_id=resolved_id,
+            text=text.strip(),
+            time_of_day=time_of_day,
+            rule=parsed_rule,
+            once_date=once_date,
+            weekdays=tuple(sorted(set(weekdays))),
+            month_day=month_day,
+        )
+        return self.repo.add_reminder(series)
+
+    def update_reminder(
+        self,
+        reminder_id: int,
+        *,
+        text: str,
+        time_of_day: time,
+        rule: ReminderRule | str,
+        once_date: date | None = None,
+        weekdays: tuple[int, ...] = (),
+        month_day: int | None = None,
+        task_id: int | None = None,
+    ) -> ReminderSeries:
+        series = self.get_reminder(reminder_id)
+        parsed_rule = (
+            rule if isinstance(rule, ReminderRule) else ReminderRule(rule)
+        )
+        self._validate_reminder_rule(
+            parsed_rule, once_date=once_date, weekdays=weekdays, month_day=month_day
+        )
+        if task_id is not None:
+            task = self.get_task(task_id)
+            series.task_id = task.id
+        else:
+            series.task_id = None
+        series.text = text.strip()
+        series.time_of_day = time_of_day
+        series.rule = parsed_rule
+        series.once_date = once_date
+        series.weekdays = tuple(sorted(set(weekdays)))
+        series.month_day = month_day
+        self.repo.update_reminder(series)
+        return series
+
+    def acknowledge_reminder(
+        self, reminder_id: int, occurrence: datetime
+    ) -> ReminderSeries:
+        series = self.get_reminder(reminder_id)
+        acknowledge_series(series, occurrence)
+        self.repo.update_reminder(series)
+        return series
+
+    def skip_reminder_occurrence(
+        self, reminder_id: int, occurrence: datetime
+    ) -> ReminderSeries:
+        series = self.get_reminder(reminder_id)
+        skip_occurrence(series, occurrence)
+        self.repo.update_reminder(series)
+        return series
+
+    def delete_reminder(self, reminder_id: int) -> None:
+        self.get_reminder(reminder_id)
+        self.repo.delete_reminder(reminder_id)
+
+    def list_missed_reminders(
+        self, *, now: datetime | None = None
+    ) -> list[tuple[ReminderSeries, datetime, Task | None, Project | None]]:
+        """At most one missed occurrence per series, with Task and Project if linked."""
+        moment = now or datetime.now()
+        result: list[tuple[ReminderSeries, datetime, Task | None, Project | None]] = []
+        for series in self.repo.list_reminders():
+            missed = missed_occurrence(series, moment)
+            if missed is None:
+                continue
+            task: Task | None = None
+            project: Project | None = None
+            if series.task_id is not None:
+                task = self.repo.get_task(series.task_id)
+                if task is None:
+                    continue
+                project = self.repo.get_project(task.project_id)
+                if project is None:
+                    continue
+            result.append((series, missed, task, project))
+        result.sort(key=lambda item: item[1])
+        return result
+
+    def task_ids_with_missed_reminders(
+        self, *, now: datetime | None = None
+    ) -> set[int]:
+        return {
+            task.id
+            for _, _, task, _ in self.list_missed_reminders(now=now)
+            if task is not None and task.id
+        }
+
+    @staticmethod
+    def _validate_reminder_rule(
+        rule: ReminderRule,
+        *,
+        once_date: date | None,
+        weekdays: tuple[int, ...],
+        month_day: int | None,
+    ) -> None:
+        if rule == ReminderRule.ONCE and once_date is None:
+            raise ServiceError("Укажите дату события")
+        if rule == ReminderRule.WEEKLY and not weekdays:
+            raise ServiceError("Выберите хотя бы один день недели")
+        if rule == ReminderRule.MONTHLY:
+            if month_day is None or not 1 <= month_day <= 31:
+                raise ServiceError("День месяца должен быть от 1 до 31")
 
     def _require_project(self, project_id: int) -> Project:
         project = self.repo.get_project(project_id)

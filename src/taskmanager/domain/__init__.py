@@ -7,6 +7,22 @@ import re
 
 from PySide6.QtGui import QTextDocument
 
+from taskmanager.domain.reminders import (
+    PLAIN_CELL_LIMIT,
+    ReminderRule,
+    ReminderSeries,
+    WEEKDAY_LABELS,
+    acknowledge_series,
+    last_occurrence,
+    missed_occurrence,
+    occurrence_on,
+    occurrences_in_range,
+    parse_reminder_rule,
+    parse_whole_number,
+    skip_occurrence,
+    truncate_plain,
+)
+
 
 class TaskStatus(StrEnum):
     ACTIVE = "active"
@@ -64,6 +80,23 @@ def sanitize_for_folder(text: str) -> str:
 def make_folder_name(number: str) -> str:
     """On-disk folder name equals the sanitized task number."""
     return sanitize_for_folder(number.strip())
+
+
+_NAT_CHUNK_RE = re.compile(r"(\d+)|(\D+)")
+
+
+def natural_sort_key(text: str) -> tuple[tuple[int, int | str], ...]:
+    """Sort key: digit runs as int, other runs as casefolded text.
+
+    ``2`` < ``2а`` < ``10`` < ``10а``; mixed ids such as ``INC-9`` < ``INC-10``.
+    """
+    parts: list[tuple[int, int | str]] = []
+    for digits, rest in _NAT_CHUNK_RE.findall(text):
+        if digits:
+            parts.append((0, int(digits)))
+        else:
+            parts.append((1, rest.casefold()))
+    return tuple(parts)
 
 
 def is_deadline_warning(
@@ -152,6 +185,7 @@ class Project:
     id: int | None
     name: str
     sort_order: int = 0
+    number_high_water: int = 0
 
 
 @dataclass
@@ -186,6 +220,8 @@ class Task:
     workflow_status: WorkflowStatus = WorkflowStatus.NEW
     source_status_id: str | None = None
     source_status_label: str | None = None
+    description_plain: str = ""
+    comment_plain: str = ""
 
     @property
     def is_archived(self) -> bool:
