@@ -41,8 +41,20 @@ An optional date on a Task (no time of day) when the work should be done. Distin
 _Avoid_: reminder, event, deadline (as a separate entity)
 
 **Event** (событие):
-A calendar record (text, local date/time, repeat rule) that may be linked to a Task. Not Срок and not a notification toast; the Calendar window is where occurrences are browsed. The UI never says «серия» — delete is «Удалить событие»; snooze («Напомнить через») delays a ping and is not a second entity.
+A calendar record (text, local date/time, repeat rule, optional Event color, optional sound file) that may be linked to a Task. Not Срок and not a notification toast; the Calendar window is where occurrences are browsed. The UI never says «серия» — delete is «Удалить событие»; snooze («Напомнить через») delays a ping and is not a second entity. If the Event has no sound file, the ping uses the melody from settings.
 _Avoid_: reminder, серия, срок, toast, notification (the UI chrome)
+
+**Сегодня**:
+The calendar date of the system clock; the month grid fills that cell with a light theme-accent wash.
+_Avoid_: текущий день, Выбранный день
+
+**Выбранный день**:
+The calendar cell the user clicked; the day pane shows that date and may differ from Сегодня.
+_Avoid_: текущий день, Сегодня
+
+**Event color** (цвет события):
+An optional color on the Event itself, drawn from the same palette as Task Color. Not Priority and not Task Color.
+_Avoid_: Priority, Task Color, inherited color
 
 **Hidden** (скрытая):
 A task flag: in the default view the task is omitted; in «Скрытые» mode only hidden active tasks are listed. Mutually exclusive with archive browsing mode.

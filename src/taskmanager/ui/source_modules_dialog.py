@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QLabel,
@@ -46,6 +47,14 @@ class SourceModulesSettingsDialog(QDialog):
         hint.setStyleSheet("color: #64748b;")
         layout.addWidget(hint)
 
+        self.check_module_updates_cb = QCheckBox(
+            "Проверять наличие обновлений модулей при запуске"
+        )
+        self.check_module_updates_cb.setChecked(
+            settings.check_module_updates_on_startup
+        )
+        layout.addWidget(self.check_module_updates_cb)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -72,4 +81,8 @@ class SourceModulesSettingsDialog(QDialog):
             self._source_host.replace_registry(self._modules_widget.collect_configs())
             self._source_host.reload()
             self._source_host.refresh_catalogs()
+        self._settings.check_module_updates_on_startup = (
+            self.check_module_updates_cb.isChecked()
+        )
+        self._store.save(self._settings)
         self.accept()

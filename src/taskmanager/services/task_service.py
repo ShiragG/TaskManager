@@ -640,6 +640,8 @@ class TaskService:
         once_date: date | None = None,
         weekdays: tuple[int, ...] = (),
         month_day: int | None = None,
+        color: str | None = None,
+        sound_path: str | None = None,
     ) -> ReminderSeries:
         resolved_id: int | None = None
         if task_id is not None:
@@ -660,6 +662,8 @@ class TaskService:
             once_date=once_date,
             weekdays=tuple(sorted(set(weekdays))),
             month_day=month_day,
+            color=(color.strip() if color and color.strip() else None),
+            sound_path=(sound_path.strip() if sound_path and sound_path.strip() else None),
         )
         return self.repo.add_reminder(series)
 
@@ -674,6 +678,8 @@ class TaskService:
         weekdays: tuple[int, ...] = (),
         month_day: int | None = None,
         task_id: int | None = None,
+        color: str | None = None,
+        sound_path: str | None = None,
     ) -> ReminderSeries:
         series = self.get_reminder(reminder_id)
         parsed_rule = (
@@ -693,6 +699,10 @@ class TaskService:
         series.once_date = once_date
         series.weekdays = tuple(sorted(set(weekdays)))
         series.month_day = month_day
+        series.color = color.strip() if color and color.strip() else None
+        series.sound_path = (
+            sound_path.strip() if sound_path and sound_path.strip() else None
+        )
         self.repo.update_reminder(series)
         return series
 

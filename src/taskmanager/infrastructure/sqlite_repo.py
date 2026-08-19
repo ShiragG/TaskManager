@@ -89,7 +89,9 @@ CREATE TABLE IF NOT EXISTS reminders (
     weekdays TEXT NOT NULL DEFAULT '[]',
     month_day INTEGER,
     last_acknowledged_occurrence TEXT,
-    skipped_occurrences TEXT NOT NULL DEFAULT '[]'
+    skipped_occurrences TEXT NOT NULL DEFAULT '[]',
+    color TEXT,
+    sound_path TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_directory ON tasks(directory_id);
@@ -230,6 +232,8 @@ class SqliteRepository:
         self._migrate_number_high_water()
         self._migrate_reminders_table()
         self._migrate_reminders_task_id_nullable()
+        self._migrate_reminders_color()
+        self._migrate_reminders_sound_path()
 
     def _migrate_plain_columns(self) -> None:
         cols = {
@@ -313,7 +317,9 @@ class SqliteRepository:
                 weekdays TEXT NOT NULL DEFAULT '[]',
                 month_day INTEGER,
                 last_acknowledged_occurrence TEXT,
-                skipped_occurrences TEXT NOT NULL DEFAULT '[]'
+                skipped_occurrences TEXT NOT NULL DEFAULT '[]',
+                color TEXT,
+                sound_path TEXT
             )
             """
         )
@@ -356,6 +362,24 @@ class SqliteRepository:
             CREATE INDEX IF NOT EXISTS idx_reminders_task ON reminders(task_id);
             """
         )
+
+    def _migrate_reminders_color(self) -> None:
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(reminders)").fetchall()
+        }
+        if "color" in cols:
+            return
+        self._conn.execute("ALTER TABLE reminders ADD COLUMN color TEXT")
+
+    def _migrate_reminders_sound_path(self) -> None:
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(reminders)").fetchall()
+        }
+        if "sound_path" in cols:
+            return
+        self._conn.execute("ALTER TABLE reminders ADD COLUMN sound_path TEXT")
 
     def _dedupe_source_links(self) -> None:
         """Rename duplicate source links so the unique index can be created.
@@ -963,8 +987,9 @@ class SqliteRepository:
             """
             INSERT INTO reminders (
                 task_id, text, time_of_day, rule, once_date, weekdays,
-                month_day, last_acknowledged_occurrence, skipped_occurrences
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                month_day, last_acknowledged_occurrence, skipped_occurrences,
+                color, sound_path
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             self._reminder_row_values(series),
         )
@@ -980,7 +1005,8 @@ class SqliteRepository:
             UPDATE reminders SET
                 task_id = ?, text = ?, time_of_day = ?, rule = ?,
                 once_date = ?, weekdays = ?, month_day = ?,
-                last_acknowledged_occurrence = ?, skipped_occurrences = ?
+                last_acknowledged_occurrence = ?, skipped_occurrences = ?,
+                color = ?, sound_path = ?
             WHERE id = ?
             """,
             (*values, series.id),
@@ -1015,6 +1041,8 @@ class SqliteRepository:
             series.month_day,
             acked,
             json.dumps(skipped),
+            series.color or None,
+            (series.sound_path.strip() if series.sound_path else None),
         )
 
     @staticmethod
@@ -1044,6 +1072,16 @@ class SqliteRepository:
             except ValueError:
                 continue
         raw_task = row["task_id"]
+        color = None
+        if "color" in row.keys():
+            raw_color = row["color"]
+            color = str(raw_color) if raw_color else None
+        sound_path = None
+        if "sound_path" in row.keys():
+            raw_sound = row["sound_path"]
+            sound_path = str(raw_sound).strip() if raw_sound else None
+            if not sound_path:
+                sound_path = None
         return ReminderSeries(
             id=row["id"],
             task_id=int(raw_task) if raw_task is not None else None,
@@ -1055,6 +1093,8 @@ class SqliteRepository:
             month_day=row["month_day"],
             last_acknowledged_occurrence=acked,
             skipped_occurrences=tuple(skipped),
+            color=color,
+            sound_path=sound_path,
         )
 
     def count_tasks_for_source_module(self, module_id: str) -> int:

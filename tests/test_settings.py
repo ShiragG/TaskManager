@@ -146,3 +146,76 @@ def test_event_settings_roundtrip_and_invalid_snooze(tmp_path: Path):
     assert loaded2.event_snooze_minutes == 15
     assert loaded2.event_sound_enabled is True
     assert loaded2.event_os_notification is True
+
+
+def test_startup_update_flags_roundtrip_and_defaults(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(
+        work_dir=str(tmp_path / "work"),
+        check_updates_on_startup=False,
+        check_module_updates_on_startup=False,
+    )
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.check_updates_on_startup is False
+    assert loaded.check_module_updates_on_startup is False
+
+    work = tmp_path / "w2"
+    work.mkdir()
+    path2 = tmp_path / "settings2.json"
+    path2.write_text(
+        f'{{"work_dir": "{work.as_posix()}"}}',
+        encoding="utf-8",
+    )
+    loaded2 = SettingsStore(path2).load()
+    assert loaded2.check_updates_on_startup is True
+    assert loaded2.check_module_updates_on_startup is True
+
+
+def test_calendar_view_roundtrip_and_defaults(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(work_dir=str(tmp_path / "work"), calendar_view="week")
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.calendar_view == "week"
+
+    work = tmp_path / "w2"
+    work.mkdir()
+    path2 = tmp_path / "settings2.json"
+    path2.write_text(
+        f'{{"work_dir": "{work.as_posix()}", "calendar_view": "nope"}}',
+        encoding="utf-8",
+    )
+    loaded2 = SettingsStore(path2).load()
+    assert loaded2.calendar_view == "compact"
+
+
+def test_calendar_layout_roundtrip_and_defaults(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(
+        work_dir=str(tmp_path / "work"),
+        calendar_view="week",
+        calendar_week_splitter=[220, 500],
+        calendar_compact_splitter=[400, 120],
+        calendar_day_pane_open=True,
+    )
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.calendar_week_splitter == [220, 500]
+    assert loaded.calendar_compact_splitter == [400, 120]
+    assert loaded.calendar_day_pane_open is True
+
+    work = tmp_path / "w2"
+    work.mkdir()
+    path2 = tmp_path / "settings2.json"
+    path2.write_text(
+        f'{{"work_dir": "{work.as_posix()}", "calendar_week_splitter": "nope"}}',
+        encoding="utf-8",
+    )
+    loaded2 = SettingsStore(path2).load()
+    assert loaded2.calendar_week_splitter == []
+    assert loaded2.calendar_compact_splitter == []
+    assert loaded2.calendar_day_pane_open is False

@@ -300,7 +300,9 @@ def test_reminder_create_filters_tasks_by_number_plain_and_project(reminder_ui):
 
     assert not hasattr(dialog, "task_combo")
     combos = [
-        w for w in dialog.findChildren(QComboBox) if w is not dialog.rule_combo
+        w
+        for w in dialog.findChildren(QComboBox)
+        if w is not dialog.rule_combo and w is not dialog.event_sound_combo
     ]
     assert combos == []
     assert dialog.task_list.count() == 2
@@ -591,7 +593,7 @@ def test_task_dialog_add_reminder_refreshes_list_without_closing(reminder_ui):
     assert "из диалога заявки" in texts
 
 
-def test_calendar_occurrence_click_opens_reminder_card_not_task(reminder_ui):
+def test_calendar_occurrence_click_opens_day_pane_not_card(reminder_ui):
     from datetime import time as time_cls
 
     from PySide6.QtCore import Qt
@@ -617,28 +619,21 @@ def test_calendar_occurrence_click_opens_reminder_card_not_task(reminder_ui):
     )
     rem_win = RemindersWindow(service, window)
     qtbot.addWidget(rem_win)
+    rem_win.show()
     rem_win._year = today.year
     rem_win._month = today.month
     rem_win.reload()
     opened: list[int] = []
     rem_win.open_task_requested.connect(opened.append)
 
-    hit = None
-    for cell in rem_win.findChildren(QListWidget):
-        for i in range(cell.count()):
-            item = cell.item(i)
-            if item.data(Qt.ItemDataRole.UserRole):
-                hit = (cell, item)
-                break
-        if hit:
-            break
-    assert hit is not None
-    cell, item = hit
-    cell.itemClicked.emit(item)
-    cards = rem_win.findChildren(ReminderCardDialog)
-    assert cards
-    assert "календарный пинг" in cards[-1].body_label.toPlainText()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    cards = [c for c in rem_win.findChildren(ReminderCardDialog) if c.isVisible()]
+    assert cards == []
+    assert rem_win.day_pane.isVisible()
     assert opened == []
+    assert "календарный пинг" in rem_win.day_events.item(0).text()
 
 
 def test_calendar_window_title_and_no_series_word(reminder_ui):
@@ -649,7 +644,12 @@ def test_calendar_window_title_and_no_series_word(reminder_ui):
     window, service, qtbot = reminder_ui
     rem_win = RemindersWindow(service, window)
     qtbot.addWidget(rem_win)
+    rem_win.show()
     assert rem_win.windowTitle() == "Календарь"
+    assert rem_win.width() >= 1100
+    assert rem_win.height() >= 720
+    assert rem_win.minimumWidth() > 720
+    assert rem_win.minimumHeight() > 520
     assert window.act_reminders.text() == "Календарь"
     texts = [rem_win.windowTitle(), rem_win.tabs.tabText(0), rem_win.tabs.tabText(1)]
     texts.extend(btn.text() for btn in rem_win.findChildren(QPushButton))
@@ -900,4 +900,979 @@ def test_notify_standalone_ok_and_toast_ack_without_reveal(reminder_ui, monkeypa
     window._on_tray_reminder_clicked()
     assert service.list_missed_reminders() == []
     assert revealed == []
+
+
+def test_event_color_roundtrip(service: TaskService):
+    series = service.create_reminder(
+        None,
+        text="цветное",
+        time_of_day=time(11, 0),
+        rule=ReminderRule.ONCE,
+        once_date=date(2026, 8, 18),
+        color="#ff0000",
+    )
+    loaded = service.get_reminder(series.id)
+    assert loaded.color == "#ff0000"
+    cleared = service.update_reminder(
+        series.id,
+        text="цветное",
+        time_of_day=time(11, 0),
+        rule=ReminderRule.ONCE,
+        once_date=date(2026, 8, 18),
+        color=None,
+    )
+    assert cleared.color is None
+
+
+def test_event_sound_path_roundtrip(service: TaskService):
+    series = service.create_reminder(
+        None,
+        text="со своим звуком",
+        time_of_day=time(11, 0),
+        rule=ReminderRule.ONCE,
+        once_date=date(2026, 8, 18),
+        sound_path="/tmp/own.wav",
+    )
+    loaded = service.get_reminder(series.id)
+    assert loaded.sound_path == "/tmp/own.wav"
+    defaulted = service.update_reminder(
+        series.id,
+        text="со своим звуком",
+        time_of_day=time(11, 0),
+        rule=ReminderRule.ONCE,
+        once_date=date(2026, 8, 18),
+        sound_path=None,
+    )
+    assert defaulted.sound_path is None
+
+
+def test_event_form_sound_combo_defaults_to_settings(reminder_ui):
+    from taskmanager.infrastructure.event_sounds import SETTINGS_SOUND_SENTINEL
+    from taskmanager.ui.reminders_window import ReminderEditDialog
+
+    window, service, qtbot = reminder_ui
+    dialog = ReminderEditDialog(service, window)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog.event_sound_combo.itemText(0) == "Как в настройках"
+    assert dialog.event_sound_combo.currentData() == SETTINGS_SOUND_SENTINEL
+    assert dialog.preview_sound_btn.text() == "Прослушать"
+    assert dialog.sound_path is None
+
+
+def test_notify_plays_event_sound_or_settings_or_silence(reminder_ui, monkeypatch):
+    from datetime import timedelta
+
+    from taskmanager.domain import ReminderRule
+
+    window, service, qtbot = reminder_ui
+    occ = datetime.now().replace(second=0, microsecond=0) - timedelta(hours=1)
+    series = service.create_reminder(
+        None,
+        text="звук",
+        time_of_day=occ.time(),
+        rule=ReminderRule.ONCE,
+        once_date=occ.date(),
+    )
+    played: list[str] = []
+    monkeypatch.setattr(
+        window._event_sound_player, "play", lambda path: played.append(path) or True
+    )
+    window.settings.event_sound_enabled = True
+    window.settings.event_sound_path = "/settings/ding.wav"
+    window._notify_reminder(series, occ, None, None)
+    assert played[-1] == "/settings/ding.wav"
+
+    own = service.update_reminder(
+        series.id,
+        text="звук",
+        time_of_day=occ.time(),
+        rule=ReminderRule.ONCE,
+        once_date=occ.date(),
+        sound_path="/event/own.wav",
+    )
+    window._notify_reminder(own, occ, None, None)
+    assert played[-1] == "/event/own.wav"
+
+    window.settings.event_sound_enabled = False
+    before = list(played)
+    window._notify_reminder(own, occ, None, None)
+    assert played == before
+
+
+def test_calendar_today_fill_and_toggle_day_pane(reminder_ui):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    today = date.today()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    assert cell.property("today") is True
+    assert rem_win.day_pane.isHidden()
+
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    assert cell.property("selectedDay") is True
+    heading = rem_win.day_pane_title.text()
+    assert str(today.day) in heading
+    assert str(today.year) in heading
+    assert "назад" not in heading
+    assert "через" not in heading
+
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isHidden()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    assert cell.property("selectedDay") is False
+
+
+def test_calendar_pane_click_opens_card_and_create_uses_selected_day(reminder_ui):
+    from datetime import time as time_cls
+
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import (
+        ReminderCardDialog,
+        ReminderEditDialog,
+        RemindersWindow,
+    )
+
+    window, service, qtbot = reminder_ui
+    today = date.today()
+    last = date(today.year, today.month, 28) if today.day != 28 else date(
+        today.year, today.month, 27
+    )
+    service.create_reminder(
+        None,
+        text="в панели",
+        time_of_day=time_cls(9, 0),
+        rule=ReminderRule.ONCE,
+        once_date=last,
+    )
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{last.isoformat()}")
+    assert cell is not None
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+    assert rem_win.day_events.count() == 1
+    rem_win.day_events.itemClicked.emit(rem_win.day_events.item(0))
+    cards = [c for c in rem_win.findChildren(ReminderCardDialog) if c.isVisible()]
+    assert cards == []
+    rem_win.day_events.itemDoubleClicked.emit(rem_win.day_events.item(0))
+    cards = [c for c in rem_win.findChildren(ReminderCardDialog) if c.isVisible()]
+    assert cards
+    assert "в панели" in cards[-1].body_label.toPlainText()
+
+    captured: list[date] = []
+
+    def grab_and_reject() -> None:
+        edits = rem_win.findChildren(ReminderEditDialog)
+        assert edits
+        captured.append(edits[0].once_date_value)
+        edits[0].reject()
+
+    QTimer.singleShot(0, grab_and_reject)
+    rem_win.create_event_btn.click()
+    assert captured == [last]
+
+
+def test_calendar_event_color_stripe(reminder_ui):
+    from datetime import time as time_cls
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QLabel, QListWidget
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    today = date.today()
+    service.create_reminder(
+        None,
+        text="полоска",
+        time_of_day=time_cls(12, 0),
+        rule=ReminderRule.ONCE,
+        once_date=today,
+        color="#ff0000",
+    )
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.reload()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    dotted = False
+
+    for i in range(cell.count()):
+        host = cell.itemWidget(cell.item(i))
+        if host is None:
+            continue
+        for label in host.findChildren(QLabel):
+            if "#ff0000" in label.styleSheet():
+                dotted = True
+    assert dotted
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    pane_item = rem_win.day_events.item(0)
+    assert pane_item is not None
+    assert not pane_item.icon().isNull()
+
+
+def test_opening_pane_compacts_grid_and_splitter_stays_open(reminder_ui):
+    from datetime import time as time_cls
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import CalendarDayCell, RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    today = date.today()
+    service.create_reminder(
+        None,
+        text="точка в сетке",
+        time_of_day=time_cls(10, 0),
+        rule=ReminderRule.ONCE,
+        once_date=today,
+    )
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.resize(1100, 720)
+    assert rem_win.day_pane.isHidden()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    has_dots = False
+    for i in range(cell.count()):
+        item = cell.item(i)
+        assert item.data(Qt.ItemDataRole.UserRole) is None
+        assert "точка в сетке" not in item.text()
+        if cell.itemWidget(item) is not None:
+            has_dots = True
+    assert has_dots
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+    assert rem_win.calendar_splitter.childrenCollapsible() is False
+    sizes = rem_win.calendar_splitter.sizes()
+    assert sizes[0] > 0
+    assert sizes[1] > 0
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    assert cell.minimumHeight() <= 36
+    for i in range(cell.count()):
+        item = cell.item(i)
+        assert item.data(Qt.ItemDataRole.UserRole) is None
+        assert "точка в сетке" not in item.text()
+    assert rem_win.day_events.count() == 1
+    assert "точка в сетке" in rem_win.day_events.item(0).text()
+    assert len(rem_win.findChildren(CalendarDayCell)) > 7
+
+
+def test_calendar_view_combo_week_and_persists(reminder_ui):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import CalendarDayCell, RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    assert rem_win.day_pane.isHidden()
+    combo = rem_win.calendar_view_combo
+    assert combo.isVisible()
+    assert combo.parentWidget() is not rem_win.day_pane
+    compact_idx = combo.findData("compact")
+    assert compact_idx >= 0
+    assert combo.itemText(compact_idx) == "Месяц"
+    assert combo.currentText() == "Месяц"
+    week_idx = combo.findData("week")
+    assert week_idx >= 0
+    combo.setCurrentIndex(week_idx)
+    assert rem_win.day_pane.isHidden()
+    assert len(rem_win.findChildren(CalendarDayCell)) == 7
+    assert service.settings.calendar_view == "week"
+    assert window.settings_store.load().calendar_view == "week"
+
+    compact_idx = combo.findData("compact")
+    combo.setCurrentIndex(compact_idx)
+    assert rem_win.day_pane.isHidden()
+    assert len(rem_win.findChildren(CalendarDayCell)) > 7
+    today = date.today()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+
+
+def test_month_view_dots_without_pane_week_keeps_event_text(reminder_ui):
+    from datetime import time as time_cls
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    today = date.today()
+    service.create_reminder(
+        None,
+        text="событие месяца",
+        time_of_day=time_cls(11, 0),
+        rule=ReminderRule.ONCE,
+        once_date=today,
+    )
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    assert rem_win.day_pane.isHidden()
+    assert rem_win.calendar_view_combo.currentText() == "Месяц"
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    has_dots = False
+    for i in range(cell.count()):
+        item = cell.item(i)
+        assert item.data(Qt.ItemDataRole.UserRole) is None
+        assert "событие месяца" not in item.text()
+        if cell.itemWidget(item) is not None:
+            has_dots = True
+    assert has_dots
+
+    rem_win.calendar_view_combo.setCurrentIndex(
+        rem_win.calendar_view_combo.findData("week")
+    )
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    texts = [cell.item(i).text() for i in range(cell.count())]
+    assert any("событие месяца" in text for text in texts)
+
+
+def _stylesheet_border(ss: str) -> str:
+    assert "border:" in ss
+    return ss.split("border:", 1)[1].split(";", 1)[0].strip()
+
+
+def test_day_cell_border_not_transparent_light_and_dark(qtbot):
+    from PySide6.QtGui import QColor, QPalette
+
+    from taskmanager.ui.reminders_window import CalendarDayCell
+
+    cell = CalendarDayCell(date.today(), in_month=True)
+    qtbot.addWidget(cell)
+
+    light = QPalette(cell.palette())
+    light.setColor(QPalette.ColorRole.Window, QColor("#f1f5f9"))
+    light.setColor(QPalette.ColorRole.Dark, QColor("#64748b"))
+    light.setColor(QPalette.ColorRole.Mid, QColor("#94a3b8"))
+    light.setColor(QPalette.ColorRole.Highlight, QColor("#0f766e"))
+    cell.setPalette(light)
+    cell.apply_chrome(today=False, selected=False, weekend=False)
+    ordinary = _stylesheet_border(cell.styleSheet())
+    assert "transparent" not in ordinary
+    assert light.color(QPalette.ColorRole.Dark).name() in ordinary
+
+    cell.setPalette(light)
+    cell.apply_chrome(today=False, selected=True, weekend=False)
+    selected = _stylesheet_border(cell.styleSheet())
+    assert light.color(QPalette.ColorRole.Highlight).name() in selected
+    assert selected != ordinary
+
+    dark = QPalette(cell.palette())
+    dark.setColor(QPalette.ColorRole.Window, QColor("#0f172a"))
+    dark.setColor(QPalette.ColorRole.Dark, QColor("#1e293b"))
+    dark.setColor(QPalette.ColorRole.Mid, QColor("#64748b"))
+    dark.setColor(QPalette.ColorRole.Highlight, QColor("#14b8a6"))
+    cell.setPalette(dark)
+    cell.apply_chrome(today=False, selected=False, weekend=False)
+    ordinary_dark = _stylesheet_border(cell.styleSheet())
+    assert "transparent" not in ordinary_dark
+    assert dark.color(QPalette.ColorRole.Mid).name() in ordinary_dark
+
+    cell.setPalette(dark)
+    cell.apply_chrome(today=False, selected=True, weekend=False)
+    selected_dark = _stylesheet_border(cell.styleSheet())
+    assert dark.color(QPalette.ColorRole.Highlight).name() in selected_dark
+    assert selected_dark != ordinary_dark
+
+
+def test_month_and_week_grid_cells_have_visible_border(reminder_ui):
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import CalendarDayCell, RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    today = date.today()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    assert "transparent" not in _stylesheet_border(cell.styleSheet())
+    ordinary = next(
+        c
+        for c in rem_win.findChildren(CalendarDayCell)
+        if not c.property("today") and not c.property("selectedDay")
+    )
+    assert "transparent" not in _stylesheet_border(ordinary.styleSheet())
+
+    rem_win.calendar_view_combo.setCurrentIndex(
+        rem_win.calendar_view_combo.findData("week")
+    )
+    week_cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert week_cell is not None
+    assert "transparent" not in _stylesheet_border(week_cell.styleSheet())
+
+
+def test_format_day_heading_relative_to_today():
+    from datetime import timedelta
+
+    from taskmanager.ui.reminders_window import _format_day_heading
+
+    today = date(2026, 8, 18)
+    heading = _format_day_heading(today, today=today)
+    assert "назад" not in heading
+    assert "через" not in heading
+    assert "18" in heading
+    assert "августа" in heading
+
+    yesterday = _format_day_heading(today - timedelta(days=1), today=today)
+    assert "1 день назад" in yesterday
+    assert "через" not in yesterday
+
+    after = _format_day_heading(today + timedelta(days=2), today=today)
+    assert "через 2 дня" in after
+    assert "назад" not in after
+
+    five = _format_day_heading(today - timedelta(days=5), today=today)
+    assert "5 дней назад" in five
+
+
+def test_day_pane_heading_shows_relative_offset(reminder_ui):
+    from datetime import timedelta
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    later = today + timedelta(days=2)
+
+    def heading_for(day: date) -> str:
+        rem_win._year = day.year
+        rem_win._month = day.month
+        rem_win.reload()
+        cell = rem_win.findChild(QListWidget, f"dayCell_{day.isoformat()}")
+        assert cell is not None
+        qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+        return rem_win.day_pane_title.text()
+
+    past = heading_for(yesterday)
+    assert "1 день назад" in past
+    assert "через" not in past
+    future = heading_for(later)
+    assert "через 2 дня" in future
+    assert "назад" not in future
+
+
+def test_week_view_day_click_opens_pane_and_card_from_pane(reminder_ui):
+    from datetime import time as time_cls
+
+    from PySide6.QtCore import Qt, QTimer
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import (
+        ReminderCardDialog,
+        ReminderEditDialog,
+        RemindersWindow,
+    )
+
+    window, service, qtbot = reminder_ui
+    today = date.today()
+    service.create_reminder(
+        None,
+        text="в панели недели",
+        time_of_day=time_cls(10, 0),
+        rule=ReminderRule.ONCE,
+        once_date=today,
+    )
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.calendar_view_combo.setCurrentIndex(
+        rem_win.calendar_view_combo.findData("week")
+    )
+    assert rem_win.day_pane.isHidden()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+    assert rem_win.day_events.count() == 1
+    assert "в панели недели" in rem_win.day_events.item(0).text()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    assert cell.property("selectedDay") is True
+
+    captured: list[date] = []
+
+    def grab_and_reject() -> None:
+        edits = rem_win.findChildren(ReminderEditDialog)
+        assert edits
+        captured.append(edits[0].once_date_value)
+        edits[0].reject()
+
+    QTimer.singleShot(0, grab_and_reject)
+    rem_win.create_event_btn.click()
+    assert captured == [today]
+
+    rem_win.day_events.itemDoubleClicked.emit(rem_win.day_events.item(0))
+    cards = [c for c in rem_win.findChildren(ReminderCardDialog) if c.isVisible()]
+    assert cards
+    assert "в панели недели" in cards[-1].body_label.toPlainText()
+
+
+def test_week_view_changing_day_does_not_reset_splitter(reminder_ui):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import CalendarDayCell, RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.resize(1100, 720)
+    rem_win.calendar_view_combo.setCurrentIndex(
+        rem_win.calendar_view_combo.findData("week")
+    )
+    cells = rem_win.findChildren(CalendarDayCell)
+    assert len(cells) == 7
+    first = cells[0].day
+    other = next(cell.day for cell in cells if cell.day != first)
+    cell = rem_win.findChild(QListWidget, f"dayCell_{first.isoformat()}")
+    assert cell is not None
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+    rem_win.calendar_splitter.setSizes([220, 500])
+    sizes = rem_win.calendar_splitter.sizes()
+    other_cell = rem_win.findChild(QListWidget, f"dayCell_{other.isoformat()}")
+    assert other_cell is not None
+    qtbot.mouseClick(other_cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+    assert rem_win.calendar_splitter.sizes() == sizes
+    assert rem_win.day_pane_title.text()
+    assert str(other.day) in rem_win.day_pane_title.text()
+
+
+def test_week_view_opens_pane_split_in_half(reminder_ui):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.resize(1100, 720)
+    rem_win.calendar_view_combo.setCurrentIndex(
+        rem_win.calendar_view_combo.findData("week")
+    )
+    today = date.today()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+    sizes = rem_win.calendar_splitter.sizes()
+    total = sum(sizes)
+    assert total > 0
+    assert abs(sizes[0] - sizes[1]) <= total * 0.2
+
+
+def test_calendar_close_hides_window_even_if_day_pane_open(reminder_ui):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    today = date.today()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    assert rem_win.day_pane.isVisible()
+    assert rem_win.isVisible()
+    rem_win.reject()
+    assert rem_win.isHidden()
+    assert not rem_win.day_pane.isHidden()
+
+
+def test_calendar_layout_persists_view_splitter_and_open_pane(reminder_ui):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.resize(1100, 720)
+    rem_win.calendar_view_combo.setCurrentIndex(
+        rem_win.calendar_view_combo.findData("week")
+    )
+    today = date.today()
+    cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert cell is not None
+    qtbot.mouseClick(cell.viewport(), Qt.MouseButton.LeftButton)
+    rem_win.calendar_splitter.setSizes([220, 500])
+    wanted = rem_win.calendar_splitter.sizes()
+    rem_win.reject()
+
+    loaded = window.settings_store.load()
+    assert loaded.calendar_view == "week"
+    assert loaded.calendar_day_pane_open is True
+    assert loaded.calendar_week_splitter == list(wanted)
+
+    again = RemindersWindow(service, window)
+    qtbot.addWidget(again)
+    again.show()
+    again.resize(1100, 720)
+    assert again.calendar_view_combo.currentData() == "week"
+    assert again.day_pane.isVisible()
+    restored = again.calendar_splitter.sizes()
+    assert sum(restored) > 0
+    assert abs(restored[0] / sum(restored) - wanted[0] / sum(wanted)) < 0.12
+
+
+def test_weekend_cells_use_weekend_wash_not_today(reminder_ui):
+    from datetime import timedelta
+
+    from PySide6.QtWidgets import QListWidget
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    today = date.today()
+    today_cell = rem_win.findChild(QListWidget, f"dayCell_{today.isoformat()}")
+    assert today_cell is not None
+    weekend_cell = None
+    monday = today - timedelta(days=today.weekday())
+    for offset in range(0, 21):
+        day = monday + timedelta(days=offset)
+        if day.weekday() not in (5, 6) or day == today:
+            continue
+        found = rem_win.findChild(QListWidget, f"dayCell_{day.isoformat()}")
+        if found is not None:
+            weekend_cell = found
+            break
+    assert weekend_cell is not None
+    assert weekend_cell.property("weekend") is True
+    assert weekend_cell.property("today") is False
+    assert today_cell.property("today") is True
+    assert weekend_cell.styleSheet() != today_cell.styleSheet()
+
+
+def test_notify_dismiss_stops_sound_player(reminder_ui, monkeypatch):
+    from datetime import timedelta
+
+    from taskmanager.domain import ReminderRule
+    from taskmanager.ui.reminders_window import ReminderNotifyDialog
+
+    window, service, qtbot = reminder_ui
+    occ = datetime.now().replace(second=0, microsecond=0) - timedelta(hours=1)
+    series = service.create_reminder(
+        None,
+        text="стоп звука",
+        time_of_day=occ.time(),
+        rule=ReminderRule.ONCE,
+        once_date=occ.date(),
+    )
+    stops: list[int] = []
+    original_stop = window._event_sound_player.stop
+
+    def spy_stop() -> None:
+        stops.append(1)
+        original_stop()
+
+    monkeypatch.setattr(window._event_sound_player, "stop", spy_stop)
+    window._notify_reminder(series, occ, None, None)
+    popup = [
+        w for w in window.findChildren(ReminderNotifyDialog) if w.isVisible()
+    ][-1]
+    stops.clear()
+    popup.accept()
+    assert stops
+
+    window._notify_reminder(series, occ, None, None)
+    popup = [
+        w for w in window.findChildren(ReminderNotifyDialog) if w.isVisible()
+    ][-1]
+    stops.clear()
+    popup.reject()
+    assert stops
+
+    window._notify_reminder(series, occ, None, None)
+    popup = [
+        w for w in window.findChildren(ReminderNotifyDialog) if w.isVisible()
+    ][-1]
+    stops.clear()
+    popup._snooze()
+    assert stops
+
+
+def _past_once_event(service: TaskService, text: str, *, hours_ago: int, task_id=None):
+    from datetime import timedelta
+
+    occ = datetime.now().replace(second=0, microsecond=0) - timedelta(hours=hours_ago)
+    return service.create_reminder(
+        task_id,
+        text=text,
+        time_of_day=occ.time(),
+        rule=ReminderRule.ONCE,
+        once_date=occ.date(),
+    )
+
+
+def _missed_button(win, text: str):
+    from PySide6.QtWidgets import QPushButton
+
+    for btn in win.missed_page.findChildren(QPushButton):
+        if btn.text() == text:
+            return btn
+    raise AssertionError(f"button {text!r} not found")
+
+
+def test_missed_click_selects_double_click_opens_card(reminder_ui):
+    from taskmanager.ui.reminders_window import ReminderCardDialog, RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    _past_once_event(service, "одиночный клик", hours_ago=1)
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.tabs.setCurrentWidget(rem_win.missed_page)
+    assert rem_win.missed_list.count() == 1
+    item = rem_win.missed_list.item(0)
+    rem_win.missed_list.itemClicked.emit(item)
+    cards = [c for c in rem_win.findChildren(ReminderCardDialog) if c.isVisible()]
+    assert cards == []
+    rem_win.missed_list.itemDoubleClicked.emit(item)
+    cards = [c for c in rem_win.findChildren(ReminderCardDialog) if c.isVisible()]
+    assert cards
+    assert "одиночный клик" in cards[-1].body_label.toPlainText()
+
+
+def test_missed_ack_applies_to_all_selected(reminder_ui):
+    window, service, qtbot = reminder_ui
+    a = _past_once_event(service, "ack-a", hours_ago=3)
+    b = _past_once_event(service, "ack-b", hours_ago=2)
+    c = _past_once_event(service, "ack-c", hours_ago=1)
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.tabs.setCurrentWidget(rem_win.missed_page)
+    assert rem_win.missed_list.count() == 3
+    ack = _missed_button(rem_win, "Подтвердить")
+    assert not ack.isEnabled()
+
+    rem_win.missed_list.clearSelection()
+    rem_win.missed_list.item(0).setSelected(True)
+    rem_win.missed_list.item(1).setSelected(True)
+    assert ack.isEnabled()
+    ack.click()
+    assert rem_win.missed_list.count() == 1
+    remaining = {row[0].id for row in service.list_missed_reminders()}
+    assert remaining == {c.id}
+    assert service.get_reminder(a.id) is not None
+    assert service.get_reminder(b.id) is not None
+
+
+def test_missed_delete_selected_asks_count_and_deletes_series(reminder_ui, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    a = _past_once_event(service, "del-a", hours_ago=2)
+    b = _past_once_event(service, "del-b", hours_ago=1)
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.tabs.setCurrentWidget(rem_win.missed_page)
+    rem_win.missed_list.clearSelection()
+    rem_win.missed_list.item(0).setSelected(True)
+    rem_win.missed_list.item(1).setSelected(True)
+    prompts: list[str] = []
+
+    def capture_question(*args, **kwargs):
+        prompts.append(args[2] if len(args) > 2 else "")
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", capture_question)
+    _missed_button(rem_win, "Удалить событие").click()
+    assert prompts == ["Удалить 2 событий?"]
+    assert rem_win.missed_list.count() == 0
+    assert service.list_reminders() == []
+    assert service.repo.get_reminder(a.id) is None
+    assert service.repo.get_reminder(b.id) is None
+
+
+def test_missed_ack_all(reminder_ui):
+    from PySide6.QtWidgets import QMessageBox
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    _past_once_event(service, "all-a", hours_ago=3)
+    _past_once_event(service, "all-b", hours_ago=2)
+    keep = _past_once_event(service, "all-c", hours_ago=1)
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.tabs.setCurrentWidget(rem_win.missed_page)
+    assert rem_win.missed_list.count() == 3
+    ack_all = _missed_button(rem_win, "Подтвердить всё")
+    delete_all = _missed_button(rem_win, "Удалить всё")
+    select_all = _missed_button(rem_win, "Выбрать все")
+    assert ack_all.isEnabled()
+    assert delete_all.isEnabled()
+    assert select_all.isEnabled()
+
+    rem_win.missed_list.item(0).setSelected(True)
+    ack_all.click()
+    assert rem_win.missed_list.count() == 0
+    assert service.list_missed_reminders() == []
+    assert len(service.list_reminders()) == 3
+    assert keep.id in {row.id for row in service.list_reminders()}
+    assert not ack_all.isEnabled()
+    assert not delete_all.isEnabled()
+    assert not select_all.isEnabled()
+
+
+def test_missed_delete_all_asks_count_and_deletes_series(reminder_ui, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    _past_once_event(service, "wipe-a", hours_ago=2)
+    _past_once_event(service, "wipe-b", hours_ago=1)
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.tabs.setCurrentWidget(rem_win.missed_page)
+    delete_all = _missed_button(rem_win, "Удалить всё")
+    assert rem_win.missed_list.count() == 2
+    prompts: list[str] = []
+
+    def capture_question(*args, **kwargs):
+        prompts.append(args[2] if len(args) > 2 else "")
+        return QMessageBox.StandardButton.Yes
+
+    monkeypatch.setattr(QMessageBox, "question", capture_question)
+    delete_all.click()
+    assert prompts == ["Удалить 2 событий?"]
+    assert rem_win.missed_list.count() == 0
+    assert service.list_reminders() == []
+    assert not delete_all.isEnabled()
+
+
+def test_missed_select_all_and_open_task_enabled_for_single_linked(reminder_ui):
+    from taskmanager.ui.reminders_window import RemindersWindow
+
+    window, service, qtbot = reminder_ui
+    project = service.create_project("MissedBulk")
+    task = service.create_task(
+        CreateTaskRequest(project_id=project.id, number="31", create_folder=False)
+    )
+    _past_once_event(service, "linked", hours_ago=2, task_id=task.id)
+    _past_once_event(service, "standalone", hours_ago=1)
+    rem_win = RemindersWindow(service, window)
+    qtbot.addWidget(rem_win)
+    rem_win.show()
+    rem_win.tabs.setCurrentWidget(rem_win.missed_page)
+    select_all = _missed_button(rem_win, "Выбрать все")
+    open_task = _missed_button(rem_win, "Открыть заявку")
+    skip = _missed_button(rem_win, "Пропустить вхождение")
+    assert rem_win.missed_list.count() == 2
+    assert rem_win.missed_list.selectedItems() == []
+    assert not open_task.isEnabled()
+    assert not skip.isEnabled()
+
+    select_all.click()
+    assert len(rem_win.missed_list.selectedItems()) == 2
+    assert skip.isEnabled()
+    assert not open_task.isEnabled()
+
+    rem_win.missed_list.clearSelection()
+    for i in range(rem_win.missed_list.count()):
+        item = rem_win.missed_list.item(i)
+        if "linked" in item.text() or "31" in item.text():
+            item.setSelected(True)
+            break
+    assert open_task.isEnabled()
+    opened: list[int] = []
+    rem_win.open_task_requested.connect(opened.append)
+    open_task.click()
+    assert opened == [task.id]
+
+    select_all.click()
+    skip.click()
+    assert rem_win.missed_list.count() == 0
+    assert service.list_missed_reminders() == []
+    assert len(service.list_reminders()) == 2
+
+
+def test_event_add_custom_color_saved_and_in_task_palette(reminder_ui, monkeypatch):
+    import json
+
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QColorDialog, QToolButton
+
+    from taskmanager.ui.reminders_window import ReminderEditDialog
+
+    window, service, qtbot = reminder_ui
+    dialog = ReminderEditDialog(service, window)
+    qtbot.addWidget(dialog)
+
+    add_buttons = [
+        btn
+        for btn in dialog.findChildren(QToolButton)
+        if btn.text() == "+"
+    ]
+    assert add_buttons, "Event form should have a + color button"
+    monkeypatch.setattr(
+        QColorDialog, "getColor", lambda *a, **k: QColor("#123456")
+    )
+    add_buttons[0].click()
+    assert "#123456" in service.settings.colors.values()
+    saved = json.loads(window.settings_store.path.read_text(encoding="utf-8"))
+    assert "#123456" in saved.get("colors", {}).values()
+    tooltips = [
+        btn.toolTip() for btn in window.palette_host.findChildren(QToolButton)
+    ]
+    assert any("123456" in tip.lower() for tip in tooltips)
+
 

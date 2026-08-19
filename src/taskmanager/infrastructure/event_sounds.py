@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Sequence
+
+from taskmanager.infrastructure.paths import app_dir
 
 
 SOUND_EXTENSIONS = frozenset({".wav", ".ogg", ".oga", ".flac"})
@@ -19,6 +22,8 @@ PREFERRED_SOUND_NAMES = (
 )
 MISSING_FILE_MARK = "нет файла"
 CUSTOM_SOUND_SENTINEL = "__custom_sound__"
+SETTINGS_SOUND_SENTINEL = "__settings_sound__"
+SOUNDS_DIR_NAME = "sounds"
 
 
 def system_sound_roots() -> list[Path]:
@@ -120,8 +125,52 @@ def parse_event_sound_path(
 
 
 def sound_choice_label(path: str | Path) -> str:
-    file_path = Path(path)
-    name = file_path.name or str(path)
-    if file_path.is_file():
+    file_path = os.fspath(path) if not isinstance(path, str) else path
+    name = os.path.basename(file_path) or file_path
+    if os.path.isfile(file_path):
         return name
     return f"{name} ({MISSING_FILE_MARK})"
+
+
+def app_sounds_dir(*, base: Path | None = None) -> Path:
+    return (base if base is not None else app_dir()) / SOUNDS_DIR_NAME
+
+
+def copy_custom_sound(
+    source: str | Path, *, dest_dir: Path | str | None = None
+) -> Path:
+    """Copy ``source`` into the app sounds folder. The original file is kept."""
+    src_s = os.fspath(source) if not isinstance(source, str) else source
+    raw_dest = dest_dir if dest_dir is not None else app_sounds_dir()
+    target_s = raw_dest if isinstance(raw_dest, str) else os.fspath(raw_dest)
+    os.makedirs(target_s, exist_ok=True)
+    try:
+        src_resolved = os.path.realpath(src_s)
+        dest_resolved = os.path.realpath(target_s)
+    except OSError:
+        src_resolved = src_s
+        dest_resolved = target_s
+    if os.path.dirname(src_resolved) == dest_resolved:
+        return Path(src_resolved)
+    name = os.path.basename(src_s)
+    stem, suffix = os.path.splitext(name)
+    dest_s = os.path.join(target_s, name)
+    n = 2
+    while os.path.exists(dest_s):
+        dest_s = os.path.join(target_s, f"{stem}_{n}{suffix}")
+        n += 1
+    shutil.copy2(src_resolved, dest_s)
+    return Path(os.path.realpath(dest_s))
+
+
+def event_ping_path(
+    sound_path: str | None,
+    settings_path: str,
+    *,
+    enabled: bool,
+) -> str:
+    """Path to play for an Event ping. Empty means silence."""
+    if not enabled:
+        return ""
+    chosen = (sound_path or "").strip()
+    return chosen or (settings_path or "").strip()

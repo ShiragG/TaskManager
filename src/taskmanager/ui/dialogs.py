@@ -1,19 +1,38 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable
 from datetime import date
+from pathlib import Path
 
-from PySide6.QtCore import QDate, Qt, QUrl
+from PySide6.QtCore import (
+    QBuffer,
+    QByteArray,
+    QDate,
+    QIODevice,
+    QMimeData,
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QUrl,
+)
 from PySide6.QtGui import (
     QAction,
     QBrush,
     QColor,
+    QContextMenuEvent,
     QDesktopServices,
     QFont,
+    QImage,
     QKeySequence,
     QMouseEvent,
+    QPixmap,
     QTextCharFormat,
     QTextCursor,
+    QTextImageFormat,
     QTextListFormat,
 )
 from PySide6.QtWidgets import (
@@ -22,6 +41,7 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QInputDialog,
@@ -29,12 +49,14 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
     QToolBar,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -54,7 +76,54 @@ from taskmanager.domain import (
     parse_workflow_status,
     priority_color_hex,
 )
+from taskmanager.services.inline_images import sniff_image
 from taskmanager.services.settings_service import Settings
+
+SWATCH_SIZE = 22
+DEFAULT_IMAGE_PREVIEW_WIDTH = 480
+SMALL_IMAGE_PREVIEW_WIDTH = 240
+_IMAGE_RESIZE_MIN = 40
+_IMAGE_CORNER_HIT = 16
+
+
+class ColorSwatchButton(QToolButton):
+    """Palette swatch; optional right-click removal for custom colors."""
+
+    def __init__(
+        self,
+        color: str,
+        *,
+        tooltip: str,
+        removable: bool = False,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.hex_color = color
+        self.removable = removable
+        self.setToolTip(tooltip)
+        self.setFixedSize(SWATCH_SIZE, SWATCH_SIZE)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        border = "#94a3b8" if color.lower() in {"#ffffff", "#fff"} else "#334155"
+        self.setStyleSheet(
+            f"QToolButton {{ background-color: {color}; border: 1px solid {border}; "
+            f"border-radius: 3px; }}"
+            f"QToolButton:hover {{ border: 2px solid #0f766e; }}"
+        )
+        self._on_remove = None
+
+    def set_remove_handler(self, handler) -> None:
+        self._on_remove = handler
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        if (
+            event.button() == Qt.MouseButton.RightButton
+            and self.removable
+            and self._on_remove is not None
+        ):
+            self._on_remove()
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 class ProjectDialog(QDialog):
@@ -88,8 +157,58 @@ class ProjectDialog(QDialog):
 DirectoryDialog = ProjectDialog
 
 
+def _qimage_png_bytes(image: QImage) -> bytes:
+    ba = QByteArray()
+    buf = QBuffer(ba)
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    image.save(buf, "PNG")
+    buf.close()
+    return bytes(ba)
+
+
+def _data_uri_img_html(
+    data: bytes, mime: str, *, width: int = DEFAULT_IMAGE_PREVIEW_WIDTH
+) -> str:
+    b64 = base64.b64encode(data).decode("ascii")
+    return f'<img src="data:{mime};base64,{b64}" width="{width}">'
+
+
+def _natural_image_size(fmt: QTextImageFormat) -> QSize:
+    name = fmt.name()
+    image = QImage()
+    if name.startswith("data:"):
+        comma = name.find(",")
+        if comma >= 0:
+            try:
+                image.loadFromData(base64.b64decode(name[comma + 1 :]))
+            except Exception:
+                image = QImage()
+    elif name.startswith("file:"):
+        image = QImage(QUrl(name).toLocalFile())
+    elif name:
+        image = QImage(name)
+    if image.isNull():
+        return QSize(max(int(fmt.width()), 0), max(int(fmt.height()), 0))
+    return image.size()
+
+
+class _ImageHit:
+    __slots__ = ("cursor", "view_rect", "position")
+
+    def __init__(self, cursor: QTextCursor, view_rect: QRect, position: int) -> None:
+        self.cursor = cursor
+        self.view_rect = view_rect
+        self.position = position
+
+
 class _LinkAwareTextEdit(QTextEdit):
     """QTextEdit that opens anchors on Ctrl+click; plain click selects as usual."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._drag_resize: tuple[int, int] | None = None
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if (
@@ -101,7 +220,197 @@ class _LinkAwareTextEdit(QTextEdit):
                 QDesktopServices.openUrl(QUrl(href))
                 event.accept()
                 return
+        if event.button() == Qt.MouseButton.LeftButton:
+            hit = self._image_hit_at(event.position().toPoint())
+            if hit is not None and self._near_br_corner(
+                hit.view_rect, event.position().toPoint()
+            ):
+                self._drag_resize = (hit.position, hit.view_rect.left())
+                event.accept()
+                return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        pos = event.position().toPoint()
+        if self._drag_resize is not None:
+            fragment_pos, left = self._drag_resize
+            new_width = max(_IMAGE_RESIZE_MIN, pos.x() - left)
+            cursor = self._cursor_for_image_at(fragment_pos)
+            if cursor is not None:
+                self.set_image_display_width(cursor, new_width)
+            event.accept()
+            return
+        hit = self._image_hit_at(pos)
+        if hit is not None and self._near_br_corner(hit.view_rect, pos):
+            self.viewport().setCursor(Qt.CursorShape.SizeFDiagCursor)
+        else:
+            self.viewport().unsetCursor()
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._drag_resize is not None and event.button() == Qt.MouseButton.LeftButton:
+            self._drag_resize = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        hit = self._image_hit_at(event.pos())
+        if hit is not None:
+            menu = QMenu(self)
+            menu.addAction(
+                "Уменьшенная",
+                lambda c=QTextCursor(hit.cursor): self.set_image_display_width(
+                    c, SMALL_IMAGE_PREVIEW_WIDTH
+                ),
+            )
+            menu.addAction(
+                "Средняя",
+                lambda c=QTextCursor(hit.cursor): self.set_image_display_width(
+                    c, DEFAULT_IMAGE_PREVIEW_WIDTH
+                ),
+            )
+            menu.addAction(
+                "Исходная",
+                lambda c=QTextCursor(hit.cursor): self.set_image_display_width(c, 0),
+            )
+            menu.addAction(
+                "Ширина…",
+                lambda c=QTextCursor(hit.cursor): self._prompt_image_width(c),
+            )
+            menu.exec(event.globalPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
+
+    def insertFromMimeData(self, source: QMimeData) -> None:
+        if source.hasImage():
+            image = source.imageData()
+            if isinstance(image, QPixmap):
+                image = image.toImage()
+            if isinstance(image, QImage) and not image.isNull():
+                data = _qimage_png_bytes(image)
+                if sniff_image(data) is not None:
+                    self.textCursor().insertHtml(_data_uri_img_html(data, "image/png"))
+                    return
+        super().insertFromMimeData(source)
+
+    def iter_image_cursors(self) -> list[QTextCursor]:
+        found: list[QTextCursor] = []
+        block = self.document().firstBlock()
+        while block.isValid():
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                if fragment.isValid() and fragment.charFormat().isImageFormat():
+                    cursor = self._cursor_for_image_at(fragment.position())
+                    if cursor is not None:
+                        found.append(cursor)
+                iterator += 1
+            block = block.next()
+        return found
+
+    def set_image_display_width(self, cursor: QTextCursor, width: int) -> None:
+        fmt = cursor.charFormat()
+        if not fmt.isImageFormat():
+            return
+        img_fmt = fmt.toImageFormat()
+        natural = _natural_image_size(img_fmt)
+        if width <= 0:
+            if natural.width() > 0:
+                img_fmt.setWidth(natural.width())
+                img_fmt.setHeight(natural.height())
+            else:
+                img_fmt.setWidth(0)
+                img_fmt.setHeight(0)
+        else:
+            img_fmt.setWidth(width)
+            if natural.width() > 0 and natural.height() > 0:
+                img_fmt.setHeight(
+                    max(1, round(width * natural.height() / natural.width()))
+                )
+            else:
+                img_fmt.setHeight(0)
+        cursor.setCharFormat(img_fmt)
+
+    def _prompt_image_width(self, cursor: QTextCursor) -> None:
+        fmt = cursor.charFormat()
+        if not fmt.isImageFormat():
+            return
+        current = int(fmt.toImageFormat().width() or DEFAULT_IMAGE_PREVIEW_WIDTH)
+        width, ok = QInputDialog.getInt(
+            self,
+            "Ширина",
+            "Ширина (px):",
+            current,
+            _IMAGE_RESIZE_MIN,
+            8000,
+        )
+        if ok:
+            self.set_image_display_width(cursor, width)
+
+    def _cursor_for_image_at(self, position: int) -> QTextCursor | None:
+        cursor = QTextCursor(self.document())
+        cursor.setPosition(position)
+        cursor.setPosition(position + 1, QTextCursor.MoveMode.KeepAnchor)
+        if not cursor.charFormat().isImageFormat():
+            return None
+        return cursor
+
+    def _image_hit_at(self, view_pos: QPoint) -> _ImageHit | None:
+        doc_layout = self.document().documentLayout()
+        doc_pos = QPointF(
+            view_pos.x() + self.horizontalScrollBar().value(),
+            view_pos.y() + self.verticalScrollBar().value(),
+        )
+        block = self.document().firstBlock()
+        while block.isValid():
+            block_rect = doc_layout.blockBoundingRect(block)
+            layout = block.layout()
+            iterator = block.begin()
+            while not iterator.atEnd():
+                fragment = iterator.fragment()
+                fmt = fragment.charFormat()
+                if fragment.isValid() and fmt.isImageFormat() and layout is not None:
+                    img_fmt = fmt.toImageFormat()
+                    pos_in_block = fragment.position() - block.position()
+                    line = layout.lineForTextPosition(pos_in_block)
+                    if line.isValid():
+                        x = line.cursorToX(pos_in_block)
+                        if isinstance(x, tuple):
+                            x = x[0]
+                        natural = _natural_image_size(img_fmt)
+                        width = img_fmt.width() or natural.width() or DEFAULT_IMAGE_PREVIEW_WIDTH
+                        height = img_fmt.height() or natural.height() or width
+                        rect = QRectF(
+                            block_rect.x() + line.x() + x,
+                            block_rect.y() + line.y(),
+                            width,
+                            height,
+                        )
+                        if rect.contains(doc_pos):
+                            view_rect = QRect(
+                                int(rect.x() - self.horizontalScrollBar().value()),
+                                int(rect.y() - self.verticalScrollBar().value()),
+                                int(rect.width()),
+                                int(rect.height()),
+                            )
+                            cursor = self._cursor_for_image_at(fragment.position())
+                            if cursor is not None:
+                                return _ImageHit(cursor, view_rect, fragment.position())
+                iterator += 1
+            block = block.next()
+        return None
+
+    @staticmethod
+    def _near_br_corner(view_rect: QRect, pos: QPoint) -> bool:
+        handle = QRect(
+            view_rect.right() - _IMAGE_CORNER_HIT,
+            view_rect.bottom() - _IMAGE_CORNER_HIT,
+            _IMAGE_CORNER_HIT + 8,
+            _IMAGE_CORNER_HIT + 8,
+        )
+        return handle.contains(pos)
 
 
 # Local toolbar QSS: do not inherit app teal toolbutton styles so checked/hover
@@ -190,12 +499,17 @@ class RichTextEditDialog(QDialog):
         self._act_link = QAction("Ссылка", self)
         self._act_link.setCheckable(False)
         self._act_link.triggered.connect(self._insert_link)
+        self._act_image = QAction("Рис.", self)
+        self._act_image.setCheckable(False)
+        self._act_image.setToolTip("Вставить изображение")
+        self._act_image.triggered.connect(self._insert_image)
         toolbar.addAction(self._act_bold)
         toolbar.addAction(self._act_italic)
         toolbar.addAction(self._act_underline)
         toolbar.addAction(self._act_bullet)
         toolbar.addAction(self._act_numbered)
         toolbar.addAction(self._act_link)
+        toolbar.addAction(self._act_image)
         self.addAction(self._act_bold)
         self.addAction(self._act_italic)
         self.addAction(self._act_underline)
@@ -298,6 +612,36 @@ class RichTextEditDialog(QDialog):
         fmt.setForeground(QColor("#0d9488"))
         fmt.setFontUnderline(True)
         cursor.insertText(selected, fmt)
+
+    def _insert_image(self) -> None:
+        path, _filter = QFileDialog.getOpenFileName(
+            self,
+            "Изображение",
+            "",
+            "Изображения (*.png *.jpg *.jpeg *.gif *.webp)",
+        )
+        if path:
+            self.insert_image_from_path(path)
+
+    def insert_image_from_path(self, path: str) -> bool:
+        """Insert a magic-validated image as a data URI (files are written on save)."""
+        try:
+            data = Path(path).read_bytes()
+        except OSError as exc:
+            QMessageBox.warning(self, "Ошибка", f"Не удалось прочитать файл:\n{exc}")
+            return False
+        ext = sniff_image(data)
+        if ext is None:
+            QMessageBox.warning(self, "Ошибка", "Неподдерживаемый формат изображения")
+            return False
+        mime = {
+            "png": "image/png",
+            "jpeg": "image/jpeg",
+            "gif": "image/gif",
+            "webp": "image/webp",
+        }[ext]
+        self.editor.textCursor().insertHtml(_data_uri_img_html(data, mime))
+        return True
 
     @property
     def html(self) -> str:

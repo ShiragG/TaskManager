@@ -657,3 +657,116 @@ def test_settings_dialog_tabs_and_event_defaults(app_env, qtbot):
     assert dialog.event_os_notification_cb.isChecked()
     assert dialog.snooze_combo.currentData() == 15
     assert dialog._update_panel.isHidden()
+    assert dialog.check_updates_on_startup_cb.isChecked()
+
+
+def test_quiet_update_check_skips_uptodate_modal(app_env, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from taskmanager.services.update_service import LatestRelease
+    from taskmanager.version import get_version
+
+    window, _service = app_env
+    boxes: list[str] = []
+
+    def capture_info(*_a, **_k):
+        boxes.append("info")
+        return QMessageBox.StandardButton.Ok
+
+    def capture_warn(*_a, **_k):
+        boxes.append("warn")
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(QMessageBox, "information", capture_info)
+    monkeypatch.setattr(QMessageBox, "warning", capture_warn)
+    current = get_version()
+    tag = current if current.lower().startswith("v") else f"v{current}"
+    release = LatestRelease(tag=tag, version=current, assets=[])
+    monkeypatch.setattr(
+        "taskmanager.ui.update_worker.UpdateService.fetch_latest_release",
+        lambda self: release,
+    )
+    window.start_update_check(quiet=True)
+    assert window._update_panel.isHidden()
+    assert "Проверка обновлений" not in window.statusBar().currentMessage()
+    qtbot.waitUntil(lambda: not window._update_busy, timeout=5000)
+    assert boxes == []
+    assert window._update_panel.isHidden()
+    assert "Проверка обновлений" not in window.statusBar().currentMessage()
+    assert window.statusBar().currentMessage() == "Готово"
+
+
+def test_quiet_module_update_check_hides_ui_when_nothing_to_download(
+    app_env, qtbot, monkeypatch
+):
+    from taskmanager.services.module_install import ModuleLatestRelease
+    from taskmanager.services.settings_service import SourceModuleConfig
+
+    window, _service = app_env
+
+    class _Host:
+        def enabled_modules_with_github(self):
+            return [
+                SourceModuleConfig(
+                    module_id="fake",
+                    enabled=True,
+                    github_repo="owner/fake",
+                    installed_version="1.0.0",
+                    display_name="Fake",
+                )
+            ]
+
+    window.source_host = _Host()
+    monkeypatch.setattr(
+        "taskmanager.ui.update_worker.fetch_latest_module_release",
+        lambda _repo: ModuleLatestRelease(tag="v1.0.0", version="1.0.0", assets=[]),
+    )
+    window.start_module_update_check(quiet=True)
+    assert window._update_panel.isHidden()
+    assert "Проверка обновлений модулей" not in window.statusBar().currentMessage()
+    qtbot.waitUntil(lambda: not window._update_busy, timeout=5000)
+    assert window._update_panel.isHidden()
+    assert "Проверка обновлений модулей" not in window.statusBar().currentMessage()
+    assert window.statusBar().currentMessage() == "Готово"
+
+
+def test_module_updates_skipped_when_app_update_in_flight(app_env, qtbot):
+    from pathlib import Path
+
+    window, _service = app_env
+    window._update_busy = True
+    assert window.should_skip_module_updates()
+    window.start_module_update_check(quiet=True)
+
+    window._update_busy = False
+    window._pending_update_path = Path("/tmp/TaskManager.new")
+    assert window.should_skip_module_updates()
+    window.start_module_update_check(quiet=True)
+
+    window._pending_update_path = None
+    window._skip_module_updates_this_session = True
+    assert window.should_skip_module_updates()
+    window.start_module_update_check(quiet=True)
+
+
+def test_settings_close_copies_install_banner(app_env, qtbot):
+    from pathlib import Path
+
+    from taskmanager.ui.settings_dialog import SettingsDialog
+
+    window, _service = app_env
+    window.show()
+    window._pending_update_path = Path("/tmp/TaskManager.new")
+    dialog = SettingsDialog(window.settings, window.settings_store, window)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    window._update_ui = dialog
+    dialog._update_panel.show()
+    dialog._update_label.setText("Обновление готово. «Установить и закрыть»")
+    dialog._update_progress.hide()
+    dialog._update_cancel_btn.hide()
+    dialog._update_restart_btn.show()
+    window._on_settings_finished(0)
+    assert not window._update_panel.isHidden()
+    assert not window._update_restart_btn.isHidden()
+    assert "Установить и закрыть" in window._update_label.text()

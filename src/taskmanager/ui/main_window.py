@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, Qt, QThread, QTimer
-from PySide6.QtGui import QAction, QColor, QKeySequence, QMouseEvent, QShortcut
+from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -50,6 +50,7 @@ from taskmanager.services.settings_service import (
     Settings,
     SettingsStore,
 )
+from taskmanager.services.inline_images import apply_inline_images_for_task
 from taskmanager.services.task_service import (
     CreateTaskRequest,
     ServiceError,
@@ -67,12 +68,15 @@ from taskmanager.services.update_service import (
     write_restart_helper,
 )
 from taskmanager.ui.dialogs import (
+    ColorSwatchButton,
     ExcelExportDialog,
     MissingFoldersDialog,
     ProjectDialog,
     RichTextEditDialog,
+    SWATCH_SIZE,
     TaskDialog,
 )
+from taskmanager.infrastructure.event_sounds import event_ping_path
 from taskmanager.ui.event_sound_player import EventSoundPlayer
 from taskmanager.ui.reminders_window import (
     ReminderEditDialog,
@@ -82,7 +86,13 @@ from taskmanager.ui.reminders_window import (
 )
 from taskmanager.ui.settings_dialog import SettingsDialog
 from taskmanager.ui.stylesheet import apply_stylesheet
-from taskmanager.ui.update_worker import UpdateCheckWorker, UpdateDownloadWorker
+from taskmanager.ui.update_worker import (
+    ModuleUpdateCheckWorker,
+    ModuleUpdateDownloadWorker,
+    ModuleUpdateOffer,
+    UpdateCheckWorker,
+    UpdateDownloadWorker,
+)
 from taskmanager.version import get_version
 
 logger = logging.getLogger(__name__)
@@ -97,7 +107,6 @@ COL_DATE = 3
 COL_DESCRIPTION = 4
 COL_COMMENT = 5
 
-SWATCH_SIZE = 22
 DESC_COL_WIDTH = 360
 MSG_SELECT_ONE = "Выберите одну заявку"
 
@@ -128,46 +137,6 @@ class SortableItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
-class ColorSwatchButton(QToolButton):
-    """Palette swatch; optional right-click removal for custom colors."""
-
-    def __init__(
-        self,
-        color: str,
-        *,
-        tooltip: str,
-        removable: bool = False,
-        parent=None,
-    ) -> None:
-        super().__init__(parent)
-        self.hex_color = color
-        self.removable = removable
-        self.setToolTip(tooltip)
-        self.setFixedSize(SWATCH_SIZE, SWATCH_SIZE)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        border = "#94a3b8" if color.lower() in {"#ffffff", "#fff"} else "#334155"
-        self.setStyleSheet(
-            f"QToolButton {{ background-color: {color}; border: 1px solid {border}; "
-            f"border-radius: 3px; }}"
-            f"QToolButton:hover {{ border: 2px solid #0f766e; }}"
-        )
-        self._on_remove = None
-
-    def set_remove_handler(self, handler) -> None:
-        self._on_remove = handler
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
-        if (
-            event.button() == Qt.MouseButton.RightButton
-            and self.removable
-            and self._on_remove is not None
-        ):
-            self._on_remove()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -185,9 +154,18 @@ class MainWindow(QMainWindow):
         self._show_archive = False
         self._search_query = ""
         self._update_thread: QThread | None = None
-        self._update_worker: UpdateCheckWorker | UpdateDownloadWorker | None = None
+        self._update_worker: (
+            UpdateCheckWorker
+            | UpdateDownloadWorker
+            | ModuleUpdateCheckWorker
+            | ModuleUpdateDownloadWorker
+            | None
+        ) = None
         self._download_worker: UpdateDownloadWorker | None = None
         self._update_busy = False
+        self._update_quiet = False
+        self._on_update_check_done = None
+        self._skip_module_updates_this_session = False
         self._pending_update_path: Path | None = None
         self._reminders_window: RemindersWindow | None = None
         self._notified_occurrences: set[tuple[int, str]] = set()
@@ -662,6 +640,9 @@ class MainWindow(QMainWindow):
             mode = "заявок"
         self.statusBar().showMessage(f"{project.name}: {len(tasks)} {mode}")
 
+    def _html_with_inline_images(self, task_id: int, html: str) -> str:
+        return apply_inline_images_for_task(self.service, task_id, html)
+
     def _save_task_html(
         self,
         task_id: int,
@@ -670,6 +651,10 @@ class MainWindow(QMainWindow):
         comment: str | None = None,
     ) -> None:
         try:
+            if description is not None:
+                description = self._html_with_inline_images(task_id, description)
+            if comment is not None:
+                comment = self._html_with_inline_images(task_id, comment)
             self.service.update_task(
                 task_id,
                 UpdateTaskRequest(description=description, comment=comment),
@@ -859,7 +844,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return
         try:
-            self.service.create_task(
+            task = self.service.create_task(
                 CreateTaskRequest(
                     project_id=project_id,
                     number=dialog.number,
@@ -877,6 +862,17 @@ class MainWindow(QMainWindow):
                     workflow_status=dialog.workflow_status,
                 )
             )
+            new_desc = self._html_with_inline_images(
+                task.id, dialog.description  # type: ignore[arg-type]
+            )
+            new_comment = self._html_with_inline_images(
+                task.id, dialog.comment  # type: ignore[arg-type]
+            )
+            if new_desc != dialog.description or new_comment != dialog.comment:
+                self.service.update_task(
+                    task.id,  # type: ignore[arg-type]
+                    UpdateTaskRequest(description=new_desc, comment=new_comment),
+                )
         except ServiceError as exc:
             logger.debug("Create task failed: %s", exc)
             QMessageBox.warning(self, "Ошибка", str(exc))
@@ -1213,12 +1209,14 @@ class MainWindow(QMainWindow):
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return
         try:
+            description = self._html_with_inline_images(task_id, dialog.description)
+            comment = self._html_with_inline_images(task_id, dialog.comment)
             self.service.update_task(
                 task_id,
                 UpdateTaskRequest(
                     number=dialog.number,
-                    description=dialog.description,
-                    comment=dialog.comment,
+                    description=description,
+                    comment=comment,
                     date_end=dialog.date_end,
                     clear_date_end=dialog.date_end is None,
                     priority=dialog.priority,
@@ -1502,9 +1500,25 @@ class MainWindow(QMainWindow):
         self.reload_projects()
 
     def _on_settings_finished(self, _result: int = 0) -> None:
+        dialog = self._update_ui
         self._update_ui = None
-        if self._update_busy or self._pending_update_path is not None:
+        if dialog is not None and (
+            self._update_busy or self._pending_update_path is not None
+        ):
+            self._mirror_update_panel(dialog, self)
             self._update_panel.show()
+
+    def _mirror_update_panel(self, src: QWidget, dest: QWidget) -> None:
+        dest._update_label.setText(src._update_label.text())
+        dest._update_progress.setRange(
+            src._update_progress.minimum(), src._update_progress.maximum()
+        )
+        dest._update_progress.setValue(src._update_progress.value())
+        dest._update_progress.setVisible(src._update_progress.isVisible())
+        dest._update_cancel_btn.setVisible(src._update_cancel_btn.isVisible())
+        dest._update_cancel_btn.setEnabled(src._update_cancel_btn.isEnabled())
+        dest._update_restart_btn.setVisible(src._update_restart_btn.isVisible())
+        dest._update_panel.show()
 
     def _update_parent(self) -> QWidget:
         host = self._update_ui
@@ -1513,29 +1527,203 @@ class MainWindow(QMainWindow):
         return self
 
     def _update_host(self) -> QWidget:
+        if self._update_quiet:
+            return self
         host = self._update_ui
         if host is not None and host.isVisible():
             return host
         return self
 
-    def start_update_check(self) -> None:
-        if self._update_busy:
-            QMessageBox.information(
-                self._update_parent(),
-                "Обновления",
-                "Обновление уже выполняется…",
+    def run_startup_update_checks(self) -> None:
+        if self.settings.check_updates_on_startup:
+            self.start_update_check(
+                quiet=True, on_finished=self._run_startup_module_update_check
             )
-            self.statusBar().showMessage("Обновление уже выполняется…")
             return
-        logger.debug("Starting update check")
+        self._run_startup_module_update_check()
+
+    def _run_startup_module_update_check(self) -> None:
+        if self._skip_module_updates_this_session:
+            return
+        if not self.settings.check_module_updates_on_startup:
+            return
+        self.start_module_update_check(quiet=True)
+
+    def should_skip_module_updates(self) -> bool:
+        return (
+            self._skip_module_updates_this_session
+            or self._update_busy
+            or self._pending_update_path is not None
+        )
+
+    def start_module_update_check(self, *, quiet: bool = False) -> None:
+        if self.should_skip_module_updates():
+            return
+        if self.source_host is None:
+            return
+        modules = self.source_host.enabled_modules_with_github()
+        if not modules:
+            return
+        logger.debug("Starting module update check quiet=%s count=%s", quiet, len(modules))
         self._update_busy = True
+        self._update_quiet = quiet
+        self._show_update_checking_ui("Проверка обновлений модулей…")
+        thread = QThread(self)
+        worker = ModuleUpdateCheckWorker(modules)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.succeeded.connect(self._on_module_update_check_succeeded)
+        worker.failed.connect(self._on_module_update_check_failed)
+        worker.succeeded.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_update_thread_finished)
+        self._update_thread = thread
+        self._update_worker = worker
+        thread.start()
+
+    def _on_module_update_check_succeeded(self, offers: object) -> None:
+        assert isinstance(offers, list)
+        if not offers:
+            self._update_busy = False
+            self._hide_update_panel()
+            self._update_quiet = False
+            return
+        lines = []
+        for offer in offers:
+            assert isinstance(offer, ModuleUpdateOffer)
+            name = offer.config.display_name or offer.config.module_id or offer.config.github_repo
+            current = offer.config.installed_version or "—"
+            lines.append(f"• {name}: {current} → {offer.release.version}")
+        answer = QMessageBox.question(
+            self._update_parent(),
+            "Обновления модулей",
+            "Доступны обновления модулей:\n"
+            + "\n".join(lines)
+            + "\n\nСкачать?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self._update_busy = False
+            self._hide_update_panel()
+            self._update_quiet = False
+            return
+        self._start_module_update_download(offers)
+
+    def _on_module_update_check_failed(self, message: str) -> None:
+        logger.error("Module update check failed: %s", message)
+        quiet = self._update_quiet
+        self._update_busy = False
+        self._hide_update_panel()
+        self._update_quiet = False
+        if quiet:
+            return
+        self.statusBar().showMessage(f"Ошибка обновления модулей: {message}")
+        QMessageBox.warning(
+            self._update_parent(),
+            "Обновления модулей",
+            f"Ошибка обновления модулей: {message}",
+        )
+
+    def _start_module_update_download(self, offers: list[ModuleUpdateOffer]) -> None:
         host = self._update_host()
         host._update_panel.show()
-        host._update_label.setText("Проверка обновлений…")
-        host._update_progress.hide()
-        host._update_cancel_btn.hide()
         host._update_restart_btn.hide()
-        self.statusBar().showMessage("Проверка обновлений…")
+        host._update_cancel_btn.hide()
+        host._update_progress.show()
+        host._update_progress.setRange(0, 0)
+        host._update_label.setText("Загрузка модулей…")
+        self.statusBar().showMessage("Загрузка модулей…")
+        thread = QThread(self)
+        worker = ModuleUpdateDownloadWorker(offers)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._on_module_update_progress)
+        worker.succeeded.connect(self._on_module_update_download_succeeded)
+        worker.failed.connect(self._on_module_update_download_failed)
+        worker.succeeded.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._on_update_thread_finished)
+        self._update_thread = thread
+        self._update_worker = worker
+        thread.start()
+
+    def _on_module_update_progress(self, label: str, index: int, total: int) -> None:
+        host = self._update_host()
+        host._update_label.setText(f"{label} ({index}/{total})")
+        if total > 0:
+            host._update_progress.setRange(0, total)
+            host._update_progress.setValue(index - 1)
+
+    def _on_module_update_download_succeeded(self, payloads: object) -> None:
+        assert isinstance(payloads, list)
+        errors: list[str] = []
+        installed = 0
+        if self.source_host is None:
+            self._update_busy = False
+            self._hide_update_panel()
+            self._update_quiet = False
+            return
+        for item in payloads:
+            offer, data = item
+            assert isinstance(offer, ModuleUpdateOffer)
+            assert isinstance(data, (bytes, bytearray))
+            try:
+                self.source_host.install_zip_bytes(
+                    bytes(data),
+                    github_repo=offer.config.github_repo,
+                    module_id=offer.config.module_id or None,
+                    enabled=True,
+                    asset_name=offer.asset.name,
+                )
+                installed += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Failed to install module zip")
+                name = offer.config.display_name or offer.config.module_id
+                errors.append(f"{name}: {exc}")
+        self._update_busy = False
+        self._hide_update_panel()
+        self._update_quiet = False
+        if errors:
+            QMessageBox.warning(
+                self._update_parent(),
+                "Обновления модулей",
+                "Не все модули установлены:\n" + "\n".join(errors),
+            )
+            return
+        self.statusBar().showMessage(f"Обновлено модулей: {installed}")
+
+    def _on_module_update_download_failed(self, message: str) -> None:
+        self._update_busy = False
+        self._hide_update_panel()
+        self._update_quiet = False
+        logger.error("Module update download failed: %s", message)
+        self.statusBar().showMessage(f"Ошибка загрузки модулей: {message}")
+        QMessageBox.warning(
+            self._update_parent(),
+            "Обновления модулей",
+            f"Ошибка загрузки модулей: {message}",
+        )
+
+    def start_update_check(self, *, quiet: bool = False, on_finished=None) -> None:
+        if self._update_busy:
+            if not quiet:
+                QMessageBox.information(
+                    self._update_parent(),
+                    "Обновления",
+                    "Обновление уже выполняется…",
+                )
+                self.statusBar().showMessage("Обновление уже выполняется…")
+            if on_finished is not None:
+                on_finished()
+            return
+        logger.debug("Starting update check quiet=%s", quiet)
+        self._update_busy = True
+        self._update_quiet = quiet
+        self._on_update_check_done = on_finished
+        self._show_update_checking_ui("Проверка обновлений…")
         thread = QThread(self)
         worker = UpdateCheckWorker()
         worker.moveToThread(thread)
@@ -1551,6 +1739,15 @@ class MainWindow(QMainWindow):
         self._update_worker = worker
         thread.start()
 
+    def _finish_update_check(self) -> None:
+        self._update_busy = False
+        self._hide_update_panel()
+        callback = self._on_update_check_done
+        self._on_update_check_done = None
+        self._update_quiet = False
+        if callback is not None:
+            callback()
+
     def _on_update_check_succeeded(self, release: object) -> None:
         assert isinstance(release, LatestRelease)
         current = get_version()
@@ -1565,15 +1762,16 @@ class MainWindow(QMainWindow):
             msg = (
                 f"Установлена актуальная версия ({current}; remote {release.version})"
             )
-            self.statusBar().showMessage(msg)
             logger.info(
                 "Already up to date: current=%s remote=%s",
                 current,
                 release.version,
             )
-            self._update_busy = False
-            self._hide_update_panel()
-            QMessageBox.information(self._update_parent(), "Обновления", msg)
+            quiet = self._update_quiet
+            self._finish_update_check()
+            if not quiet:
+                self.statusBar().showMessage(msg)
+                QMessageBox.information(self._update_parent(), "Обновления", msg)
             return
 
         asset_name = asset_name_for_platform()
@@ -1581,10 +1779,11 @@ class MainWindow(QMainWindow):
         if asset is None:
             msg = f"В релизе {release.tag} нет файла «{asset_name}»."
             logger.error(msg)
-            self.statusBar().showMessage(msg)
-            self._update_busy = False
-            self._hide_update_panel()
-            QMessageBox.warning(self._update_parent(), "Обновления", msg)
+            quiet = self._update_quiet
+            self._finish_update_check()
+            if not quiet:
+                self.statusBar().showMessage(msg)
+                QMessageBox.warning(self._update_parent(), "Обновления", msg)
             return
 
         answer = QMessageBox.question(
@@ -1595,18 +1794,22 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.StandardButton.Yes:
             self.statusBar().showMessage("Загрузка обновления не начата")
-            self._update_busy = False
-            self._hide_update_panel()
+            self._finish_update_check()
             return
 
+        self._skip_module_updates_this_session = True
+        self._on_update_check_done = None
+        self._update_quiet = False
         dest = staged_update_path()
         self._start_update_download(asset, dest)
 
     def _on_update_check_failed(self, message: str) -> None:
         logger.error("Update check failed: %s", message)
+        quiet = self._update_quiet
+        self._finish_update_check()
+        if quiet:
+            return
         self.statusBar().showMessage(f"Ошибка обновления: {message}")
-        self._update_busy = False
-        self._hide_update_panel()
         QMessageBox.warning(
             self._update_parent(),
             "Обновления",
@@ -1750,6 +1953,17 @@ class MainWindow(QMainWindow):
             host._update_label.setText("Отмена…")
             self._download_worker.request_cancel()
 
+    def _show_update_checking_ui(self, message: str) -> None:
+        if self._update_quiet:
+            return
+        host = self._update_host()
+        host._update_panel.show()
+        host._update_label.setText(message)
+        host._update_progress.hide()
+        host._update_cancel_btn.hide()
+        host._update_restart_btn.hide()
+        self.statusBar().showMessage(message)
+
     def _hide_update_panel(self) -> None:
         for host in {self, self._update_ui} - {None}:
             host._update_panel.hide()
@@ -1881,7 +2095,9 @@ class MainWindow(QMainWindow):
 
     def open_reminders(self) -> None:
         if self._reminders_window is None:
-            self._reminders_window = RemindersWindow(self.service, self)
+            self._reminders_window = RemindersWindow(
+                self.service, self, settings_store=self.settings_store
+            )
             self._reminders_window.open_task_requested.connect(self.reveal_task)
         self._reminders_window.reload()
         self._reminders_window.show()
@@ -1996,14 +2212,20 @@ class MainWindow(QMainWindow):
                 QSystemTrayIcon.MessageIcon.Information,
                 8000,
             )
-        if self.settings.event_sound_enabled:
-            self._event_sound_player.play(self.settings.event_sound_path)
+        path = event_ping_path(
+            getattr(series, "sound_path", None),
+            self.settings.event_sound_path,
+            enabled=self.settings.event_sound_enabled,
+        )
+        if path:
+            self._event_sound_player.play(path)
         popup = ReminderNotifyDialog(
             title,
             body_html,
             self,
             snooze_default_minutes=self.settings.event_snooze_minutes,
         )
+        popup.finished.connect(self._event_sound_player.stop)
         if series.id is not None:
             popup.accepted.connect(
                 lambda sid=series.id, o=occ: self._acknowledge_occurrence(sid, o)

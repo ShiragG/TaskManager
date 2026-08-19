@@ -37,6 +37,10 @@ SNOOZE_LABELS: dict[int, str] = {
 }
 DEFAULT_SNOOZE_MINUTES = 15
 
+CALENDAR_VIEW_COMPACT = "compact"
+CALENDAR_VIEW_WEEK = "week"
+CALENDAR_VIEWS = frozenset({CALENDAR_VIEW_COMPACT, CALENDAR_VIEW_WEEK})
+
 
 def parse_snooze_minutes(value: Any) -> int:
     try:
@@ -46,6 +50,25 @@ def parse_snooze_minutes(value: Any) -> int:
     if minutes in SNOOZE_MINUTES:
         return minutes
     return DEFAULT_SNOOZE_MINUTES
+
+
+def parse_calendar_view(value: Any) -> str:
+    if value in CALENDAR_VIEWS:
+        return str(value)
+    return CALENDAR_VIEW_COMPACT
+
+
+def parse_splitter_sizes(value: Any) -> list[int]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return []
+    try:
+        first = int(value[0])
+        second = int(value[1])
+    except (TypeError, ValueError):
+        return []
+    if first < 1 or second < 1:
+        return []
+    return [first, second]
 
 
 @dataclass
@@ -122,6 +145,12 @@ class Settings:
     event_sound_path: str = ""
     event_os_notification: bool = True
     event_snooze_minutes: int = DEFAULT_SNOOZE_MINUTES
+    check_updates_on_startup: bool = True
+    check_module_updates_on_startup: bool = True
+    calendar_view: str = CALENDAR_VIEW_COMPACT
+    calendar_week_splitter: list[int] = field(default_factory=list)
+    calendar_compact_splitter: list[int] = field(default_factory=list)
+    calendar_day_pane_open: bool = False
     colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLORS))
     hotkeys: dict[str, str] = field(default_factory=default_hotkeys_copy)
 
@@ -151,6 +180,22 @@ class Settings:
         merged["event_os_notification"] = bool(merged.get("event_os_notification", True))
         merged["event_snooze_minutes"] = parse_snooze_minutes(
             merged.get("event_snooze_minutes")
+        )
+        merged["check_updates_on_startup"] = bool(
+            merged.get("check_updates_on_startup", True)
+        )
+        merged["check_module_updates_on_startup"] = bool(
+            merged.get("check_module_updates_on_startup", True)
+        )
+        merged["calendar_view"] = parse_calendar_view(merged.get("calendar_view"))
+        merged["calendar_week_splitter"] = parse_splitter_sizes(
+            merged.get("calendar_week_splitter")
+        )
+        merged["calendar_compact_splitter"] = parse_splitter_sizes(
+            merged.get("calendar_compact_splitter")
+        )
+        merged["calendar_day_pane_open"] = bool(
+            merged.get("calendar_day_pane_open", False)
         )
         return cls(**merged)
 

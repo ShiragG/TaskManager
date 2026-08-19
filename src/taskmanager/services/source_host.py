@@ -14,6 +14,7 @@ from taskmanager.infrastructure.credential_crypto import (
     encrypt_secret,
 )
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
+from taskmanager.services.inline_images import apply_inline_images_for_task
 from taskmanager.services.module_loader import (
     PluginManifest,
     instantiate_module,
@@ -21,7 +22,7 @@ from taskmanager.services.module_loader import (
     load_manifest,
     modules_dir,
 )
-from taskmanager.services.module_install import install_module_zip
+from taskmanager.services.module_install import install_module_zip, save_module_zip_bytes
 from taskmanager.services.settings_service import Settings, SourceModuleConfig
 from taskmanager.services.source_protocol import (
     SourceDraft,
@@ -254,6 +255,20 @@ class SourceHost:
             if s.config.enabled and s.module is not None
         ]
 
+    def enabled_modules_with_github(self) -> list[SourceModuleConfig]:
+        seen: set[str] = set()
+        result: list[SourceModuleConfig] = []
+        for loaded in self.list_loaded():
+            cfg = loaded.config
+            if not cfg.enabled or not cfg.github_repo.strip():
+                continue
+            key = cfg.module_id or cfg.github_repo
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(cfg)
+        return result
+
     def get(self, module_id: str) -> LoadedSource:
         try:
             return self._by_id[module_id]
@@ -478,7 +493,46 @@ class SourceHost:
     def install_from_github(
         self, github_repo: str, *, module_id: str | None = None, enabled: bool | None = None
     ) -> PluginManifest:
-        # Preserve enabled from existing registry / pending before zip replace
+        prev_enabled, prev_github = self._install_preserve(github_repo, module_id, enabled)
+        path = install_module_zip(
+            github_repo, module_id=module_id, base=self.modules_base
+        )
+        return self._register_installed_zip(
+            path,
+            github_repo=github_repo,
+            prev_github=prev_github,
+            prev_enabled=prev_enabled,
+        )
+
+    def install_zip_bytes(
+        self,
+        data: bytes,
+        *,
+        github_repo: str,
+        module_id: str | None = None,
+        enabled: bool | None = None,
+        asset_name: str = "",
+    ) -> PluginManifest:
+        prev_enabled, prev_github = self._install_preserve(github_repo, module_id, enabled)
+        path = save_module_zip_bytes(
+            data,
+            module_id=module_id,
+            asset_name=asset_name,
+            base=self.modules_base,
+        )
+        return self._register_installed_zip(
+            path,
+            github_repo=github_repo,
+            prev_github=prev_github,
+            prev_enabled=prev_enabled,
+        )
+
+    def _install_preserve(
+        self,
+        github_repo: str,
+        module_id: str | None,
+        enabled: bool | None,
+    ) -> tuple[bool, str]:
         prev_enabled = False
         prev_github = github_repo
         if module_id:
@@ -488,12 +542,17 @@ class SourceHost:
                 prev_github = str(row["github_repo"] or github_repo)
         if enabled is not None:
             prev_enabled = enabled
+        return prev_enabled, prev_github
 
-        path = install_module_zip(
-            github_repo, module_id=module_id, base=self.modules_base
-        )
+    def _register_installed_zip(
+        self,
+        path: Path,
+        *,
+        github_repo: str,
+        prev_github: str,
+        prev_enabled: bool,
+    ) -> PluginManifest:
         manifest = load_manifest(path)
-        # Ensure zip is named by module id
         expected = modules_dir(self.modules_base) / f"{manifest.id}.zip"
         if path.resolve() != expected.resolve():
             if expected.exists():
@@ -502,7 +561,6 @@ class SourceHost:
             path = expected
             manifest = load_manifest(path)
 
-        # Persist registry immediately (do not wait for Settings Save)
         self.repo.upsert_source_module(
             module_id=manifest.id,
             github_repo=prev_github or github_repo,
@@ -512,7 +570,6 @@ class SourceHost:
             update_asset_name=manifest.update.asset_name,
             update_asset_pattern=manifest.update.asset_pattern,
         )
-        # Drop matching pending blank rows
         self._pending_configs = [
             p
             for p in self._pending_configs
@@ -520,7 +577,6 @@ class SourceHost:
             and (p.module_id or "").strip() != manifest.id
         ]
 
-        # Force unique reload after zip replace
         self.reload()
         try:
             loaded = self.get(manifest.id)
@@ -619,6 +675,15 @@ class SourceHost:
                 source_status_label=draft.source_status_label or None,
             )
         )
+        task_id = task.id  # type: ignore[assignment]
+        new_desc = apply_inline_images_for_task(self.task_service, task_id, desc)
+        new_comment = apply_inline_images_for_task(self.task_service, task_id, comment)
+        if new_desc != desc or new_comment != comment:
+            self.task_service.update_task(
+                task_id,
+                UpdateTaskRequest(description=new_desc, comment=new_comment),
+            )
+            task = self.task_service.get_task(task_id)
         if download_files and task.has_folder:
             folder = self.task_service.task_folder_path(task.id)  # type: ignore[arg-type]
             existing = [p.name for p in folder.iterdir()] if folder.is_dir() else []
@@ -648,10 +713,13 @@ class SourceHost:
             if name not in seen:
                 ordered.append((name, target))
 
+        description = apply_inline_images_for_task(
+            self.task_service, task_id, plain_text_to_html(draft.description)
+        )
         self.task_service.update_task(
             task_id,
             UpdateTaskRequest(
-                description=plain_text_to_html(draft.description),
+                description=description,
                 priority=clamp_priority(draft.priority),
                 links=ordered,
                 source_status_id=draft.source_status_id or "",

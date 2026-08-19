@@ -1,6 +1,9 @@
 from pathlib import Path
 
 from taskmanager.infrastructure.event_sounds import (
+    CUSTOM_SOUND_SENTINEL,
+    copy_custom_sound,
+    event_ping_path,
     first_preferred_sound_path,
     list_system_sound_files,
     parse_event_sound_path,
@@ -99,3 +102,122 @@ def test_settings_dialog_marks_missing_sound_file(tmp_path: Path, qtbot):
     assert dialog.event_sound_combo.currentData() == str(missing)
     assert "нет файла" in dialog.event_sound_combo.currentText()
     assert dialog.preview_sound_btn.text() == "Прослушать"
+
+
+def test_event_sound_player_stop_and_play_stops_previous():
+    from taskmanager.ui.event_sound_player import EventSoundPlayer
+
+    class FakeSource:
+        def __init__(self) -> None:
+            self.stopped = 0
+
+        def stop(self) -> None:
+            self.stopped += 1
+
+    player = EventSoundPlayer()
+    first = FakeSource()
+    player._effect = first  # type: ignore[assignment]
+    player.stop()
+    assert first.stopped == 1
+
+    second = FakeSource()
+    player._player = second  # type: ignore[assignment]
+    assert player.play("/no/such/sound.wav") is False
+    assert first.stopped == 2
+    assert second.stopped == 1
+
+
+def test_settings_preview_button_toggles_stop(tmp_path, qtbot, monkeypatch):
+    from taskmanager.ui.settings_dialog import SettingsDialog
+
+    work = tmp_path / "work"
+    work.mkdir()
+    wav = tmp_path / "ding.wav"
+    wav.write_bytes(b"x")
+    store = SettingsStore(tmp_path / "settings.json")
+    settings = Settings(work_dir=str(work), event_sound_path=str(wav))
+    store.save(settings)
+    dialog = SettingsDialog(settings, store)
+    qtbot.addWidget(dialog)
+    monkeypatch.setattr(dialog._sound_player, "play", lambda path: True)
+    stops: list[int] = []
+    original_stop = dialog._sound_player.stop
+
+    def spy_stop() -> None:
+        stops.append(1)
+        original_stop()
+
+    monkeypatch.setattr(dialog._sound_player, "stop", spy_stop)
+    dialog.preview_sound_btn.click()
+    assert dialog.preview_sound_btn.text() == "Стоп"
+    dialog.preview_sound_btn.click()
+    assert dialog.preview_sound_btn.text() == "Прослушать"
+    assert stops
+    dialog.preview_sound_btn.click()
+    assert dialog.preview_sound_btn.text() == "Стоп"
+    dialog._on_sound_combo_changed(0)
+    assert dialog.preview_sound_btn.text() == "Прослушать"
+    dialog.preview_sound_btn.click()
+    dialog._sound_player.finished.emit()
+    assert dialog.preview_sound_btn.text() == "Прослушать"
+
+
+def test_copy_custom_sound_into_app_sounds_keeps_original(tmp_path: Path):
+    original = tmp_path / "Downloads" / "ping.wav"
+    original.parent.mkdir()
+    original.write_bytes(b"wav-bytes")
+    dest_dir = tmp_path / "sounds"
+    copied = copy_custom_sound(original, dest_dir=dest_dir)
+    assert copied == dest_dir / "ping.wav"
+    assert copied.read_bytes() == b"wav-bytes"
+    assert original.is_file()
+    again = copy_custom_sound(original, dest_dir=dest_dir)
+    assert again.name == "ping_2.wav"
+    already = copy_custom_sound(copied, dest_dir=dest_dir)
+    assert already.resolve() == copied.resolve()
+
+
+def test_settings_custom_sound_is_copied_and_survives_reopen(
+    tmp_path: Path, qtbot, monkeypatch
+):
+    from taskmanager.ui.settings_dialog import SettingsDialog
+
+    sounds_dir = str(tmp_path / "sounds")
+    monkeypatch.setattr(
+        "taskmanager.infrastructure.event_sounds.app_sounds_dir",
+        lambda **_kwargs: sounds_dir,
+    )
+    original = tmp_path / "Downloads" / "bell.wav"
+    original.parent.mkdir()
+    original.write_bytes(b"bell-bytes")
+    monkeypatch.setattr(
+        "taskmanager.ui.event_sound_picker.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (str(original), ""),
+    )
+    work = tmp_path / "work"
+    work.mkdir()
+    store = SettingsStore(tmp_path / "settings.json")
+    settings = Settings(work_dir=str(work))
+    store.save(settings)
+    dialog = SettingsDialog(settings, store)
+    qtbot.addWidget(dialog)
+    custom_idx = dialog.event_sound_combo.findData(CUSTOM_SOUND_SENTINEL)
+    assert custom_idx >= 0
+    dialog.event_sound_combo.setCurrentIndex(custom_idx)
+    copied = (tmp_path / "sounds" / "bell.wav").resolve()
+    assert copied.is_file()
+    assert copied.read_bytes() == b"bell-bytes"
+    assert original.is_file()
+    assert Path(dialog.event_sound_combo.currentData()).resolve() == copied
+    dialog._save()
+    reopened = SettingsDialog(store.load(), store)
+    qtbot.addWidget(reopened)
+    assert Path(reopened.event_sound_combo.currentData()).resolve() == copied
+
+
+def test_event_ping_path_uses_override_or_settings_or_silence():
+    assert event_ping_path(None, "/s/ding.wav", enabled=True) == "/s/ding.wav"
+    assert event_ping_path("", "/s/ding.wav", enabled=True) == "/s/ding.wav"
+    assert event_ping_path("  ", "/s/ding.wav", enabled=True) == "/s/ding.wav"
+    assert event_ping_path("/e/own.wav", "/s/ding.wav", enabled=True) == "/e/own.wav"
+    assert event_ping_path("/e/own.wav", "/s/ding.wav", enabled=False) == ""

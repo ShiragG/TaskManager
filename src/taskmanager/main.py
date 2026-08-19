@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -65,6 +66,7 @@ def run(argv: list[str] | None = None) -> int:
     window = MainWindow(service, settings, settings_store, source_host=source_host)
     window.setWindowIcon(app.windowIcon())
     window.show()
+    QTimer.singleShot(0, window.run_startup_update_checks)
     code = app.exec()
     repo.close()
     return code

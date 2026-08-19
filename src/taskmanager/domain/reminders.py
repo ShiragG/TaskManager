@@ -29,6 +29,8 @@ class ReminderSeries:
     month_day: int | None = None
     last_acknowledged_occurrence: datetime | None = None
     skipped_occurrences: tuple[datetime, ...] = field(default_factory=tuple)
+    color: str | None = None
+    sound_path: str | None = None
 
     @property
     def is_repeating(self) -> bool:

@@ -158,3 +158,23 @@ def install_module_zip(
         release.tag,
     )
     return dest
+
+
+def save_module_zip_bytes(
+    data: bytes,
+    *,
+    module_id: str | None = None,
+    asset_name: str = "",
+    base: Path | None = None,
+) -> Path:
+    """Write already-downloaded zip bytes into modules/; return dest path."""
+    dest_id = (module_id or "").strip()
+    if not dest_id:
+        stem = Path(asset_name or "module").stem
+        dest_id = re.sub(r"[^a-zA-Z0-9_-]+", "-", stem).strip("-") or "module"
+    root = modules_dir(base)
+    root.mkdir(parents=True, exist_ok=True)
+    dest = root / f"{dest_id}.zip"
+    dest.write_bytes(data)
+    logger.info("Wrote source module zip %s (%s bytes)", dest, len(data))
+    return dest

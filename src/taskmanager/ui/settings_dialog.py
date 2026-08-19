@@ -26,12 +26,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from taskmanager.infrastructure.event_sounds import (
-    CUSTOM_SOUND_SENTINEL,
-    first_preferred_sound_path,
-    list_system_sound_files,
-    sound_choice_label,
-)
 from taskmanager.infrastructure.paths import resolve_work_dir
 from taskmanager.services.hotkeys import (
     DEFAULT_HOTKEYS,
@@ -52,7 +46,7 @@ from taskmanager.services.settings_service import (
     parse_snooze_minutes,
 )
 from taskmanager.ui.about_dialog import AboutDialog
-from taskmanager.ui.event_sound_player import EventSoundPlayer
+from taskmanager.ui.event_sound_picker import EventSoundPicker
 from taskmanager.ui.source_modules_dialog import SourceModulesSettingsDialog
 from taskmanager.version import get_version
 
@@ -169,6 +163,12 @@ class SettingsDialog(QDialog):
         footer.addWidget(about_btn)
         layout.addLayout(footer)
 
+        self.check_updates_on_startup_cb = QCheckBox(
+            "Проверять наличие обновлений при запуске"
+        )
+        self.check_updates_on_startup_cb.setChecked(settings.check_updates_on_startup)
+        layout.addWidget(self.check_updates_on_startup_cb)
+
         self._update_panel = QWidget()
         update_row = QHBoxLayout(self._update_panel)
         update_row.setContentsMargins(0, 0, 0, 0)
@@ -247,17 +247,15 @@ class SettingsDialog(QDialog):
         self.event_sound_cb.setChecked(settings.event_sound_enabled)
         form.addRow(self.event_sound_cb)
 
-        self.event_sound_combo = QComboBox()
-        self.preview_sound_btn = QPushButton("Прослушать")
-        self.preview_sound_btn.setObjectName("secondaryButton")
-        self.preview_sound_btn.clicked.connect(self._preview_event_sound)
-        sound_row = QHBoxLayout()
-        sound_row.addWidget(self.event_sound_combo, stretch=1)
-        sound_row.addWidget(self.preview_sound_btn)
-        form.addRow("Файл звука", sound_row)
-        self._sound_player = EventSoundPlayer(self)
-        self._fill_sound_combo(settings.event_sound_path)
-        self.event_sound_combo.currentIndexChanged.connect(self._on_sound_combo_changed)
+        self.sound_picker = EventSoundPicker(
+            self,
+            selected_path=settings.event_sound_path,
+            settings_path=settings.event_sound_path,
+        )
+        form.addRow("Файл звука", self.sound_picker)
+        self.event_sound_combo = self.sound_picker.combo
+        self.preview_sound_btn = self.sound_picker.preview_btn
+        self._sound_player = self.sound_picker._player
 
         self.event_os_notification_cb = QCheckBox("Системное уведомление ОС")
         self.event_os_notification_cb.setChecked(settings.event_os_notification)
@@ -330,67 +328,11 @@ class SettingsDialog(QDialog):
     def _open_about(self) -> None:
         AboutDialog(self).exec()
 
-    def _fill_sound_combo(self, selected_path: str) -> None:
-        self.event_sound_combo.blockSignals(True)
-        self.event_sound_combo.clear()
-        paths = [str(path) for path in list_system_sound_files()]
-        if selected_path and selected_path not in paths:
-            paths.insert(0, selected_path)
-        for path in paths:
-            self.event_sound_combo.addItem(sound_choice_label(path), path)
-        self.event_sound_combo.addItem("Свой файл…", CUSTOM_SOUND_SENTINEL)
-        if selected_path:
-            idx = self.event_sound_combo.findData(selected_path)
-            self.event_sound_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        else:
-            preferred = first_preferred_sound_path()
-            idx = self.event_sound_combo.findData(preferred) if preferred else -1
-            if idx >= 0:
-                self.event_sound_combo.setCurrentIndex(idx)
-            elif self.event_sound_combo.count() > 1:
-                self.event_sound_combo.setCurrentIndex(0)
-        self._sound_combo_index = self.event_sound_combo.currentIndex()
-        self.event_sound_combo.blockSignals(False)
-
     def _on_sound_combo_changed(self, index: int) -> None:
-        if self.event_sound_combo.itemData(index) != CUSTOM_SOUND_SENTINEL:
-            self._sound_combo_index = index
-            return
-        chosen, _filter = QFileDialog.getOpenFileName(
-            self,
-            "Звук события",
-            "",
-            "Звук (*.wav *.ogg *.oga *.flac);;Все файлы (*)",
-        )
-        if chosen:
-            self._ensure_sound_combo_path(chosen)
-            self._sound_combo_index = self.event_sound_combo.currentIndex()
-            return
-        self.event_sound_combo.blockSignals(True)
-        self.event_sound_combo.setCurrentIndex(self._sound_combo_index)
-        self.event_sound_combo.blockSignals(False)
-
-    def _ensure_sound_combo_path(self, path: str) -> None:
-        idx = self.event_sound_combo.findData(path)
-        if idx < 0:
-            insert_at = max(0, self.event_sound_combo.count() - 1)
-            self.event_sound_combo.insertItem(
-                insert_at, sound_choice_label(path), path
-            )
-            idx = insert_at
-        self.event_sound_combo.setCurrentIndex(idx)
-
-    def _preview_event_sound(self) -> None:
-        path = self.event_sound_combo.currentData()
-        if not path or path == CUSTOM_SOUND_SENTINEL:
-            return
-        self._sound_player.play(str(path))
+        self.sound_picker._on_changed(index)
 
     def _current_event_sound_path(self) -> str:
-        path = self.event_sound_combo.currentData()
-        if not path or path == CUSTOM_SOUND_SENTINEL:
-            return self._settings.event_sound_path
-        return str(path)
+        return self.sound_picker.current_path or ""
 
     def _browse_work_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -476,6 +418,9 @@ class SettingsDialog(QDialog):
         self._settings.event_os_notification = self.event_os_notification_cb.isChecked()
         self._settings.event_snooze_minutes = parse_snooze_minutes(
             self.snooze_combo.currentData()
+        )
+        self._settings.check_updates_on_startup = (
+            self.check_updates_on_startup_cb.isChecked()
         )
         self._settings.hotkeys = hotkeys
         self._store.save(self._settings)
