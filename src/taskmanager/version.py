@@ -3,7 +3,7 @@ from __future__ import annotations
 # Canonical app version — keep in sync with pyproject.toml [project].version.
 # Do not prefer importlib.metadata: a stale editable/site-packages install can
 # report an older version and break update checks (e.g. missing 0.6.0→0.6.1).
-_FALLBACK_VERSION = "0.7.0"
+_FALLBACK_VERSION = "0.7.1"
 
 
 def get_version() -> str:
