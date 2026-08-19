@@ -749,3 +749,124 @@ def test_editor_original_insert_uses_natural_width(tmp_path: Path, qtbot):
     assert dialog.insert_image_from_path(str(png_path))
     assert _img_width(dialog.html) == 640
 
+
+def _image_view_center(editor):
+    from PySide6.QtCore import QPoint
+
+    viewport = editor.viewport()
+    for y in range(0, max(viewport.height(), 1), 4):
+        for x in range(0, max(viewport.width(), 1), 4):
+            hit = editor._image_hit_at(QPoint(x, y))
+            if hit is not None:
+                return hit.view_rect.center()
+    raise AssertionError("no image in editor viewport")
+
+
+def _anchor_view_pos(editor):
+    from PySide6.QtCore import QPoint
+
+    viewport = editor.viewport()
+    for y in range(0, max(viewport.height(), 1), 4):
+        for x in range(0, max(viewport.width(), 1), 4):
+            pt = QPoint(x, y)
+            if editor.anchorAt(pt):
+                return pt
+    raise AssertionError("no anchor in editor viewport")
+
+
+def _ctrl_left_click(widget, pos) -> None:
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    local = QPointF(pos)
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        local,
+        QPointF(widget.mapToGlobal(pos)),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ControlModifier,
+    )
+    widget.mousePressEvent(event)
+
+
+def test_ctrl_click_image_opens_file_without_ld_library_path(
+    tmp_path: Path, qtbot, monkeypatch
+):
+    import sys
+
+    from taskmanager.ui.dialogs import RichTextEditDialog
+
+    png_path = tmp_path / ".images" / "shot.png"
+    png_path.parent.mkdir()
+    _write_rgb_png(png_path, 80, 60)
+    uri = png_path.resolve().as_uri()
+    dialog = RichTextEditDialog(
+        title="Описание", html=f'<p>shot</p><img src="{uri}">'
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/tmp/_MEIxxxxx/lib")
+    launched: list[tuple] = []
+
+    def fake_popen(cmd, *args, **kwargs):
+        launched.append((list(cmd), kwargs.get("env")))
+
+        class _Proc:
+            pass
+
+        return _Proc()
+
+    monkeypatch.setattr(
+        "taskmanager.infrastructure.platform_open.subprocess.Popen",
+        fake_popen,
+    )
+
+    _ctrl_left_click(dialog.editor, _image_view_center(dialog.editor))
+
+    assert launched
+    cmd, env = launched[0]
+    assert Path(cmd[1]).resolve() == png_path.resolve()
+    assert env is not None
+    assert "LD_LIBRARY_PATH" not in env
+
+
+def test_ctrl_click_without_target_logs_warning(qtbot, caplog):
+    import logging
+
+    from PySide6.QtCore import QPoint
+    from taskmanager.ui.dialogs import RichTextEditDialog
+
+    dialog = RichTextEditDialog(title="Описание", html="<p>just text</p>")
+    qtbot.addWidget(dialog)
+    dialog.show()
+    caplog.set_level(logging.WARNING, logger="taskmanager.ui.dialogs")
+    _ctrl_left_click(dialog.editor, QPoint(12, 12))
+    assert "no href or image src" in caplog.text
+
+
+def test_ctrl_click_missing_file_logs_warning_and_shows_message(
+    qtbot, monkeypatch, caplog
+):
+    import logging
+
+    from taskmanager.ui.dialogs import RichTextEditDialog
+
+    dialog = RichTextEditDialog(
+        title="Описание",
+        html='<p><a href="file:///no/such/taskmanager/image.png">pic</a></p>',
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+    shown: list = []
+    monkeypatch.setattr(
+        "taskmanager.ui.dialogs.QMessageBox.warning",
+        lambda *a, **k: shown.append((a, k)),
+    )
+    caplog.set_level(logging.WARNING, logger="taskmanager.ui.dialogs")
+    _ctrl_left_click(dialog.editor, _anchor_view_pos(dialog.editor))
+    assert shown
+    assert "failed to open" in caplog.text
+

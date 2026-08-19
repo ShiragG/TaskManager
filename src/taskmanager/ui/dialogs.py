@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import re
 from collections.abc import Callable
 from datetime import date
@@ -25,7 +26,6 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QContextMenuEvent,
-    QDesktopServices,
     QFont,
     QImage,
     QImageReader,
@@ -80,12 +80,15 @@ from taskmanager.domain import (
     parse_workflow_status,
     priority_color_hex,
 )
+from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.inline_images import sniff_image
 from taskmanager.services.settings_service import (
     DEFAULT_IMAGE_PREVIEW_WIDTH,
     IMAGE_PREVIEW_SMALL,
     Settings,
 )
+
+logger = logging.getLogger(__name__)
 
 SWATCH_SIZE = 22
 SMALL_IMAGE_PREVIEW_WIDTH = IMAGE_PREVIEW_SMALL
@@ -289,11 +292,17 @@ class _LinkAwareTextEdit(QTextEdit):
             event.button() == Qt.MouseButton.LeftButton
             and event.modifiers() & Qt.KeyboardModifier.ControlModifier
         ):
-            href = self.anchorAt(event.position().toPoint())
+            pos = event.position().toPoint()
+            href = self.anchorAt(pos)
+            if not href:
+                hit = self._image_hit_at(pos)
+                if hit is not None:
+                    href = hit.cursor.charFormat().toImageFormat().name()
             if href:
-                QDesktopServices.openUrl(QUrl(href))
+                self._open_href(href)
                 event.accept()
                 return
+            logger.warning("Ctrl+click: no href or image src at %s", pos)
         if event.button() == Qt.MouseButton.LeftButton:
             hit = self._image_hit_at(event.position().toPoint())
             if hit is not None and self._near_br_corner(
@@ -327,6 +336,19 @@ class _LinkAwareTextEdit(QTextEdit):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def _open_href(self, href: str) -> None:
+        if href.startswith(("http://", "https://")):
+            target = href
+        else:
+            target = _image_source_path(href) or href
+        try:
+            open_target(target)
+        except PlatformOpenError as exc:
+            logger.warning("Ctrl+click: failed to open %s: %s", target, exc)
+            QMessageBox.warning(self, "Предупреждение", str(exc))
+            return
+        logger.debug("Ctrl+click: opened %s", target)
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         hit = self._image_hit_at(event.pos())
