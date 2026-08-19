@@ -13,6 +13,10 @@ from taskmanager.infrastructure.credential_crypto import (
     decrypt_secret,
     encrypt_secret,
 )
+from taskmanager.infrastructure.filesystem import (
+    existing_source_file_names,
+    source_files_dir,
+)
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.services.inline_images import apply_inline_images_for_task
 from taskmanager.services.module_loader import (
@@ -686,10 +690,9 @@ class SourceHost:
             task = self.task_service.get_task(task_id)
         if download_files and task.has_folder:
             folder = self.task_service.task_folder_path(task.id)  # type: ignore[arg-type]
-            existing = [p.name for p in folder.iterdir()] if folder.is_dir() else []
             try:
-                self.download_files(
-                    module_id, draft.external_id, folder, existing_names=existing
+                self._download_into_source_files_dir(
+                    module_id, draft.external_id, folder
                 )
             except SourceModuleError as exc:
                 logger.warning("File download after import failed: %s", exc)
@@ -743,10 +746,20 @@ class SourceHost:
             self.task_service.recreate_task_folder(task_id)
             task = self.task_service.get_task(task_id)
         folder = self.task_service.task_folder_path(task_id)
-        existing = [p.name for p in folder.iterdir()] if folder.is_dir() else []
-        return self.download_files(
+        return self._download_into_source_files_dir(
             task.source_module_id,
             task.external_id,
             folder,
+        )
+
+    def _download_into_source_files_dir(
+        self, module_id: str, external_id: str, task_folder: Path
+    ) -> list[str]:
+        dest = source_files_dir(task_folder)
+        existing = existing_source_file_names(dest)
+        return self.download_files(
+            module_id,
+            external_id,
+            dest,
             existing_names=existing,
         )

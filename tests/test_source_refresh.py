@@ -42,7 +42,10 @@ class _FakeModule:
         assert self.draft is not None
         return self.draft
 
+    download_calls: int = 0
+
     def download_files(self, external_id, dest_dir, existing_names=None):
+        self.download_calls += 1
         return []
 
 
@@ -109,4 +112,55 @@ def test_refresh_preserves_comment(tmp_path: Path, monkeypatch):
     names = {lnk.name: lnk.target for lnk in refreshed.links}
     assert names["Razr"] == "https://example/9"
     assert names["Заметки"] == "/tmp/n"
+    repo.close()
+
+
+def test_refresh_does_not_download_source_files(tmp_path: Path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    settings = Settings(work_dir=str(work))
+    repo = SqliteRepository(tmp_path / "t.db")
+    service = TaskService(repo, settings)
+    repo.upsert_source_module(
+        module_id="fake", enabled=True, display_name="Fake"
+    )
+    host = SourceHost(repo, settings, service, modules_base=tmp_path)
+    fake = _FakeModule(
+        draft=SourceDraft(
+            external_id="9",
+            number="9",
+            description="from source",
+            priority=0,
+            files=[SourceFileMeta("1", "doc.pdf")],
+            source_label="Fake",
+        )
+    )
+    host._by_id["fake"] = type(
+        "L",
+        (),
+        {
+            "config": SourceModuleConfig(module_id="fake", enabled=True, display_name="Fake"),
+            "manifest": None,
+            "module": fake,
+            "load_error": None,
+        },
+    )()
+    monkeypatch.setattr(host, "get_credentials", lambda mid: ("u", "p"))
+
+    project = service.create_project("P")
+    task = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,  # type: ignore[arg-type]
+            number="9",
+            description="old",
+            create_folder=True,
+            source_module_id="fake",
+            external_id="9",
+            source_label="Fake",
+        )
+    )
+    host.refresh_task_from_source(task.id)  # type: ignore[arg-type]
+    assert fake.download_calls == 0
+    folder = service.task_folder_path(task.id)  # type: ignore[arg-type]
+    assert not (folder / "files").exists()
     repo.close()

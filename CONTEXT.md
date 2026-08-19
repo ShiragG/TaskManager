@@ -61,8 +61,12 @@ A task flag: in the default view the task is omitted; in «Скрытые» mode
 _Avoid_: archived (different concept), deleted, inactive
 
 **Notes file** (файл заметок):
-An optional `Notes.txt` in the task folder, created at task creation with a dated header when a folder is created; paired with a Link named «Заметки» pointing at the absolute path. Unavailable when the task has no folder. Existing `Notes.txt` is never overwritten.
+An optional `Notes.txt` in the task folder with a dated header, created only on explicit request (setting or checkbox), not merely because a folder was created; paired with a Link named «Заметки» pointing at the absolute path. Unavailable when the task has no folder. Existing `Notes.txt` is never overwritten.
 _Avoid_: memo, comment, description (task metadata)
+
+**Source file** (файл источника):
+A file of a Source item that, after download, lives in a dedicated folder inside the Task folder. Distinct from Link, Notes file, and inline images.
+_Avoid_: attachment (as a Task field), Link, Notes file
 
 **Priority** (приоритет):
 An integer urgency score on a task from 0 (critical) to 10 (calm). Distinct from the task row Color.
@@ -101,9 +105,9 @@ SQLite rows for installed Source modules (id, GitHub repo, display name, enabled
 _Avoid_: settings list, plugin folder alone as source of truth
 
 **Import**:
-Bringing a Source item into the current Project as a Task. The single path snapshots the item into the create-Task dialog; the bulk path creates Tasks from snapshots without that dialog (settings defaults for folder/notes; honors «Скачать файлы…»). A Source item is already imported when the Project has a Task with the same `(source_module_id, external_id)` (any status/hidden). Status/priority catalogs are session-cached by the host; on catalog failure Import shows an error and does not call `list_items`.
+Bringing a Source item into the current Project as a Task. The single path snapshots the item into the create-Task dialog; the bulk path creates Tasks from snapshots without that dialog (settings defaults for folder/notes; honors «Скачать файлы…»). That option writes Source files into the dedicated folder inside the Task folder and creates the Task folder if it is missing. A Source item is already imported when the Project has a Task with the same `(source_module_id, external_id)` (any status/hidden). Status/priority catalogs are session-cached by the host; on catalog failure Import shows an error and does not call `list_items`.
 _Avoid_: sync, clone
 
 **Refresh from source**:
-A manual overwrite of the mapped Task fields from the Source item.
+A manual overwrite of the mapped Task fields from the Source item. Source files are not downloaded or overwritten.
 _Avoid_: sync, pull all

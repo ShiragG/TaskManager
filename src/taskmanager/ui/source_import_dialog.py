@@ -129,7 +129,7 @@ class SourceImportDialog(QDialog):
         action_row.addStretch(1)
         layout.addLayout(action_row)
 
-        self.download_cb = QCheckBox("Скачать файлы после создания (если есть папка)")
+        self.download_cb = QCheckBox("Скачать файлы источника")
         self.download_cb.setChecked(True)
         layout.addWidget(self.download_cb)
 

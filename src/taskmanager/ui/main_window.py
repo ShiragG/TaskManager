@@ -41,6 +41,7 @@ from taskmanager.domain import (
     priority_color_hex,
     truncate_plain,
 )
+from taskmanager.infrastructure.filesystem import source_files_dir
 from taskmanager.infrastructure.logging_setup import setup_logging
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.excel_export import ExcelExportError, export_tasks_to_excel
@@ -689,14 +690,24 @@ class MainWindow(QMainWindow):
         if column == COL_DESCRIPTION:
             title = "Описание"
             html = task.description
+            files_dir = (
+                source_files_dir(self.service.task_folder_path(task_id))
+                if task.has_folder
+                else None
+            )
+            show_files = True
         else:
             title = "Комментарий"
             html = task.comment
+            files_dir = None
+            show_files = False
         dialog = RichTextEditDialog(
             self,
             title=title,
             html=html,
             image_preview_width=self.settings.image_preview_width,
+            source_files_dir=files_dir,
+            show_source_files_button=show_files,
         )
         if dialog.exec() != RichTextEditDialog.DialogCode.Accepted:
             return
@@ -1210,6 +1221,11 @@ class MainWindow(QMainWindow):
             on_delete_reminder=on_delete_reminder,
             reminder_service=self.service,
             on_reminders_changed=on_reminders_changed,
+            source_files_dir=(
+                source_files_dir(self.service.task_folder_path(task_id))
+                if task.has_folder
+                else None
+            ),
         )
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return

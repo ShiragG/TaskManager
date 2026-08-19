@@ -11,6 +11,24 @@ from taskmanager.services.settings_service import Settings
 
 NOTES_FILE_NAME = "Notes.txt"
 NOTES_LINK_NAME = "Заметки"
+SOURCE_FILES_DIR_NAME = "files"
+
+
+def source_files_dir(task_folder: Path) -> Path:
+    return task_folder / SOURCE_FILES_DIR_NAME
+
+
+def existing_source_file_names(directory: Path) -> list[str]:
+    if not directory.is_dir():
+        return []
+    return [p.name for p in directory.iterdir()]
+
+
+def source_files_present(directory: Path | None) -> bool:
+    """True if the dedicated Source files folder exists and has a non-dot entry."""
+    if directory is None or not directory.is_dir():
+        return False
+    return any(not p.name.startswith(".") for p in directory.iterdir())
 
 
 class FilesystemError(Exception):

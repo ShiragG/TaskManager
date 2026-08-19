@@ -18,7 +18,7 @@ def test_settings_roundtrip(tmp_path: Path):
     assert loaded.template_name == ".tpl"
     assert loaded.archive_name == ".archive"
     assert loaded.warning_lead_days == 3
-    assert loaded.create_notes_file is True
+    assert loaded.create_notes_file is False
     assert loaded.create_task_folder is True
     assert loaded.autonumber_on_create is False
     assert loaded.theme_mode == "system"
@@ -35,6 +35,18 @@ def test_settings_default_lead_days(tmp_path: Path):
     )
     loaded = SettingsStore(path).load()
     assert loaded.warning_lead_days == 1
+    assert loaded.create_notes_file is False
+
+
+def test_settings_create_notes_file_true_from_json_preserved(tmp_path: Path):
+    work = tmp_path / "w"
+    work.mkdir()
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"work_dir": str(work), "create_notes_file": True}),
+        encoding="utf-8",
+    )
+    loaded = SettingsStore(path).load()
     assert loaded.create_notes_file is True
 
 

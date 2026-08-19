@@ -80,6 +80,7 @@ from taskmanager.domain import (
     parse_workflow_status,
     priority_color_hex,
 )
+from taskmanager.infrastructure.filesystem import source_files_present
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.inline_images import sniff_image
 from taskmanager.services.settings_service import (
@@ -604,6 +605,8 @@ class RichTextEditDialog(QDialog):
         title: str = "Редактор",
         html: str = "",
         image_preview_width: int = DEFAULT_IMAGE_PREVIEW_WIDTH,
+        source_files_dir: Path | None = None,
+        show_source_files_button: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -621,6 +624,8 @@ class RichTextEditDialog(QDialog):
         # Isolate dialog from app QSS so toolbar checked/hover are reliable.
         self.setStyleSheet("")
         layout = QVBoxLayout(self)
+        self._source_files_dir = source_files_dir
+        self.source_files_button: QPushButton | None = None
 
         toolbar = QToolBar()
         toolbar.setStyleSheet(_RICH_TOOLBAR_QSS)
@@ -674,7 +679,17 @@ class RichTextEditDialog(QDialog):
         self.addAction(self._act_bold)
         self.addAction(self._act_italic)
         self.addAction(self._act_underline)
-        layout.addWidget(toolbar)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(toolbar, 1)
+        if show_source_files_button:
+            btn = QPushButton("Файлы")
+            btn.setToolTip("Открыть папку файлов источника")
+            btn.setEnabled(source_files_present(source_files_dir))
+            btn.clicked.connect(self._open_source_files)
+            header.addWidget(btn, 0, Qt.AlignmentFlag.AlignTop)
+            self.source_files_button = btn
+        layout.addLayout(header)
         layout.addWidget(self.editor)
 
         self.editor.currentCharFormatChanged.connect(self._sync_format_actions)
@@ -784,6 +799,14 @@ class RichTextEditDialog(QDialog):
         if path:
             self.insert_image_from_path(path)
 
+    def _open_source_files(self) -> None:
+        if self._source_files_dir is None:
+            return
+        try:
+            open_target(str(self._source_files_dir))
+        except PlatformOpenError as exc:
+            QMessageBox.warning(self, "Файлы", str(exc))
+
     def insert_image_from_path(self, path: str) -> bool:
         """Insert a magic-validated image as a data URI (files are written on save)."""
         try:
@@ -822,10 +845,14 @@ class HtmlEditRow(QWidget):
         title: str = "Текст",
         html: str = "",
         image_preview_width: int = DEFAULT_IMAGE_PREVIEW_WIDTH,
+        source_files_dir: Path | None = None,
+        show_source_files_button: bool = False,
     ) -> None:
         super().__init__(parent)
         self._title = title
         self._image_preview_width = image_preview_width
+        self.source_files_dir = source_files_dir
+        self.show_source_files_button = show_source_files_button
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.edit = QLineEdit(html or "")
@@ -844,6 +871,8 @@ class HtmlEditRow(QWidget):
             title=self._title,
             html=self.edit.text(),
             image_preview_width=self._image_preview_width,
+            source_files_dir=self.source_files_dir,
+            show_source_files_button=self.show_source_files_button,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.edit.setText(dialog.html)
@@ -882,6 +911,7 @@ class TaskDialog(QDialog):
         on_delete_reminder: Callable[[int], bool] | None = None,
         reminder_service=None,
         on_reminders_changed: Callable[[], None] | None = None,
+        source_files_dir: Path | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -908,6 +938,8 @@ class TaskDialog(QDialog):
             title="Описание",
             html=desc_value,
             image_preview_width=settings.image_preview_width,
+            source_files_dir=source_files_dir,
+            show_source_files_button=True,
         )
         form.addRow("Описание", self.description_row)
 

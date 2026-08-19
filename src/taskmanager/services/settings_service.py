@@ -153,7 +153,7 @@ class Settings:
     highlight_warnings: bool = True
     warning_color: str = "#ff0000"
     warning_lead_days: int = 1
-    create_notes_file: bool = True
+    create_notes_file: bool = False
     create_task_folder: bool = True
     autonumber_on_create: bool = False
     show_priority_colors: bool = True
