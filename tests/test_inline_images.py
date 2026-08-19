@@ -578,6 +578,104 @@ def test_extractor_keeps_existing_img_width(tmp_path: Path):
     assert _img_width(new_html) == 240
 
 
+def _write_rgb_png(path: Path, width: int, height: int) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QImage
+
+    image = QImage(width, height, QImage.Format.Format_RGB32)
+    image.fill(QColor(Qt.GlobalColor.blue))
+    assert image.save(str(path), "PNG")
+
+
+def _document_image_size(editor):
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QImage, QPixmap, QTextDocument
+
+    cursors = editor.iter_image_cursors()
+    assert cursors
+    fmt = cursors[0].charFormat().toImageFormat()
+    res = editor.document().resource(
+        QTextDocument.ResourceType.ImageResource,
+        QUrl(fmt.name()),
+    )
+    if isinstance(res, QPixmap):
+        return res.size()
+    if isinstance(res, QImage):
+        return res.size()
+    raise AssertionError(f"unexpected image resource {type(res)!r}: {res!r}")
+
+
+def test_editor_setHtml_preview_resource_keeps_original_file(tmp_path: Path, qtbot):
+    from taskmanager.ui.dialogs import DEFAULT_IMAGE_PREVIEW_WIDTH, RichTextEditDialog
+
+    png_path = tmp_path / ".images" / "shot.png"
+    png_path.parent.mkdir()
+    _write_rgb_png(png_path, 1600, 1200)
+    original = png_path.read_bytes()
+    uri = png_path.resolve().as_uri()
+    html = f'<p>shot</p><img src="{uri}" width="{DEFAULT_IMAGE_PREVIEW_WIDTH}">'
+    dialog = RichTextEditDialog(title="Описание", html=html)
+    qtbot.addWidget(dialog)
+    size = _document_image_size(dialog.editor)
+    assert size.width() == 1600
+    assert size.height() == 1200
+    saved = dialog.html
+    assert uri in saved or png_path.resolve().as_posix() in saved
+    assert "file://" in saved
+    assert png_path.read_bytes() == original
+
+
+def test_editor_paste_large_image_uses_preview_resource(qtbot):
+    from PySide6.QtCore import QMimeData, Qt
+    from PySide6.QtGui import QColor, QImage
+    from taskmanager.ui.dialogs import DEFAULT_IMAGE_PREVIEW_WIDTH, RichTextEditDialog
+
+    image = QImage(1400, 900, QImage.Format.Format_RGB32)
+    image.fill(QColor(Qt.GlobalColor.green))
+    mime = QMimeData()
+    mime.setImageData(image)
+    dialog = RichTextEditDialog(title="Комментарий")
+    qtbot.addWidget(dialog)
+    dialog.editor.insertFromMimeData(mime)
+    size = _document_image_size(dialog.editor)
+    assert size.width() == 1400
+    assert size.height() == 900
+    html = dialog.html
+    assert "data:image" in html
+    width = _img_width(html)
+    assert width is not None
+    assert abs(width - DEFAULT_IMAGE_PREVIEW_WIDTH) <= 1
+
+
+def test_editor_dialog_minmax_and_main_window_size(tmp_path: Path, qtbot):
+    from PySide6.QtCore import Qt
+    from taskmanager.infrastructure.sqlite_repo import SqliteRepository
+    from taskmanager.services.settings_service import SettingsStore
+    from taskmanager.ui.dialogs import RichTextEditDialog, TaskDialog
+    from taskmanager.ui.main_window import MainWindow
+
+    work = tmp_path / "work"
+    work.mkdir()
+    store = SettingsStore(tmp_path / "settings.json")
+    settings = Settings(work_dir=str(work))
+    store.save(settings)
+    repo = SqliteRepository(tmp_path / "ui.db")
+    service = TaskService(repo, settings)
+    window = MainWindow(service, settings, store)
+    qtbot.addWidget(window)
+    window.resize(960, 700)
+    task_dialog = TaskDialog(settings, window)
+    qtbot.addWidget(task_dialog)
+    dialog = RichTextEditDialog(task_dialog, title="Комментарий")
+    qtbot.addWidget(dialog)
+    flags = dialog.windowFlags()
+    assert flags & Qt.WindowType.WindowMinimizeButtonHint
+    assert flags & Qt.WindowType.WindowMaximizeButtonHint
+    assert abs(dialog.width() - window.width()) <= 40
+    assert abs(dialog.height() - window.height()) <= 40
+    repo.close()
+
+
 def test_editor_image_preset_writes_width(tmp_path: Path, qtbot):
     from taskmanager.ui.dialogs import (
         DEFAULT_IMAGE_PREVIEW_WIDTH,
@@ -596,4 +694,58 @@ def test_editor_image_preset_writes_width(tmp_path: Path, qtbot):
     assert _img_width(dialog.html) == SMALL_IMAGE_PREVIEW_WIDTH
     dialog.editor.set_image_display_width(cursors[0], DEFAULT_IMAGE_PREVIEW_WIDTH)
     assert _img_width(dialog.html) == DEFAULT_IMAGE_PREVIEW_WIDTH
+
+
+def test_editor_insert_uses_settings_preview_width(tmp_path: Path, qtbot):
+    from taskmanager.ui.dialogs import SMALL_IMAGE_PREVIEW_WIDTH, RichTextEditDialog
+
+    png_path = tmp_path / "shot.png"
+    png_path.write_bytes(PNG_1x1)
+    dialog = RichTextEditDialog(
+        title="Описание", image_preview_width=SMALL_IMAGE_PREVIEW_WIDTH
+    )
+    qtbot.addWidget(dialog)
+    assert dialog.insert_image_from_path(str(png_path))
+    assert _img_width(dialog.html) == SMALL_IMAGE_PREVIEW_WIDTH
+
+
+def test_editor_open_applies_width_only_when_missing(tmp_path: Path, qtbot):
+    from taskmanager.ui.dialogs import (
+        DEFAULT_IMAGE_PREVIEW_WIDTH,
+        SMALL_IMAGE_PREVIEW_WIDTH,
+        RichTextEditDialog,
+    )
+
+    png_path = tmp_path / ".images" / "shot.png"
+    png_path.parent.mkdir()
+    _write_rgb_png(png_path, 800, 600)
+    uri = png_path.resolve().as_uri()
+    missing = RichTextEditDialog(
+        title="Описание",
+        html=f'<p>shot</p><img src="{uri}">',
+        image_preview_width=SMALL_IMAGE_PREVIEW_WIDTH,
+    )
+    qtbot.addWidget(missing)
+    assert _img_width(missing.html) == SMALL_IMAGE_PREVIEW_WIDTH
+    kept = RichTextEditDialog(
+        title="Описание",
+        html=f'<p>shot</p><img src="{uri}" width="320">',
+        image_preview_width=DEFAULT_IMAGE_PREVIEW_WIDTH,
+    )
+    qtbot.addWidget(kept)
+    assert _img_width(kept.html) == 320
+
+
+def test_editor_original_insert_uses_natural_width(tmp_path: Path, qtbot):
+    from taskmanager.services.settings_service import IMAGE_PREVIEW_ORIGINAL
+    from taskmanager.ui.dialogs import RichTextEditDialog
+
+    png_path = tmp_path / "shot.png"
+    _write_rgb_png(png_path, 640, 480)
+    dialog = RichTextEditDialog(
+        title="Описание", image_preview_width=IMAGE_PREVIEW_ORIGINAL
+    )
+    qtbot.addWidget(dialog)
+    assert dialog.insert_image_from_path(str(png_path))
+    assert _img_width(dialog.html) == 640
 

@@ -16,6 +16,7 @@ from taskmanager.infrastructure.paths import (
     default_settings_path,
     resolve_work_dir,
 )
+from taskmanager.infrastructure.single_instance import InstanceGuard
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.resources import app_icon_png
 from taskmanager.services.settings_service import SettingsStore
@@ -27,13 +28,26 @@ from taskmanager.ui.stylesheet import apply_stylesheet
 logger = logging.getLogger(__name__)
 
 
+def _application(argv: list[str]) -> QApplication:
+    existing = QApplication.instance()
+    if isinstance(existing, QApplication):
+        return existing
+    return QApplication(argv)
+
+
 def run(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
-    app = QApplication(argv)
+    app = _application(argv)
+    app.setQuitOnLastWindowClosed(True)
 
     icon_path = app_icon_png()
     if icon_path.is_file():
         app.setWindowIcon(QIcon(str(icon_path)))
+
+    guard = InstanceGuard()
+    if not guard.try_become_primary():
+        guard.notify_existing()
+        return 0
 
     settings_store = SettingsStore(default_settings_path())
     settings = settings_store.load()
@@ -51,6 +65,7 @@ def run(argv: list[str] | None = None) -> int:
             f"Рабочая директория не найдена:\n{work_dir}\n"
             "Исправьте settings.json или создайте папку.",
         )
+        guard.release()
         return 1
 
     repo = SqliteRepository(default_db_path())
@@ -65,10 +80,14 @@ def run(argv: list[str] | None = None) -> int:
     settings_store.pending_source_module_migration = []
     window = MainWindow(service, settings, settings_store, source_host=source_host)
     window.setWindowIcon(app.windowIcon())
+    guard.show_requested.connect(window.bring_to_front)
     window.show()
     QTimer.singleShot(0, window.run_startup_update_checks)
-    code = app.exec()
-    repo.close()
+    try:
+        code = app.exec()
+    finally:
+        guard.release()
+        repo.close()
     return code
 
 

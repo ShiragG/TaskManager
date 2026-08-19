@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -27,11 +28,13 @@ from PySide6.QtGui import (
     QDesktopServices,
     QFont,
     QImage,
+    QImageReader,
     QKeySequence,
     QMouseEvent,
     QPixmap,
     QTextCharFormat,
     QTextCursor,
+    QTextDocument,
     QTextImageFormat,
     QTextListFormat,
 )
@@ -49,6 +52,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMainWindow,
     QMenu,
     QMessageBox,
     QPushButton,
@@ -77,13 +81,28 @@ from taskmanager.domain import (
     priority_color_hex,
 )
 from taskmanager.services.inline_images import sniff_image
-from taskmanager.services.settings_service import Settings
+from taskmanager.services.settings_service import (
+    DEFAULT_IMAGE_PREVIEW_WIDTH,
+    IMAGE_PREVIEW_SMALL,
+    Settings,
+)
 
 SWATCH_SIZE = 22
-DEFAULT_IMAGE_PREVIEW_WIDTH = 480
-SMALL_IMAGE_PREVIEW_WIDTH = 240
+SMALL_IMAGE_PREVIEW_WIDTH = IMAGE_PREVIEW_SMALL
 _IMAGE_RESIZE_MIN = 40
 _IMAGE_CORNER_HIT = 16
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+_IMG_WIDTH_ATTR_RE = re.compile(r"\bwidth\s*=\s*[\"']?(\d+)", re.IGNORECASE)
+_IMG_WIDTH_STYLE_RE = re.compile(r"width\s*:\s*(\d+)px", re.IGNORECASE)
+
+
+def source_image_widths(html: str) -> list[int | None]:
+    """Width of each <img> in source HTML; None if that tag has no width."""
+    widths: list[int | None] = []
+    for tag in _IMG_TAG_RE.findall(html or ""):
+        match = _IMG_WIDTH_ATTR_RE.search(tag) or _IMG_WIDTH_STYLE_RE.search(tag)
+        widths.append(int(match.group(1)) if match else None)
+    return widths
 
 
 class ColorSwatchButton(QToolButton):
@@ -170,11 +189,37 @@ def _data_uri_img_html(
     data: bytes, mime: str, *, width: int = DEFAULT_IMAGE_PREVIEW_WIDTH
 ) -> str:
     b64 = base64.b64encode(data).decode("ascii")
-    return f'<img src="data:{mime};base64,{b64}" width="{width}">'
+    display_width = width
+    if display_width <= 0:
+        image = QImage()
+        image.loadFromData(data)
+        display_width = image.width() if not image.isNull() else 0
+    if display_width > 0:
+        return f'<img src="data:{mime};base64,{b64}" width="{display_width}">'
+    return f'<img src="data:{mime};base64,{b64}">'
 
 
-def _natural_image_size(fmt: QTextImageFormat) -> QSize:
+def _image_source_path(name: str) -> str:
+    if name.startswith("file:"):
+        return QUrl(name).toLocalFile()
+    if name and not name.startswith("data:"):
+        return name
+    return ""
+
+
+def _natural_image_size(
+    fmt: QTextImageFormat, cache: dict[str, QSize] | None = None
+) -> QSize:
     name = fmt.name()
+    if cache is not None and name in cache:
+        return QSize(cache[name])
+    path = _image_source_path(name)
+    if path:
+        size = QImageReader(path).size()
+        if size.isValid() and size.width() > 0:
+            if cache is not None:
+                cache[name] = QSize(size)
+            return size
     image = QImage()
     if name.startswith("data:"):
         comma = name.find(",")
@@ -183,13 +228,40 @@ def _natural_image_size(fmt: QTextImageFormat) -> QSize:
                 image.loadFromData(base64.b64decode(name[comma + 1 :]))
             except Exception:
                 image = QImage()
-    elif name.startswith("file:"):
-        image = QImage(QUrl(name).toLocalFile())
-    elif name:
-        image = QImage(name)
+    elif path:
+        image = QImage(path)
     if image.isNull():
         return QSize(max(int(fmt.width()), 0), max(int(fmt.height()), 0))
+    if cache is not None:
+        cache[name] = image.size()
     return image.size()
+
+
+def _read_preview_pixmap(name: str, _display_width: int = 0) -> tuple[QPixmap, QSize]:
+    """Load original image pixels; HTML width controls on-screen size."""
+    pix = QPixmap()
+    path = _image_source_path(name)
+    if path:
+        pix = QPixmap(path)
+    elif name.startswith("data:"):
+        comma = name.find(",")
+        if comma >= 0:
+            try:
+                pix.loadFromData(base64.b64decode(name[comma + 1 :]))
+            except Exception:
+                return QPixmap(), QSize(0, 0)
+    if pix.isNull():
+        return pix, QSize(0, 0)
+    return pix, pix.size()
+
+
+def _ancestor_main_window(widget: QWidget | None) -> QMainWindow | None:
+    current = widget
+    while current is not None:
+        if isinstance(current, QMainWindow):
+            return current
+        current = current.parentWidget()
+    return None
 
 
 class _ImageHit:
@@ -207,8 +279,10 @@ class _LinkAwareTextEdit(QTextEdit):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._drag_resize: tuple[int, int] | None = None
+        self._natural_sizes: dict[str, QSize] = {}
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
+        self.image_preview_width = DEFAULT_IMAGE_PREVIEW_WIDTH
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if (
@@ -291,9 +365,15 @@ class _LinkAwareTextEdit(QTextEdit):
             if isinstance(image, QImage) and not image.isNull():
                 data = _qimage_png_bytes(image)
                 if sniff_image(data) is not None:
-                    self.textCursor().insertHtml(_data_uri_img_html(data, "image/png"))
+                    self.textCursor().insertHtml(
+                        _data_uri_img_html(
+                            data, "image/png", width=self.image_preview_width
+                        )
+                    )
+                    self.replace_preview_image_resources()
                     return
         super().insertFromMimeData(source)
+        self.replace_preview_image_resources()
 
     def iter_image_cursors(self) -> list[QTextCursor]:
         found: list[QTextCursor] = []
@@ -315,7 +395,7 @@ class _LinkAwareTextEdit(QTextEdit):
         if not fmt.isImageFormat():
             return
         img_fmt = fmt.toImageFormat()
-        natural = _natural_image_size(img_fmt)
+        natural = _natural_image_size(img_fmt, self._natural_sizes)
         if width <= 0:
             if natural.width() > 0:
                 img_fmt.setWidth(natural.width())
@@ -332,6 +412,51 @@ class _LinkAwareTextEdit(QTextEdit):
             else:
                 img_fmt.setHeight(0)
         cursor.setCharFormat(img_fmt)
+        self.replace_preview_image_resources()
+
+    def apply_default_width_when_missing(
+        self, source_widths: list[int | None] | None = None
+    ) -> None:
+        for index, cursor in enumerate(self.iter_image_cursors()):
+            fmt = cursor.charFormat()
+            if not fmt.isImageFormat():
+                continue
+            if source_widths is not None:
+                if index < len(source_widths) and source_widths[index] is not None:
+                    continue
+            elif int(fmt.toImageFormat().width()) > 0:
+                continue
+            self.set_image_display_width(cursor, self.image_preview_width)
+
+    def replace_preview_image_resources(self) -> None:
+        """Keep original pixels in QTextDocument; HTML src stays original."""
+        doc = self.document()
+        viewport_width = self.viewport().width()
+        for cursor in self.iter_image_cursors():
+            fmt = cursor.charFormat()
+            if not fmt.isImageFormat():
+                continue
+            img_fmt = fmt.toImageFormat()
+            name = img_fmt.name()
+            if not name:
+                continue
+            display_width = int(img_fmt.width())
+            if display_width <= 0:
+                display_width = viewport_width or DEFAULT_IMAGE_PREVIEW_WIDTH
+            pixmap, natural = _read_preview_pixmap(name, display_width)
+            if natural.width() > 0:
+                self._natural_sizes[name] = QSize(natural)
+            if pixmap.isNull():
+                continue
+            urls = [QUrl(name)]
+            local = _image_source_path(name)
+            if local:
+                urls.append(QUrl.fromLocalFile(local))
+            for url in urls:
+                doc.addResource(QTextDocument.ResourceType.ImageResource, url, pixmap)
+        count = doc.characterCount()
+        if count > 0:
+            doc.markContentsDirty(0, count)
 
     def _prompt_image_width(self, cursor: QTextCursor) -> None:
         fmt = cursor.charFormat()
@@ -379,7 +504,7 @@ class _LinkAwareTextEdit(QTextEdit):
                         x = line.cursorToX(pos_in_block)
                         if isinstance(x, tuple):
                             x = x[0]
-                        natural = _natural_image_size(img_fmt)
+                        natural = _natural_image_size(img_fmt, self._natural_sizes)
                         width = img_fmt.width() or natural.width() or DEFAULT_IMAGE_PREVIEW_WIDTH
                         height = img_fmt.height() or natural.height() or width
                         rect = QRectF(
@@ -456,10 +581,21 @@ class RichTextEditDialog(QDialog):
         *,
         title: str = "Редактор",
         html: str = "",
+        image_preview_width: int = DEFAULT_IMAGE_PREVIEW_WIDTH,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
+        self.setWindowFlags(
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinMaxButtonsHint
+            | Qt.WindowType.WindowCloseButtonHint
+        )
         self.setMinimumSize(676, 468)
+        main = _ancestor_main_window(parent)
+        if main is not None:
+            self.setGeometry(main.geometry())
         # Isolate dialog from app QSS so toolbar checked/hover are reliable.
         self.setStyleSheet("")
         layout = QVBoxLayout(self)
@@ -468,8 +604,11 @@ class RichTextEditDialog(QDialog):
         toolbar.setStyleSheet(_RICH_TOOLBAR_QSS)
         self.editor = _LinkAwareTextEdit()
         self.editor.setAcceptRichText(True)
+        self.editor.image_preview_width = image_preview_width
         if html:
             self.editor.setHtml(html)
+            self.editor.apply_default_width_when_missing(source_image_widths(html))
+            self.editor.replace_preview_image_resources()
 
         self._act_bold = QAction("Ж", self)
         self._act_bold.setCheckable(True)
@@ -640,7 +779,10 @@ class RichTextEditDialog(QDialog):
             "gif": "image/gif",
             "webp": "image/webp",
         }[ext]
-        self.editor.textCursor().insertHtml(_data_uri_img_html(data, mime))
+        self.editor.textCursor().insertHtml(
+            _data_uri_img_html(data, mime, width=self.editor.image_preview_width)
+        )
+        self.editor.replace_preview_image_resources()
         return True
 
     @property
@@ -651,9 +793,17 @@ class RichTextEditDialog(QDialog):
 class HtmlEditRow(QWidget):
     """Editable raw-HTML line + «…» button opening RichTextEditDialog."""
 
-    def __init__(self, parent=None, *, title: str = "Текст", html: str = "") -> None:
+    def __init__(
+        self,
+        parent=None,
+        *,
+        title: str = "Текст",
+        html: str = "",
+        image_preview_width: int = DEFAULT_IMAGE_PREVIEW_WIDTH,
+    ) -> None:
         super().__init__(parent)
         self._title = title
+        self._image_preview_width = image_preview_width
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.edit = QLineEdit(html or "")
@@ -667,7 +817,12 @@ class HtmlEditRow(QWidget):
         layout.addWidget(btn)
 
     def _edit(self) -> None:
-        dialog = RichTextEditDialog(self, title=self._title, html=self.edit.text())
+        dialog = RichTextEditDialog(
+            self,
+            title=self._title,
+            html=self.edit.text(),
+            image_preview_width=self._image_preview_width,
+        )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.edit.setText(dialog.html)
 
@@ -730,12 +885,14 @@ class TaskDialog(QDialog):
         self.description_row = HtmlEditRow(
             title="Описание",
             html=desc_value,
+            image_preview_width=settings.image_preview_width,
         )
         form.addRow("Описание", self.description_row)
 
         self.comment_row = HtmlEditRow(
             title="Комментарий",
             html=task.comment if task else "",
+            image_preview_width=settings.image_preview_width,
         )
         form.addRow("Комментарий", self.comment_row)
 

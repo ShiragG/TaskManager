@@ -41,6 +41,14 @@ CALENDAR_VIEW_COMPACT = "compact"
 CALENDAR_VIEW_WEEK = "week"
 CALENDAR_VIEWS = frozenset({CALENDAR_VIEW_COMPACT, CALENDAR_VIEW_WEEK})
 
+IMAGE_PREVIEW_SMALL = 240
+IMAGE_PREVIEW_MEDIUM = 480
+IMAGE_PREVIEW_ORIGINAL = 0
+IMAGE_PREVIEW_WIDTHS = frozenset(
+    {IMAGE_PREVIEW_SMALL, IMAGE_PREVIEW_MEDIUM, IMAGE_PREVIEW_ORIGINAL}
+)
+DEFAULT_IMAGE_PREVIEW_WIDTH = IMAGE_PREVIEW_MEDIUM
+
 
 def parse_snooze_minutes(value: Any) -> int:
     try:
@@ -56,6 +64,16 @@ def parse_calendar_view(value: Any) -> str:
     if value in CALENDAR_VIEWS:
         return str(value)
     return CALENDAR_VIEW_COMPACT
+
+
+def parse_image_preview_width(value: Any) -> int:
+    try:
+        width = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_IMAGE_PREVIEW_WIDTH
+    if width in IMAGE_PREVIEW_WIDTHS:
+        return width
+    return DEFAULT_IMAGE_PREVIEW_WIDTH
 
 
 def parse_splitter_sizes(value: Any) -> list[int]:
@@ -151,6 +169,8 @@ class Settings:
     calendar_week_splitter: list[int] = field(default_factory=list)
     calendar_compact_splitter: list[int] = field(default_factory=list)
     calendar_day_pane_open: bool = False
+    image_preview_width: int = DEFAULT_IMAGE_PREVIEW_WIDTH
+    show_in_tray: bool = True
     colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLORS))
     hotkeys: dict[str, str] = field(default_factory=default_hotkeys_copy)
 
@@ -197,6 +217,10 @@ class Settings:
         merged["calendar_day_pane_open"] = bool(
             merged.get("calendar_day_pane_open", False)
         )
+        merged["image_preview_width"] = parse_image_preview_width(
+            merged.get("image_preview_width")
+        )
+        merged["show_in_tray"] = bool(merged.get("show_in_tray", True))
         return cls(**merged)
 
 

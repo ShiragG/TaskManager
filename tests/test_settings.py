@@ -219,3 +219,54 @@ def test_calendar_layout_roundtrip_and_defaults(tmp_path: Path):
     assert loaded2.calendar_week_splitter == []
     assert loaded2.calendar_compact_splitter == []
     assert loaded2.calendar_day_pane_open is False
+
+
+def test_image_preview_width_roundtrip_and_defaults(tmp_path: Path):
+    from taskmanager.services.settings_service import (
+        DEFAULT_IMAGE_PREVIEW_WIDTH,
+        IMAGE_PREVIEW_ORIGINAL,
+        IMAGE_PREVIEW_SMALL,
+        parse_image_preview_width,
+    )
+
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(
+        work_dir=str(tmp_path / "work"),
+        image_preview_width=IMAGE_PREVIEW_SMALL,
+    )
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.image_preview_width == 240
+
+    work = tmp_path / "w2"
+    work.mkdir()
+    path2 = tmp_path / "settings2.json"
+    path2.write_text(
+        f'{{"work_dir": "{work.as_posix()}"}}',
+        encoding="utf-8",
+    )
+    loaded2 = SettingsStore(path2).load()
+    assert loaded2.image_preview_width == DEFAULT_IMAGE_PREVIEW_WIDTH
+    assert parse_image_preview_width("nope") == DEFAULT_IMAGE_PREVIEW_WIDTH
+    assert parse_image_preview_width(IMAGE_PREVIEW_ORIGINAL) == 0
+    assert parse_image_preview_width(99) == DEFAULT_IMAGE_PREVIEW_WIDTH
+
+
+def test_show_in_tray_roundtrip_and_default_on(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(work_dir=str(tmp_path / "work"), show_in_tray=False)
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.show_in_tray is False
+
+    work = tmp_path / "w2"
+    work.mkdir()
+    path2 = tmp_path / "settings2.json"
+    path2.write_text(
+        f'{{"work_dir": "{work.as_posix()}"}}',
+        encoding="utf-8",
+    )
+    loaded2 = SettingsStore(path2).load()
+    assert loaded2.show_in_tray is True

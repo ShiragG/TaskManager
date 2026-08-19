@@ -2,7 +2,7 @@
 
 A Reminder is a scheduled ping (text, local time, repeat rule), not the Task’s optional due date. Срок stays a date-only field for “when the work should be done”; mixing the two would make overdue highlighting and calendar pings fight over the same column.
 
-Missed is only the latest past occurrence that is not skipped and not acknowledged — one row per series, so a weekly ping that fired for months does not flood the list. A short month without the chosen day (31st in February) has no occurrence that month. Archive and delete destroy the series; Restore does not bring it back. Notifications run only while the process is open (timer + OS toast / in-app popup); there is no background tray that keeps the app “alive” after the window closes.
+Missed is only the latest past occurrence that is not skipped and not acknowledged — one row per series, so a weekly ping that fired for months does not flood the list. A short month without the chosen day (31st in February) has no occurrence that month. Archive and delete destroy the series; Restore does not bring it back. Notifications run only while the process is open (timer + OS toast / in-app popup). A tray icon during the session is allowed; the close button still quits the process. There is no hide-on-close and no session that lives in the tray without a window.
 
 **Status:** accepted
 

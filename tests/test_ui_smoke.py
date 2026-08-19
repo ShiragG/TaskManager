@@ -658,6 +658,16 @@ def test_settings_dialog_tabs_and_event_defaults(app_env, qtbot):
     assert dialog.snooze_combo.currentData() == 15
     assert dialog._update_panel.isHidden()
     assert dialog.check_updates_on_startup_cb.isChecked()
+    assert dialog.image_preview_combo.currentData() == 480
+    assert dialog.show_in_tray_cb.isChecked()
+    labels = [
+        dialog.image_preview_combo.itemText(i)
+        for i in range(dialog.image_preview_combo.count())
+    ]
+    assert labels == ["Уменьшенная", "Средняя", "Исходная"]
+    hint = dialog.image_click_hint.text()
+    assert "Ctrl+ЛКМ" in hint
+    assert "исходн" in hint.lower()
 
 
 def test_quiet_update_check_skips_uptodate_modal(app_env, qtbot, monkeypatch):
@@ -770,3 +780,48 @@ def test_settings_close_copies_install_banner(app_env, qtbot):
     assert not window._update_panel.isHidden()
     assert not window._update_restart_btn.isHidden()
     assert "Установить и закрыть" in window._update_label.text()
+
+
+def test_settings_dialog_saves_image_size_and_tray(app_env, qtbot):
+    from taskmanager.ui.settings_dialog import SettingsDialog
+
+    window, _service = app_env
+    dialog = SettingsDialog(window.settings, window.settings_store, window)
+    qtbot.addWidget(dialog)
+    small_idx = dialog.image_preview_combo.findData(240)
+    assert small_idx >= 0
+    dialog.image_preview_combo.setCurrentIndex(small_idx)
+    dialog.show_in_tray_cb.setChecked(False)
+    dialog._save()
+    loaded = window.settings_store.load()
+    assert loaded.image_preview_width == 240
+    assert loaded.show_in_tray is False
+
+
+def test_tray_menu_actions_and_trigger_shows_window(app_env, qtbot):
+    from PySide6.QtWidgets import QSystemTrayIcon
+
+    window, _service = app_env
+    tray = window._reminder_tray
+    assert tray is not None
+    menu = tray.contextMenu()
+    assert menu is not None
+    labels = [action.text() for action in menu.actions() if not action.isSeparator()]
+    assert labels == ["Открыть", "Календарь", "Настройки", "Закрыть"]
+    window.showMinimized()
+    tray.activated.emit(QSystemTrayIcon.ActivationReason.Trigger)
+    assert window.isVisible()
+    assert not window.isMinimized()
+
+
+def test_close_event_quits_even_with_tray(app_env, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QApplication
+
+    window, _service = app_env
+    window.settings.show_in_tray = True
+    window.show()
+    quits: list[bool] = []
+    monkeypatch.setattr(QApplication, "quit", lambda *_a, **_k: quits.append(True))
+    window.close()
+    assert not window.isVisible()
+    assert quits == [True]

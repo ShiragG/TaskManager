@@ -36,6 +36,10 @@ from taskmanager.services.hotkeys import (
     validate_hotkeys,
 )
 from taskmanager.services.settings_service import (
+    DEFAULT_IMAGE_PREVIEW_WIDTH,
+    IMAGE_PREVIEW_MEDIUM,
+    IMAGE_PREVIEW_ORIGINAL,
+    IMAGE_PREVIEW_SMALL,
     SNOOZE_LABELS,
     SNOOZE_MINUTES,
     THEME_DARK,
@@ -43,6 +47,7 @@ from taskmanager.services.settings_service import (
     THEME_SYSTEM,
     Settings,
     SettingsStore,
+    parse_image_preview_width,
     parse_snooze_minutes,
 )
 from taskmanager.ui.about_dialog import AboutDialog
@@ -129,6 +134,27 @@ class SettingsDialog(QDialog):
         self.debug_logging_cb = QCheckBox("Подробный лог (DEBUG/INFO)")
         self.debug_logging_cb.setChecked(settings.debug_logging)
         form.addRow(self.debug_logging_cb)
+
+        self.show_in_tray_cb = QCheckBox("Показывать в трее")
+        self.show_in_tray_cb.setChecked(settings.show_in_tray)
+        form.addRow(self.show_in_tray_cb)
+
+        self.image_preview_combo = QComboBox()
+        self.image_preview_combo.addItem("Уменьшенная", IMAGE_PREVIEW_SMALL)
+        self.image_preview_combo.addItem("Средняя", IMAGE_PREVIEW_MEDIUM)
+        self.image_preview_combo.addItem("Исходная", IMAGE_PREVIEW_ORIGINAL)
+        preview_idx = self.image_preview_combo.findData(
+            parse_image_preview_width(settings.image_preview_width)
+        )
+        self.image_preview_combo.setCurrentIndex(preview_idx if preview_idx >= 0 else 1)
+        form.addRow("Размер картинки в редакторе", self.image_preview_combo)
+
+        self.image_click_hint = QLabel(
+            "Ctrl+ЛКМ по картинке открывает исходный файл"
+        )
+        self.image_click_hint.setWordWrap(True)
+        self.image_click_hint.setStyleSheet("color: #64748b;")
+        form.addRow(self.image_click_hint)
 
         layout.addLayout(form)
 
@@ -413,6 +439,10 @@ class SettingsDialog(QDialog):
         self._settings.autonumber_on_create = self.autonumber_cb.isChecked()
         self._settings.show_priority_colors = self.show_priority_colors_cb.isChecked()
         self._settings.debug_logging = self.debug_logging_cb.isChecked()
+        self._settings.show_in_tray = self.show_in_tray_cb.isChecked()
+        self._settings.image_preview_width = parse_image_preview_width(
+            self.image_preview_combo.currentData()
+        )
         self._settings.event_sound_enabled = self.event_sound_cb.isChecked()
         self._settings.event_sound_path = self._current_event_sound_path()
         self._settings.event_os_notification = self.event_os_notification_cb.isChecked()

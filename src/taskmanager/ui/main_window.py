@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, Qt, QThread, QTimer
-from PySide6.QtGui import QAction, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -692,7 +692,12 @@ class MainWindow(QMainWindow):
         else:
             title = "Комментарий"
             html = task.comment
-        dialog = RichTextEditDialog(self, title=title, html=html)
+        dialog = RichTextEditDialog(
+            self,
+            title=title,
+            html=html,
+            image_preview_width=self.settings.image_preview_width,
+        )
         if dialog.exec() != RichTextEditDialog.DialogCode.Accepted:
             return
         if column == COL_DESCRIPTION:
@@ -1497,6 +1502,7 @@ class MainWindow(QMainWindow):
         )
         self._rebuild_color_palette()
         self._build_shortcuts()
+        self._sync_tray_visibility()
         self.reload_projects()
 
     def _on_settings_finished(self, _result: int = 0) -> None:
@@ -2093,6 +2099,20 @@ class MainWindow(QMainWindow):
         except PlatformOpenError as exc:
             QMessageBox.warning(self, "Предупреждение", str(exc))
 
+    def bring_to_front(self) -> None:
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
+        event.accept()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
     def open_reminders(self) -> None:
         if self._reminders_window is None:
             self._reminders_window = RemindersWindow(
@@ -2159,17 +2179,36 @@ class MainWindow(QMainWindow):
             self.edit_selected_task()
 
     def _setup_reminder_notifications(self) -> None:
-        if QSystemTrayIcon.isSystemTrayAvailable():
-            self._reminder_tray = QSystemTrayIcon(self.windowIcon(), self)
-            self._reminder_tray.setToolTip("TaskManager")
-            self._reminder_tray.messageClicked.connect(self._on_tray_reminder_clicked)
-            self._reminder_tray.show()
+        self._reminder_tray = QSystemTrayIcon(self.windowIcon(), self)
+        self._reminder_tray.setToolTip("TaskManager")
+        menu = QMenu(self)
+        menu.addAction("Открыть", self.bring_to_front)
+        menu.addAction("Календарь", self.open_reminders)
+        menu.addAction("Настройки", self.open_settings)
+        menu.addSeparator()
+        menu.addAction("Закрыть", self.close)
+        self._reminder_tray.setContextMenu(menu)
+        self._reminder_tray.activated.connect(self._on_tray_activated)
+        self._reminder_tray.messageClicked.connect(self._on_tray_reminder_clicked)
+        self._sync_tray_visibility()
         self._reminder_timer = QTimer(self)
         self._reminder_timer.setInterval(15_000)
         self._reminder_timer.timeout.connect(self._poll_due_reminders)
         self._reminder_timer.start()
         self._pending_notify: tuple[int, datetime, int | None] | None = None
         self._snoozed_until: dict[tuple[int, str], datetime] = {}
+
+    def _sync_tray_visibility(self) -> None:
+        if self._reminder_tray is None:
+            return
+        if self.settings.show_in_tray and QSystemTrayIcon.isSystemTrayAvailable():
+            self._reminder_tray.show()
+        else:
+            self._reminder_tray.hide()
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.bring_to_front()
 
     def _poll_due_reminders(self) -> None:
         now = datetime.now()
@@ -2205,6 +2244,7 @@ class MainWindow(QMainWindow):
         if (
             self.settings.event_os_notification
             and self._reminder_tray is not None
+            and self._reminder_tray.isVisible()
         ):
             self._reminder_tray.showMessage(
                 title,
