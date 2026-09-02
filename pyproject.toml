@@ -1,6 +1,6 @@
 [project]
 name = "taskmanager"
-version = "0.7.3"
+version = "0.8.0"
 description = "Приложение помогающее вести заявки"
 readme = "README.md"
 requires-python = ">=3.13"
