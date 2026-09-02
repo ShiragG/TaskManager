@@ -782,6 +782,23 @@ def test_settings_close_copies_install_banner(app_env, qtbot):
     assert "Установить и закрыть" in window._update_label.text()
 
 
+def test_settings_dialog_keep_priority_on_source_refresh_saves(app_env, qtbot):
+    from taskmanager.ui.settings_dialog import SettingsDialog
+
+    window, _service = app_env
+    dialog = SettingsDialog(window.settings, window.settings_store, window)
+    qtbot.addWidget(dialog)
+    assert dialog.keep_priority_on_source_refresh_cb.text() == (
+        "Не изменять приоритет при обновлении из источника"
+    )
+    assert not dialog.keep_priority_on_source_refresh_cb.isChecked()
+    dialog.keep_priority_on_source_refresh_cb.setChecked(True)
+    dialog._save()
+    loaded = window.settings_store.load()
+    assert loaded.keep_priority_on_source_refresh is True
+    assert window.settings.keep_priority_on_source_refresh is True
+
+
 def test_settings_dialog_saves_image_size_and_tray(app_env, qtbot):
     from taskmanager.ui.settings_dialog import SettingsDialog
 

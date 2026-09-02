@@ -1507,3 +1507,49 @@ class ExcelExportDialog(QDialog):
                 if item.checkState(0) == Qt.CheckState.Checked
             ]
         return result
+
+
+def source_refresh_confirm_phrases(*, keep_priority: bool) -> tuple[str, str]:
+    """Overwrite fields + preserved-note for single and bulk Refresh confirms."""
+    if keep_priority:
+        return (
+            "описание и служебные ссылки",
+            "Комментарий и приоритет не изменятся.",
+        )
+    return (
+        "описание, приоритет и служебные ссылки",
+        "Комментарий не изменится.",
+    )
+
+
+class BulkRefreshConfirmDialog(QDialog):
+    """Consent for bulk Refresh from source, with optional source-file download."""
+
+    def __init__(
+        self, count: int, parent=None, *, keep_priority: bool = False
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Обновить все")
+        layout = QVBoxLayout(self)
+        fields, note = source_refresh_confirm_phrases(keep_priority=keep_priority)
+        overwrite = fields[:1].upper() + fields[1:]
+        label = QLabel(
+            f"Будет обновлено {count} заявок из источника. "
+            f"{overwrite} перезапишутся. "
+            f"{note}"
+        )
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        self.download_cb = QCheckBox("Скачать файлы источника")
+        self.download_cb.setChecked(True)
+        layout.addWidget(self.download_cb)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    @property
+    def download_files(self) -> bool:
+        return self.download_cb.isChecked()

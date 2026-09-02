@@ -69,6 +69,7 @@ from taskmanager.services.update_service import (
     write_restart_helper,
 )
 from taskmanager.ui.dialogs import (
+    BulkRefreshConfirmDialog,
     ColorSwatchButton,
     ExcelExportDialog,
     MissingFoldersDialog,
@@ -76,6 +77,7 @@ from taskmanager.ui.dialogs import (
     RichTextEditDialog,
     SWATCH_SIZE,
     TaskDialog,
+    source_refresh_confirm_phrases,
 )
 from taskmanager.infrastructure.event_sounds import event_ping_path
 from taskmanager.ui.event_sound_player import EventSoundPlayer
@@ -108,7 +110,7 @@ COL_DATE = 3
 COL_DESCRIPTION = 4
 COL_COMMENT = 5
 
-DESC_COL_WIDTH = 360
+DESC_COL_WIDTH = 720
 MSG_SELECT_ONE = "Выберите одну заявку"
 
 
@@ -174,9 +176,14 @@ class MainWindow(QMainWindow):
         self._reminder_tray: QSystemTrayIcon | None = None
         self._event_sound_player = EventSoundPlayer(self)
         self._update_ui: SettingsDialog | None = None
+        self._bulk_refresh_running = False
+        self._bulk_refresh_cancel = False
+        self._notify_popup: ReminderNotifyDialog | None = None
+        self._notify_queue: list[tuple] = []
+        self._notify_over_editor = False
 
         self.setWindowTitle("TaskManager")
-        self.resize(1100, 640)
+        self.resize(1360, 640)
 
         self._build_toolbar()
         self._build_central()
@@ -204,6 +211,10 @@ class MainWindow(QMainWindow):
         self.act_import_source = QAction("Импорт…", self)
         self.act_import_source.triggered.connect(self.import_from_source)
         tb.addAction(self.act_import_source)
+
+        self.act_refresh_all_source = QAction("Обновить все…", self)
+        self.act_refresh_all_source.triggered.connect(self.refresh_all_from_source)
+        tb.addAction(self.act_refresh_all_source)
 
         self.act_edit = QAction("Изменить", self)
         self.act_edit.triggered.connect(self.edit_selected_task)
@@ -311,6 +322,23 @@ class MainWindow(QMainWindow):
         update_row.addWidget(self._update_restart_btn)
         self._update_panel.hide()
         layout.addWidget(self._update_panel)
+
+        self._bulk_refresh_panel = QWidget()
+        bulk_row = QHBoxLayout(self._bulk_refresh_panel)
+        bulk_row.setContentsMargins(0, 0, 0, 0)
+        self._bulk_refresh_label = QLabel("Обновление…")
+        self._bulk_refresh_progress = QProgressBar()
+        self._bulk_refresh_progress.setMinimum(0)
+        self._bulk_refresh_progress.setMaximum(1)
+        self._bulk_refresh_progress.setValue(0)
+        self._bulk_refresh_cancel_btn = QPushButton("Отмена")
+        self._bulk_refresh_cancel_btn.setObjectName("secondaryButton")
+        self._bulk_refresh_cancel_btn.clicked.connect(self._cancel_bulk_refresh)
+        bulk_row.addWidget(self._bulk_refresh_label, stretch=1)
+        bulk_row.addWidget(self._bulk_refresh_progress, stretch=2)
+        bulk_row.addWidget(self._bulk_refresh_cancel_btn)
+        self._bulk_refresh_panel.hide()
+        layout.addWidget(self._bulk_refresh_panel)
 
         self.setCentralWidget(central)
         self.statusBar().showMessage("Готово")
@@ -451,7 +479,14 @@ class MainWindow(QMainWindow):
         archive = self._show_archive
         hidden = self._show_hidden
         self.act_add_task.setEnabled(not archive)
-        self.act_import_source.setEnabled(not archive)
+        self.act_import_source.setEnabled(
+            not archive and not self._bulk_refresh_running
+        )
+        self.act_refresh_all_source.setEnabled(
+            not archive
+            and not self._bulk_refresh_running
+            and self._visible_source_task_count() > 0
+        )
         self.act_archive.setVisible(not archive)
         self.act_restore.setVisible(archive)
         self.act_hide.setVisible(not archive and not hidden)
@@ -633,6 +668,7 @@ class MainWindow(QMainWindow):
         if header.sectionSize(COL_DESCRIPTION) < DESC_COL_WIDTH // 2:
             header.resizeSection(COL_DESCRIPTION, DESC_COL_WIDTH)
         table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
+        self._sync_mode_actions()
         if self._show_archive:
             mode = "в архиве"
         elif self._show_hidden:
@@ -1104,11 +1140,13 @@ class MainWindow(QMainWindow):
                 self, "Источник", "У заявки нет привязки к источнику"
             )
             return
+        fields, note = source_refresh_confirm_phrases(
+            keep_priority=self.settings.keep_priority_on_source_refresh
+        )
         answer = QMessageBox.question(
             self,
             "Обновить из источника",
-            "Перезаписать описание, приоритет и служебные ссылки из источника?\n"
-            "Комментарий не изменится.",
+            f"Перезаписать {fields} из источника?\n{note}",
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
@@ -1149,6 +1187,187 @@ class MainWindow(QMainWindow):
                 self, "Файлы", "Новых файлов нет (уже скачаны или список пуст)."
             )
         self.reload_current_tab()
+
+    def _visible_source_tasks(self):
+        table = self.current_table()
+        if table is None:
+            return []
+        tasks = []
+        seen: set[int] = set()
+        for row in range(table.rowCount()):
+            item = table.item(row, COL_NUMBER)
+            if item is None:
+                continue
+            value = item.data(TASK_ID_ROLE)
+            if value is None:
+                continue
+            task_id = int(value)
+            if task_id in seen:
+                continue
+            seen.add(task_id)
+            try:
+                task = self.service.get_task(task_id)
+            except ServiceError:
+                continue
+            if task.has_source:
+                tasks.append(task)
+        return tasks
+
+    def _visible_source_task_count(self) -> int:
+        return len(self._visible_source_tasks())
+
+    def refresh_all_from_source(self) -> None:
+        if self.source_host is None:
+            QMessageBox.information(
+                self, "Обновить все", "Модули источников недоступны"
+            )
+            return
+        if self._show_archive:
+            QMessageBox.information(
+                self, "Уведомление", "В режиме архива нельзя обновлять заявки"
+            )
+            return
+        if not self.source_host.enabled_modules():
+            QMessageBox.information(
+                self,
+                "Обновить все",
+                "Нет включённых модулей. Установите и включите модуль в Настройках.",
+            )
+            return
+        if self._bulk_refresh_running:
+            return
+        tasks = self._visible_source_tasks()
+        if not tasks:
+            QMessageBox.information(
+                self,
+                "Обновить все",
+                "Нет заявок с источником в текущей таблице",
+            )
+            return
+        dialog = BulkRefreshConfirmDialog(
+            len(tasks),
+            self,
+            keep_priority=self.settings.keep_priority_on_source_refresh,
+        )
+        if dialog.exec() != BulkRefreshConfirmDialog.DialogCode.Accepted:
+            return
+        queue = [
+            int(task.id)
+            for task in self._visible_source_tasks()
+            if task.id is not None
+        ]
+        self._run_bulk_refresh(queue, download=dialog.download_files)
+
+    def _cancel_bulk_refresh(self) -> None:
+        self._bulk_refresh_cancel = True
+
+    def _module_catalog_dead(self, module_id: str) -> bool:
+        if self.source_host is None or not module_id:
+            return False
+        self.source_host.refresh_catalogs(module_ids=[module_id])
+        return bool(self.source_host.catalog_error(module_id))
+
+    def _run_bulk_refresh(self, queue: list[int], *, download: bool) -> None:
+        if self.source_host is None or self._bulk_refresh_running:
+            return
+        total = len(queue)
+        if total == 0:
+            return
+        self._bulk_refresh_running = True
+        self._bulk_refresh_cancel = False
+        self._sync_mode_actions()
+        self._bulk_refresh_progress.setRange(0, total)
+        self._bulk_refresh_progress.setValue(0)
+        self._bulk_refresh_label.setText(f"Обновление: 0 из {total}")
+        self._bulk_refresh_panel.show()
+        QApplication.processEvents()
+
+        updated = 0
+        errors: list[str] = []
+        module_skips: list[str] = []
+        dead_modules: set[str] = set()
+        cancelled = False
+        try:
+            for index, task_id in enumerate(queue, start=1):
+                QApplication.processEvents()
+                if self._bulk_refresh_cancel:
+                    cancelled = True
+                    break
+                try:
+                    task = self.service.get_task(task_id)
+                except ServiceError as exc:
+                    errors.append(f"#{task_id}: {exc}")
+                    self._bulk_refresh_progress.setValue(index)
+                    continue
+                module_id = task.source_module_id or ""
+                if module_id in dead_modules:
+                    self._bulk_refresh_progress.setValue(index)
+                    continue
+                number = task.number
+                self._bulk_refresh_label.setText(
+                    f"Обновление: {index} из {total} — {number}"
+                )
+                self._bulk_refresh_progress.setValue(index - 1)
+                QApplication.processEvents()
+                if self._bulk_refresh_cancel:
+                    cancelled = True
+                    break
+                try:
+                    self.source_host.refresh_task_from_source(task_id)
+                except Exception as exc:
+                    logger.warning("Bulk refresh failed task_id=%s: %s", task_id, exc)
+                    if self._module_catalog_dead(module_id):
+                        dead_modules.add(module_id)
+                        label = task.source_label or module_id or "—"
+                        module_skips.append(
+                            f"Модуль «{label}»: каталог недоступен — "
+                            "остальные заявки пропущены"
+                        )
+                    else:
+                        errors.append(f"{number}: {exc}")
+                    self._bulk_refresh_progress.setValue(index)
+                    continue
+                if download:
+                    try:
+                        self.source_host.download_task_files(
+                            task_id, create_folder_if_missing=True
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Bulk download failed task_id=%s: %s", task_id, exc
+                        )
+                        if self._module_catalog_dead(module_id):
+                            dead_modules.add(module_id)
+                            label = task.source_label or module_id or "—"
+                            module_skips.append(
+                                f"Модуль «{label}»: каталог недоступен — "
+                                "остальные заявки пропущены"
+                            )
+                        else:
+                            errors.append(f"{number}: файлы — {exc}")
+                updated += 1
+                self._bulk_refresh_progress.setValue(index)
+        finally:
+            self._bulk_refresh_running = False
+            self._bulk_refresh_cancel = False
+            lines = [f"Обновлено: {updated}"]
+            if errors:
+                lines.append(f"Ошибки: {len(errors)}")
+                lines.extend(errors[:10])
+                if len(errors) > 10:
+                    lines.append(f"и ещё {len(errors) - 10}")
+            lines.extend(module_skips)
+            if cancelled:
+                lines.append("Отменено")
+            QMessageBox.information(self, "Обновить все", "\n".join(lines))
+            self.reload_current_tab()
+            self._bulk_refresh_panel.hide()
+            self._sync_mode_actions()
+            self.statusBar().showMessage(
+                f"Обновление завершено: обновлено {updated}"
+                + (f", ошибок {len(errors)}" if errors else "")
+                + (", отменено" if cancelled else "")
+            )
 
     def _make_create_folder_validator(self, project_id: int):
         def validate(dialog: TaskDialog) -> str | None:
@@ -2191,7 +2410,7 @@ class MainWindow(QMainWindow):
             if item is not None and int(item.data(TASK_ID_ROLE) or 0) == task_id:
                 table.selectRow(row)
                 break
-        if not task.is_archived:
+        if not task.is_archived and not self._notify_over_editor:
             self.edit_selected_task()
 
     def _setup_reminder_notifications(self) -> None:
@@ -2275,13 +2494,33 @@ class MainWindow(QMainWindow):
         )
         if path:
             self._event_sound_player.play(path)
+        if self._notify_popup is not None and self._notify_popup.isVisible():
+            self._notify_queue.append((title, body_html, series, occ, task_id))
+        else:
+            self._show_notify_popup(title, body_html, series, occ, task_id)
+        self.reload_current_tab()
+        if self._reminders_window is not None:
+            self._reminders_window.reload()
+
+    def _show_notify_popup(
+        self, title: str, body_html: str, series, occ: datetime, task_id: int | None
+    ) -> None:
+        modal = QApplication.activeModalWidget()
+        parent = modal if modal is not None else self
         popup = ReminderNotifyDialog(
             title,
             body_html,
-            self,
+            parent,
             snooze_default_minutes=self.settings.event_snooze_minutes,
         )
+        if modal is not None:
+            popup.setWindowModality(Qt.WindowModality.ApplicationModal)
+            self._notify_over_editor = True
+        else:
+            popup.setWindowModality(Qt.WindowModality.NonModal)
+            self._notify_over_editor = False
         popup.finished.connect(self._event_sound_player.stop)
+        popup.finished.connect(self._on_notify_popup_finished)
         if series.id is not None:
             popup.accepted.connect(
                 lambda sid=series.id, o=occ: self._acknowledge_occurrence(sid, o)
@@ -2297,10 +2536,20 @@ class MainWindow(QMainWindow):
                 )
             else:
                 popup.open_task_btn.hide()
+        self._notify_popup = popup
         popup.show()
-        self.reload_current_tab()
-        if self._reminders_window is not None:
-            self._reminders_window.reload()
+        popup.raise_()
+        popup.activateWindow()
+
+    def _on_notify_popup_finished(self, _result: int = 0) -> None:
+        sender = self.sender()
+        if sender is self._notify_popup:
+            self._notify_popup = None
+        self._notify_over_editor = False
+        if not self._notify_queue:
+            return
+        title, body_html, series, occ, task_id = self._notify_queue.pop(0)
+        self._show_notify_popup(title, body_html, series, occ, task_id)
 
     def _snooze_event(
         self, series_id: int, occ: datetime, minutes: int

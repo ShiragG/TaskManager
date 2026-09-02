@@ -1876,3 +1876,112 @@ def test_event_add_custom_color_saved_and_in_task_palette(reminder_ui, monkeypat
     assert any("123456" in tip.lower() for tip in tooltips)
 
 
+def test_notify_queues_second_ping_until_current_closes(reminder_ui, monkeypatch):
+    from datetime import timedelta
+
+    from taskmanager.domain import ReminderRule
+    from taskmanager.ui.reminders_window import ReminderNotifyDialog
+
+    window, service, qtbot = reminder_ui
+    occ = datetime.now().replace(second=0, microsecond=0) - timedelta(hours=1)
+    first = service.create_reminder(
+        None,
+        text="первый пинг",
+        time_of_day=occ.time(),
+        rule=ReminderRule.ONCE,
+        once_date=occ.date(),
+    )
+    later = occ.replace(minute=(occ.minute + 1) % 60)
+    second = service.create_reminder(
+        None,
+        text="второй пинг",
+        time_of_day=later.time(),
+        rule=ReminderRule.ONCE,
+        once_date=later.date(),
+    )
+    played: list[str] = []
+    monkeypatch.setattr(
+        window._event_sound_player, "play", lambda path: played.append(path)
+    )
+    window.settings.event_sound_enabled = True
+    window.settings.event_sound_path = "/settings/ding.wav"
+    window._notify_reminder(first, occ, None, None)
+    window._notify_reminder(second, later, None, None)
+    visible = [
+        w for w in window.findChildren(ReminderNotifyDialog) if w.isVisible()
+    ]
+    assert len(visible) == 1
+    assert "первый пинг" in visible[0].body_edit.toPlainText()
+    assert played == ["/settings/ding.wav", "/settings/ding.wav"]
+    visible[0].accept()
+    visible = [
+        w for w in window.findChildren(ReminderNotifyDialog) if w.isVisible()
+    ]
+    assert len(visible) == 1
+    assert "второй пинг" in visible[0].body_edit.toPlainText()
+
+
+def test_notify_ping_clickable_over_task_dialog(reminder_ui, monkeypatch):
+    from datetime import timedelta
+
+    from PySide6.QtCore import QTimer, Qt
+    from PySide6.QtWidgets import QApplication
+
+    from taskmanager.domain import ReminderRule
+    from taskmanager.ui.dialogs import TaskDialog
+    from taskmanager.ui.reminders_window import ReminderNotifyDialog
+
+    window, service, qtbot = reminder_ui
+    project = service.create_project("ModalPing")
+    task = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id, number="31", create_folder=False
+        )
+    )
+    occ = datetime.now().replace(second=0, microsecond=0) - timedelta(hours=1)
+    series = service.create_reminder(
+        task.id,
+        text="пинг поверх",
+        time_of_day=occ.time(),
+        rule=ReminderRule.ONCE,
+        once_date=occ.date(),
+    )
+    window.reload_projects()
+    dialog = TaskDialog(window.settings, window, task=task)
+    dialog.comment_row.html = "<p>черновик</p>"
+    opened: list[int] = []
+    monkeypatch.setattr(window, "edit_selected_task", lambda: opened.append(1))
+    original_reveal = window.reveal_task
+    seen: dict[str, object] = {}
+
+    def spy_reveal(task_id: int) -> None:
+        original_reveal(task_id)
+        seen["revealed"] = task_id
+        seen["selected"] = window.selected_task_ids()
+
+    monkeypatch.setattr(window, "reveal_task", spy_reveal)
+
+    def fire() -> None:
+        assert QApplication.activeModalWidget() is dialog
+        window._notify_reminder(series, occ, task, project)
+        popups = [
+            w for w in window.findChildren(ReminderNotifyDialog) if w.isVisible()
+        ]
+        assert popups
+        popup = popups[-1]
+        seen["modality"] = popup.windowModality()
+        assert popup.open_task_btn.isEnabled()
+        popup.open_task_btn.click()
+        seen["comment"] = dialog.comment
+        dialog.reject()
+
+    QTimer.singleShot(0, fire)
+    dialog.exec()
+    assert seen["modality"] == Qt.WindowModality.ApplicationModal
+    assert "черновик" in str(seen["comment"])
+    assert seen["revealed"] == task.id
+    assert seen["selected"] == [task.id]
+    assert opened == []
+
+
+

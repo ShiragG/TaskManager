@@ -719,11 +719,14 @@ class SourceHost:
         description = apply_inline_images_for_task(
             self.task_service, task_id, plain_text_to_html(draft.description)
         )
+        keep_priority = self.settings.keep_priority_on_source_refresh
         self.task_service.update_task(
             task_id,
             UpdateTaskRequest(
                 description=description,
-                priority=clamp_priority(draft.priority),
+                priority=(
+                    None if keep_priority else clamp_priority(draft.priority)
+                ),
                 links=ordered,
                 source_status_id=draft.source_status_id or "",
                 source_status_label=draft.source_status_label or "",

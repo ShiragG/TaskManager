@@ -157,6 +157,7 @@ class Settings:
     create_task_folder: bool = True
     autonumber_on_create: bool = False
     show_priority_colors: bool = True
+    keep_priority_on_source_refresh: bool = False
     debug_logging: bool = False
     theme_mode: str = THEME_SYSTEM
     event_sound_enabled: bool = True
@@ -221,6 +222,9 @@ class Settings:
             merged.get("image_preview_width")
         )
         merged["show_in_tray"] = bool(merged.get("show_in_tray", True))
+        merged["keep_priority_on_source_refresh"] = bool(
+            merged.get("keep_priority_on_source_refresh", False)
+        )
         return cls(**merged)
 
 

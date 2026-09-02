@@ -239,6 +239,14 @@ class SettingsDialog(QDialog):
         self.show_priority_colors_cb.setChecked(settings.show_priority_colors)
         form.addRow(self.show_priority_colors_cb)
 
+        self.keep_priority_on_source_refresh_cb = QCheckBox(
+            "Не изменять приоритет при обновлении из источника"
+        )
+        self.keep_priority_on_source_refresh_cb.setChecked(
+            settings.keep_priority_on_source_refresh
+        )
+        form.addRow(self.keep_priority_on_source_refresh_cb)
+
         self.highlight_cb = QCheckBox("Подсвечивать сроки (включая ближайшие)")
         self.highlight_cb.setChecked(settings.highlight_warnings)
         form.addRow(self.highlight_cb)
@@ -438,6 +446,9 @@ class SettingsDialog(QDialog):
         self._settings.create_notes_file = self.create_notes_cb.isChecked()
         self._settings.autonumber_on_create = self.autonumber_cb.isChecked()
         self._settings.show_priority_colors = self.show_priority_colors_cb.isChecked()
+        self._settings.keep_priority_on_source_refresh = (
+            self.keep_priority_on_source_refresh_cb.isChecked()
+        )
         self._settings.debug_logging = self.debug_logging_cb.isChecked()
         self._settings.show_in_tray = self.show_in_tray_cb.isChecked()
         self._settings.image_preview_width = parse_image_preview_width(

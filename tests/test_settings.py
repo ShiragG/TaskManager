@@ -265,6 +265,27 @@ def test_image_preview_width_roundtrip_and_defaults(tmp_path: Path):
     assert parse_image_preview_width(99) == DEFAULT_IMAGE_PREVIEW_WIDTH
 
 
+def test_keep_priority_on_source_refresh_roundtrip_and_default_off(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(
+        work_dir=str(tmp_path / "work"), keep_priority_on_source_refresh=True
+    )
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.keep_priority_on_source_refresh is True
+
+    work = tmp_path / "w2"
+    work.mkdir()
+    path2 = tmp_path / "settings2.json"
+    path2.write_text(
+        f'{{"work_dir": "{work.as_posix()}"}}',
+        encoding="utf-8",
+    )
+    loaded2 = SettingsStore(path2).load()
+    assert loaded2.keep_priority_on_source_refresh is False
+
+
 def test_show_in_tray_roundtrip_and_default_on(tmp_path: Path):
     path = tmp_path / "settings.json"
     store = SettingsStore(path)
