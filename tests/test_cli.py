@@ -437,72 +437,86 @@ def test_update_renames_number(
     assert invoke("task", "get", "--project", "Rename", "--number", "10") == 1
 
 
-def test_frozen_spec_stays_windowed() -> None:
+def test_spec_is_console_build() -> None:
     spec = Path(__file__).resolve().parents[1] / "TaskManager.spec"
     text = spec.read_text(encoding="utf-8")
-    assert "console=False" in text
+    assert "console=True" in text
 
 
-def test_attach_console_noop_when_not_frozen() -> None:
-    from taskmanager.cli.console import attach_parent_console
-
-    attach_parent_console()
-
-
-def test_frozen_windows_attaches_parent_console(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_hide_console_noop_when_not_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     from taskmanager.cli import console
 
-    monkeypatch.setattr(console.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(console.sys, "platform", "win32")
-
-    class Kernel:
-        def AttachConsole(self, pid: int) -> int:
-            assert pid == console.ATTACH_PARENT_PROCESS
-            return 1
-
-        def AllocConsole(self) -> int:
-            raise AssertionError("must not AllocConsole")
-
-    reopened: list[bool] = []
-    monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
-    monkeypatch.setattr(console, "_reopen_stdio", lambda: reopened.append(True))
-    console.attach_parent_console()
-    assert reopened == [True]
-
-
-def test_frozen_windows_does_not_allocate_console_without_parent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from taskmanager.cli import console
-
-    monkeypatch.setattr(console.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(console.sys, "platform", "win32")
-
-    class Kernel:
-        def AttachConsole(self, pid: int) -> int:
-            return 0
-
-        def AllocConsole(self) -> int:
-            raise AssertionError("must not AllocConsole")
-
-    reopened: list[bool] = []
-    monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
-    monkeypatch.setattr(console, "_reopen_stdio", lambda: reopened.append(True))
-    console.attach_parent_console()
-    assert reopened == []
-
-
-def test_frozen_linux_does_not_touch_console(monkeypatch: pytest.MonkeyPatch) -> None:
-    from taskmanager.cli import console
-
-    monkeypatch.setattr(console.sys, "frozen", True, raising=False)
     monkeypatch.setattr(console.sys, "platform", "linux")
 
     def boom() -> object:
         raise AssertionError("Windows console APIs must not run on Linux")
 
     monkeypatch.setattr(console, "_windows_kernel32", boom)
-    console.attach_parent_console()
+    console.hide_console_if_only_ours()
+
+
+def test_hide_console_noop_without_console_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from taskmanager.cli import console
+
+    monkeypatch.setattr(console.sys, "platform", "win32")
+
+    class Kernel:
+        def GetConsoleWindow(self) -> int:
+            return 0
+
+        def GetConsoleProcessList(self, processes, count: int) -> int:
+            raise AssertionError("must not query processes without a window")
+
+        def ShowWindow(self, hwnd: int, cmd: int) -> int:
+            raise AssertionError("must not hide without a console window")
+
+    monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
+    console.hide_console_if_only_ours()
+
+
+def test_hide_console_hides_exclusive_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    from taskmanager.cli import console
+
+    monkeypatch.setattr(console.sys, "platform", "win32")
+
+    class Kernel:
+        def GetConsoleWindow(self) -> int:
+            return 0xABC
+
+        def GetConsoleProcessList(self, processes, count: int) -> int:
+            processes[0] = 1234
+            return 1
+
+        def ShowWindow(self, hwnd: int, cmd: int) -> int:
+            assert hwnd == 0xABC
+            assert cmd == console.SW_HIDE
+            return 1
+
+    monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
+    console.hide_console_if_only_ours()
+
+
+def test_hide_console_keeps_shared_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    from taskmanager.cli import console
+
+    monkeypatch.setattr(console.sys, "platform", "win32")
+
+    class Kernel:
+        def GetConsoleWindow(self) -> int:
+            return 0xABC
+
+        def GetConsoleProcessList(self, processes, count: int) -> int:
+            processes[0] = 1234
+            processes[1] = 5678
+            return 2
+
+        def ShowWindow(self, hwnd: int, cmd: int) -> int:
+            raise AssertionError("must not hide a shared console")
+
+    monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
+    console.hide_console_if_only_ours()
 
 
 def test_normalize_text_keeps_inner_blank_lines() -> None:

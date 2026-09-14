@@ -31,7 +31,6 @@ from taskmanager.cli.commands import (
     cmd_task_source_refresh,
     cmd_task_update,
 )
-from taskmanager.cli.console import attach_parent_console
 from taskmanager.cli.output import emit_error, emit_stdout
 from taskmanager.cli.parser import CLIUsageError, build_parser, format_help_all
 from taskmanager.infrastructure.logging_setup import setup_logging
@@ -44,7 +43,6 @@ from taskmanager.services.task_service import ServiceError, TaskService
 
 
 def run_cli(argv: list[str]) -> int:
-    attach_parent_console()
     json_mode, parse_argv = _extract_flag(argv, "--json")
     help_all, parse_argv = _extract_flag(parse_argv, "--help-all")
     parser = build_parser(_prog_name(parse_argv[0] if parse_argv else argv[0]))

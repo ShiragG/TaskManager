@@ -1,41 +1,42 @@
 from __future__ import annotations
 
+import ctypes
 import sys
-from typing import Protocol
+
+SW_HIDE = 0
 
 
-ATTACH_PARENT_PROCESS = 0xFFFFFFFF  # DWORD -1
+def hide_console_if_only_ours() -> None:
+    """Hide the Windows console when it belongs to this process alone.
 
-
-class _Kernel32(Protocol):
-    def AttachConsole(self, dw_process_id: int) -> int: ...
-
-
-def attach_parent_console() -> None:
-    """Make stdout/stderr visible for a frozen windowed Windows binary.
-
-    ``TaskManager.spec`` keeps ``console=False`` so a double-click still has no
-    extra console. When launched from a terminal with CLI arguments, attach the
-    parent console and reopen streams before any print. If there is no parent
-    console, do not allocate a new one — stdout goes nowhere. No-op when not
-    frozen or not on Windows.
+    The frozen binary is a console-subsystem app so that CLI output behaves
+    exactly as it does on Linux: pipes and redirection work, exit codes
+    propagate, and a terminal blocks until the command finishes. A console
+    window is only welcome in that terminal case. When the OS created a fresh
+    console for us — a double-click or a launch from Explorer — the window is
+    exclusively ours and would be noise for the GUI, so hide it. When we share
+    a console with a terminal (cmd, PowerShell), somebody else owns the window
+    and we must not touch it. No-op when not on Windows.
     """
-    if not getattr(sys, "frozen", False):
-        return
     if sys.platform != "win32":
         return
     kernel32 = _windows_kernel32()
-    if not kernel32.AttachConsole(ATTACH_PARENT_PROCESS):
+    console_window = kernel32.GetConsoleWindow()
+    if not console_window:
         return
-    _reopen_stdio()
+    process_list = (ctypes.c_uint * 4)()
+    count = kernel32.GetConsoleProcessList(process_list, 4)
+    if count <= 1:
+        kernel32.ShowWindow(console_window, SW_HIDE)
 
 
-def _windows_kernel32() -> _Kernel32:
-    import ctypes
-
-    return ctypes.windll.kernel32  # type: ignore[no-any-return]
-
-
-def _reopen_stdio() -> None:
-    sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
-    sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+def _windows_kernel32() -> object:
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetConsoleWindow.restype = ctypes.c_void_p  # HWND is pointer-sized
+    kernel32.GetConsoleProcessList.restype = ctypes.c_uint
+    kernel32.GetConsoleProcessList.argtypes = [
+        ctypes.POINTER(ctypes.c_uint),
+        ctypes.c_uint,
+    ]
+    kernel32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    return kernel32

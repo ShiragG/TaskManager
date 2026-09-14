@@ -4,6 +4,10 @@ Desktop application for organizing work requests with metadata in SQLite, option
 
 ## Language
 
+**Командная строка (CLI)**:
+Запуск TaskManager из терминала с аргументами; текст (таблицы или JSON) печатается в консоль, и процесс завершается, не открывая окно. Запуск без аргументов (в том числе двойным кликом по иконке) открывает окно без консоли.
+_Avoid_: консоль, терминал (как название интерфейса)
+
 **Task** (заявка):
 A work request represented by a SQLite record; an on-disk folder is optional (`has_folder` plus presence under the work directory).
 _Avoid_: ticket, issue, case, job

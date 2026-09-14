@@ -25,6 +25,8 @@ from taskmanager.services.task_service import TaskService
 from taskmanager.ui.main_window import MainWindow
 from taskmanager.ui.stylesheet import apply_stylesheet
 
+from taskmanager.cli.console import hide_console_if_only_ours
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,6 +47,7 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def run_gui(argv: list[str]) -> int:
+    hide_console_if_only_ours()
     app = _application(argv)
     app.setQuitOnLastWindowClosed(True)
 

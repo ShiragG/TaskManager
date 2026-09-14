@@ -137,8 +137,10 @@ uv run pyinstaller --noconfirm --onefile --windowed \
 **Windows** (разделитель путей в `--add-data` — `;`):
 
 ```bash
-uv run pyinstaller --noconfirm --onefile --windowed --name TaskManager --icon src/taskmanager/resources/app_icon.ico --add-data "src/taskmanager/ui/styles/app.qss;taskmanager/ui/styles" --add-data "src/taskmanager/ui/styles/app_dark.qss;taskmanager/ui/styles" --add-data "src/taskmanager/resources/app_icon.png;taskmanager/resources" --add-data "src/taskmanager/resources/app_icon.ico;taskmanager/resources" src/taskmanager/__main__.py
+uv run pyinstaller --noconfirm --onefile --name TaskManager --icon src/taskmanager/resources/app_icon.ico --add-data "src/taskmanager/ui/styles/app.qss;taskmanager/ui/styles" --add-data "src/taskmanager/ui/styles/app_dark.qss;taskmanager/ui/styles" --add-data "src/taskmanager/resources/app_icon.png;taskmanager/resources" --add-data "src/taskmanager/resources/app_icon.ico;taskmanager/resources" src/taskmanager/__main__.py
 ```
+
+`--windowed` не используется: единый консольный бинарь даёт CLI «как из Linux» (pipe, перенаправление, коды возврата), а окно консоли при двойном клике скрывается самим приложением (см. `docs/adr/0015-windows-console-subsystem.md`).
 
 Готовый бинарник появится в `dist/`. Для публикации на GitHub Releases прикладывайте assets с именами **`TaskManager`** (Linux) и **`TaskManager.exe`** (Windows) — см. [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md).
 
