@@ -37,6 +37,14 @@ def _application(argv: list[str]) -> QApplication:
 
 def run(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
+    if len(argv) > 1:
+        from taskmanager.cli import run_cli
+
+        return run_cli(argv)
+    return run_gui(argv)
+
+
+def run_gui(argv: list[str]) -> int:
     app = _application(argv)
     app.setQuitOnLastWindowClosed(True)
 

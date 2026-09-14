@@ -7,6 +7,7 @@ from datetime import date, datetime, time
 from pathlib import Path
 
 from taskmanager.domain import (
+    PRIORITY_DEFAULT,
     Link,
     Project,
     ReminderRule,
@@ -47,7 +48,7 @@ class CreateTaskRequest:
     comment: str = ""
     date_end: date | None = None
     color: str | None = None
-    priority: int = 10
+    priority: int = PRIORITY_DEFAULT
     hidden: bool = False
     by_template: bool = False
     create_notes_file: bool = False
@@ -103,6 +104,12 @@ class TaskService:
 
     def list_projects(self) -> list[Project]:
         return self.repo.list_projects()
+
+    def get_project_by_name(self, name: str) -> Project:
+        project = self.repo.get_project_by_name(name)
+        if project is None:
+            raise ServiceError(f"Проект «{name}» не найден")
+        return project
 
     def reorder_projects(self, project_ids: list[int]) -> None:
         """Persist project tab order (ids in display order)."""
@@ -269,6 +276,12 @@ class TaskService:
         if task is None:
             raise ServiceError("Заявка не найдена")
         return task
+
+    def get_task_by_number(self, project_id: int, number: str) -> Task:
+        found = self.repo.find_task_by_number(project_id, number)
+        if found is None or found.id is None:
+            raise ServiceError("Заявка не найдена")
+        return self.get_task(found.id)
 
     def create_task(self, request: CreateTaskRequest) -> Task:
         project = self._require_project(request.project_id)

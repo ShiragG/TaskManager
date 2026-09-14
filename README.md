@@ -17,6 +17,8 @@ uv sync --all-groups
 
 ## Запуск
 
+Без аргументов открывается графическое окно:
+
 ```bash
 uv run python -m taskmanager
 ```
@@ -26,6 +28,44 @@ uv run python -m taskmanager
 ```bash
 uv run taskmanager
 ```
+
+Любой аргумент включает консольный режим: процесс выполняет команду и завершается (то же `settings.json` и `taskmanager.db`, что у GUI). Адрес заявки — **имя проекта** и **номер**. Живой Source item можно читать по id модуля и `external_id`, без проекта. `--help` всегда печатает текст argparse, даже вместе с `--json`. Полный help всех подкоманд: `--help-all` (`--json` на него не действует).
+
+```bash
+uv run taskmanager --help
+uv run taskmanager --help-all
+uv run taskmanager project list
+uv run taskmanager project create --name Alpha
+uv run taskmanager project rename --project Alpha --name Beta
+uv run taskmanager project delete --project Beta
+uv run taskmanager task list --project Alpha
+uv run taskmanager task list --project Alpha --hidden
+uv run taskmanager task list --project Alpha --archive
+uv run taskmanager task search QUERY [--archive]
+uv run taskmanager task create --project Alpha --description "Черновик"
+uv run taskmanager task get --project Alpha --number 1
+uv run taskmanager task update --project Alpha --number 1 --status in_progress
+uv run taskmanager task comment set --project Alpha --number 1 --text "замена"
+uv run taskmanager task comment append --project Alpha --number 1 --text "сдвиг срока"
+uv run taskmanager task archive --project Alpha --number 1
+uv run taskmanager task restore --project Alpha --number 1
+uv run taskmanager task hide --project Alpha --number 1
+uv run taskmanager task unhide --project Alpha --number 1
+uv run taskmanager task delete --project Alpha --number 1
+uv run taskmanager task folder --project Alpha --number 1
+uv run taskmanager task folder ensure --project Alpha --number 1
+uv run taskmanager task excel --project Alpha --output Alpha.xlsx
+uv run taskmanager link list --project Alpha --number 1
+uv run taskmanager link add --project Alpha --number 1 --name docs --target https://example.com
+uv run taskmanager link remove --project Alpha --number 1 --name docs
+uv run taskmanager source module list
+uv run taskmanager task source --module ID --external-id X
+uv run taskmanager task source --project Alpha --number 1
+uv run taskmanager task source refresh --project Alpha --number 1
+uv run taskmanager --json task list --project Alpha
+```
+
+`--help` и ключи JSON на английском. `list` печатает таблицу; `get` и `task source` — JSON. Глобальный `--json` переводит любую команду в JSON. Папка заявки необязательна: без неё `get` отдаёт `"folder": null`, путь создаёт `task folder ensure`. Удаление и архив выполняются сразу, без подтверждения. Если GUI уже открыт, CLI всё равно пишет в ту же SQLite; таблицу в окне обновляет F5.
 
 ## Рабочий цикл
 

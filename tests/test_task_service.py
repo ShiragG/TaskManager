@@ -64,6 +64,27 @@ def test_project_and_task_crud(service: TaskService, tmp_path: Path):
     assert updated.description == "changed"
 
 
+def test_get_project_by_name_and_task_by_number(service: TaskService):
+    project = service.create_project("Named")
+    task = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="7",
+            create_folder=False,
+            links=[("docs", "https://example.com")],
+        )
+    )
+    found_project = service.get_project_by_name("Named")
+    assert found_project.id == project.id
+    found_task = service.get_task_by_number(project.id, "7")
+    assert found_task.id == task.id
+    assert found_task.links[0].name == "docs"
+    with pytest.raises(ServiceError):
+        service.get_project_by_name("Missing")
+    with pytest.raises(ServiceError):
+        service.get_task_by_number(project.id, "missing")
+
+
 def test_create_without_folder(service: TaskService, tmp_path: Path):
     project = service.create_project("NoFolder")
     task = service.create_task(
