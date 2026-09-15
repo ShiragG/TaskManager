@@ -489,13 +489,36 @@ def test_update_renames_number(
     assert invoke("task", "get", "--project", "Rename", "--number", "10") == 1
 
 
-def test_spec_is_console_build() -> None:
+def test_spec_is_windowed_build() -> None:
     spec = Path(__file__).resolve().parents[1] / "TaskManager.spec"
     text = spec.read_text(encoding="utf-8")
-    assert "console=True" in text
+    assert "console=False" in text
+    assert "console=True" not in text
 
 
-def test_hide_console_noop_when_not_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_attaches_parent_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    attached: list[str] = []
+    monkeypatch.setattr(
+        "taskmanager.cli.console.attach_parent_console",
+        lambda: attached.append("attach"),
+    )
+    monkeypatch.setattr("taskmanager.cli.run_cli", lambda _argv: 0)
+    assert run(["taskmanager", "--help"]) == 0
+    assert attached == ["attach"]
+
+
+def test_gui_does_not_attach_parent_console(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom() -> None:
+        raise AssertionError("GUI must not AttachConsole")
+
+    monkeypatch.setattr("taskmanager.cli.console.attach_parent_console", boom)
+    monkeypatch.setattr("taskmanager.main.run_gui", lambda _argv: 0)
+    assert run(["taskmanager"]) == 0
+
+
+def test_attach_parent_console_noop_when_not_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from taskmanager.cli import console
 
     monkeypatch.setattr(console.sys, "platform", "linux")
@@ -504,11 +527,45 @@ def test_hide_console_noop_when_not_windows(monkeypatch: pytest.MonkeyPatch) -> 
         raise AssertionError("Windows console APIs must not run on Linux")
 
     monkeypatch.setattr(console, "_windows_kernel32", boom)
-    monkeypatch.setattr(console, "_windows_user32", boom)
-    console.hide_console_if_only_ours()
+    monkeypatch.setattr(console, "_console_text_stream", boom)
+    console.attach_parent_console()
 
 
-def test_hide_console_noop_without_console_window(
+def test_attach_parent_console_reopens_stdio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from taskmanager.cli import console
+
+    monkeypatch.setattr(console.sys, "platform", "win32")
+    attached: list[int] = []
+    streams: list[str] = []
+
+    class Kernel:
+        def AttachConsole(self, pid: int) -> bool:
+            attached.append(pid)
+            return True
+
+        def AllocConsole(self) -> bool:
+            raise AssertionError("must not AllocConsole")
+
+    def fake_stream(name: str):
+        streams.append(name)
+        return object()
+
+    monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
+    monkeypatch.setattr(console, "_console_text_stream", fake_stream)
+    old_out, old_err = sys.stdout, sys.stderr
+    try:
+        console.attach_parent_console()
+        assert attached == [console.ATTACH_PARENT_PROCESS]
+        assert streams == ["CONOUT$", "CONOUT$"]
+        assert sys.stdout is not old_out
+        assert sys.stderr is not old_err
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+
+
+def test_attach_parent_console_skips_stdio_without_parent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from taskmanager.cli import console
@@ -516,71 +573,21 @@ def test_hide_console_noop_without_console_window(
     monkeypatch.setattr(console.sys, "platform", "win32")
 
     class Kernel:
-        def GetConsoleWindow(self) -> int:
-            return 0
+        def AttachConsole(self, pid: int) -> bool:
+            return False
 
-        def GetConsoleProcessList(self, processes, count: int) -> int:
-            raise AssertionError("must not query processes without a window")
+        def AllocConsole(self) -> bool:
+            raise AssertionError("must not AllocConsole")
 
-    class User:
-        def ShowWindow(self, hwnd: int, cmd: int) -> int:
-            raise AssertionError("must not hide without a console window")
-
-    monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
-    monkeypatch.setattr(console, "_windows_user32", lambda: User())
-    console.hide_console_if_only_ours()
-
-
-def test_hide_console_hides_exclusive_window(monkeypatch: pytest.MonkeyPatch) -> None:
-    from taskmanager.cli import console
-
-    monkeypatch.setattr(console.sys, "platform", "win32")
-
-    class Kernel:
-        def GetConsoleWindow(self) -> int:
-            return 0xABC
-
-        def GetConsoleProcessList(self, processes, count: int) -> int:
-            processes[0] = 1234
-            return 1
-
-        def ShowWindow(self, hwnd: int, cmd: int) -> int:
-            raise AssertionError("ShowWindow lives in user32, not kernel32")
-
-    shown: list[tuple[int, int]] = []
-
-    class User:
-        def ShowWindow(self, hwnd: int, cmd: int) -> int:
-            shown.append((hwnd, cmd))
-            return 1
+    def boom(name: str):
+        raise AssertionError(f"must not reopen {name} without a parent console")
 
     monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
-    monkeypatch.setattr(console, "_windows_user32", lambda: User())
-    console.hide_console_if_only_ours()
-    assert shown == [(0xABC, console.SW_HIDE)]
-
-
-def test_hide_console_keeps_shared_window(monkeypatch: pytest.MonkeyPatch) -> None:
-    from taskmanager.cli import console
-
-    monkeypatch.setattr(console.sys, "platform", "win32")
-
-    class Kernel:
-        def GetConsoleWindow(self) -> int:
-            return 0xABC
-
-        def GetConsoleProcessList(self, processes, count: int) -> int:
-            processes[0] = 1234
-            processes[1] = 5678
-            return 2
-
-    class User:
-        def ShowWindow(self, hwnd: int, cmd: int) -> int:
-            raise AssertionError("must not hide a shared console")
-
-    monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
-    monkeypatch.setattr(console, "_windows_user32", lambda: User())
-    console.hide_console_if_only_ours()
+    monkeypatch.setattr(console, "_console_text_stream", boom)
+    old_out, old_err = sys.stdout, sys.stderr
+    console.attach_parent_console()
+    assert sys.stdout is old_out
+    assert sys.stderr is old_err
 
 
 def test_normalize_text_keeps_inner_blank_lines() -> None:
@@ -1053,3 +1060,142 @@ def test_unknown_workflow_status_is_usage(
     capsys.readouterr()
     assert invoke("task", "create", "--project", "T", "--status", "archived") == 2
     assert capsys.readouterr().err
+
+
+def _seed_html_task(
+    isolated_app: Path,
+    *,
+    description: str,
+    comment: str = "",
+    number: str = "1",
+    project: str = "Pics",
+) -> None:
+    from taskmanager.infrastructure.paths import default_db_path
+    from taskmanager.infrastructure.sqlite_repo import SqliteRepository
+    from taskmanager.services.settings_service import SettingsStore
+    from taskmanager.services.task_service import CreateTaskRequest, TaskService
+
+    repo = SqliteRepository(default_db_path())
+    try:
+        service = TaskService(repo, SettingsStore(isolated_app / "settings.json").load())
+        proj = service.create_project(project)
+        service.create_task(
+            CreateTaskRequest(
+                project_id=proj.id,  # type: ignore[arg-type]
+                number=number,
+                description=description,
+                comment=comment,
+                create_folder=False,
+            )
+        )
+    finally:
+        repo.close()
+
+
+def test_cli_file_image_marker_from_html_not_sqlite_column(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    png = isolated_app / "work" / ".images" / "hash.png"
+    png.parent.mkdir(parents=True)
+    png.write_bytes(b"png")
+    uri = png.resolve().as_uri()
+    html = f'<p>see</p><a href="{uri}"><img src="{uri}"></a>'
+    _seed_html_task(isolated_app, description=html, comment=html)
+    marker = f"[image: {png.resolve()}]"
+
+    from taskmanager.domain import html_to_plain
+
+    stored_plain = html_to_plain(html)
+    assert "\ufffc" in stored_plain
+    assert marker not in stored_plain
+
+    assert invoke("task", "get", "--project", "Pics", "--number", "1") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["description"] == html
+    assert payload["comment"] == html
+    assert payload["description_plain"] == f"see {marker}"
+    assert payload["comment_plain"] == f"see {marker}"
+    assert "\ufffc" not in payload["description_plain"]
+    assert "\ufffc" not in payload["comment_plain"]
+
+    assert invoke("task", "list", "--project", "Pics") == 0
+    table = capsys.readouterr().out
+    assert marker in table
+    assert "\ufffc" not in table
+
+    assert invoke("--json", "task", "search", "see") == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["description_plain"] == f"see {marker}"
+    assert rows[0]["comment_plain"] == f"see {marker}"
+
+
+def test_cli_disk_path_image_marker(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    png = isolated_app / "work" / ".images" / "on-disk.png"
+    png.parent.mkdir(parents=True)
+    png.write_bytes(b"png")
+    html = f'<p>disk</p><img src="{png.resolve()}">'
+    _seed_html_task(isolated_app, description=html)
+    marker = f"[image: {png.resolve()}]"
+    assert invoke("task", "get", "--project", "Pics", "--number", "1") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["description"] == html
+    assert payload["description_plain"] == f"disk {marker}"
+
+
+def test_cli_source_live_image_is_bare_marker_without_download(
+    isolated_app: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from taskmanager.services.source_host import SourceHost
+    from taskmanager.services.source_protocol import SourceDraft, SourceFileMeta
+
+    html = (
+        '<p>live</p><img src="data:image/png;base64,abc">'
+        '<img src="https://example.com/a.png">'
+    )
+    files = [SourceFileMeta(file_id="f1", name="a.pdf")]
+    draft = SourceDraft(
+        external_id="ext-9",
+        number="9",
+        description=html,
+        priority=3,
+        links=[],
+        files=list(files),
+        source_label="Fake",
+        source_status_id="3",
+        source_status_label="В работе",
+    )
+    written_before = {
+        p for p in isolated_app.rglob("*") if p.is_file() and p.suffix.lower() in {".png", ".jpeg", ".jpg", ".gif", ".webp", ".pdf"}
+    }
+
+    def fake_host(repo, settings, service):
+        host = SourceHost(repo, settings, service, modules_base=isolated_app)
+
+        def get_item(module_id: str, external_id: str):
+            return draft
+
+        def download_files(*_a, **_k):
+            raise AssertionError("CLI source must not download images")
+
+        host.get_item = get_item  # type: ignore[method-assign]
+        host.download_files = download_files  # type: ignore[attr-defined]
+        return host
+
+    monkeypatch.setattr("taskmanager.cli.app._make_source_host", fake_host)
+    assert (
+        invoke("task", "source", "--module", "fake", "--external-id", "ext-9") == 0
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["description"] == html
+    assert payload["description_plain"] == "live [image] [image]"
+    assert payload["files"] == [{"file_id": "f1", "name": "a.pdf"}]
+    assert draft.files == files
+    written_after = {
+        p for p in isolated_app.rglob("*") if p.is_file() and p.suffix.lower() in {".png", ".jpeg", ".jpg", ".gif", ".webp", ".pdf"}
+    }
+    assert written_after == written_before
+

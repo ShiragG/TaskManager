@@ -14,4 +14,4 @@ The GUI already enforces one window per app directory via `InstanceGuard` (lock 
 
 - `run()` sends `argv` with no extra arguments to the GUI (guard, `QApplication`, `MainWindow`, SourceHost, update checks). Any extra argument (`--help`, `project list`, unknown tokens) is CLI: no guard, no window, process exits `0` / `1` / `2`. SourceHost is constructed only for `source module *` and `task source *`.
 - CLI uses the same `default_settings_path()` / `default_db_path()` as the GUI. Identity in the CLI contract is Project name + Task Number, never SQLite `id`.
-- Headless Qt (`QT_QPA_PLATFORM=offscreen` when unset) is enough for `html_to_plain` (`QTextDocument`). Windows builds with `console=True` and the GUI hides the console window when it owns it exclusively — see [ADR 0015](0015-windows-console-subsystem.md).
+- Headless Qt (`QT_QPA_PLATFORM=offscreen` when unset) is enough for `html_to_plain` (`QTextDocument`). Windows builds are windowed (`console=False`); CLI attaches to the parent console — see [ADR 0015](0015-windows-console-subsystem.md).

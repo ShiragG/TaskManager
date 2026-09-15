@@ -9,8 +9,10 @@ logger = logging.getLogger(__name__)
 def run(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv
     if len(argv) > 1:
+        from taskmanager.cli.console import attach_parent_console
         from taskmanager.cli import run_cli
 
+        attach_parent_console()
         return run_cli(argv)
     return run_gui(argv)
 
@@ -20,7 +22,6 @@ def run_gui(argv: list[str]) -> int:
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication, QMessageBox
 
-    from taskmanager.cli.console import hide_console_if_only_ours
     from taskmanager.infrastructure.logging_setup import (
         install_qt_message_handler,
         setup_logging,
@@ -39,7 +40,6 @@ def run_gui(argv: list[str]) -> int:
     from taskmanager.ui.main_window import MainWindow
     from taskmanager.ui.stylesheet import apply_stylesheet
 
-    hide_console_if_only_ours()
     app = _application(argv)
     app.setQuitOnLastWindowClosed(True)
 

@@ -12,7 +12,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-from taskmanager.cli.console import hide_console_if_only_ours
+from taskmanager.cli.console import attach_parent_console
 
 
 PAYLOAD_ZIP_NAME = "onedir-payload.zip"
@@ -267,16 +267,24 @@ exit 1
     return helper
 
 
-def launch_bootstrap_helper(helper: Path) -> None:
-    """Start the onedir apply helper so it outlives this process."""
+def launch_bootstrap_helper(
+    helper: Path, *, inherit_console: bool = False
+) -> None:
+    """Start the onedir apply helper so it outlives this process.
+
+    GUI: ``CREATE_NO_WINDOW`` so the helper cmd never flashes. CLI: inherit
+    the already-attached parent console (no ``CREATE_NO_WINDOW``) so the
+    relaunched onedir can ``AttachConsole`` to the same terminal.
+    """
     helper = Path(helper)
     is_windows = platform.system().lower().startswith("win")
     if is_windows:
         cmd = os.environ.get("COMSPEC") or "cmd.exe"
+        flags = 0 if inherit_console else _CREATE_NO_WINDOW
         subprocess.Popen(  # noqa: S603
             [cmd, "/c", str(helper)],
             cwd=str(helper.parent),
-            creationflags=_CREATE_NO_WINDOW,
+            creationflags=flags,
             close_fds=True,
         )
         return
@@ -329,7 +337,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -342,7 +350,9 @@ exe = EXE(
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
-    hide_console_if_only_ours()
+    inherit_console = len(argv) > 1
+    if inherit_console:
+        attach_parent_console()
     try:
         dest = _install_dir()
         payload = bundled_payload_path()
@@ -361,7 +371,7 @@ def main(argv: list[str] | None = None) -> int:
             pid=os.getpid(),
             argv=argv[1:],
         )
-        launch_bootstrap_helper(helper)
+        launch_bootstrap_helper(helper, inherit_console=inherit_console)
         return 0
     except BootstrapError as exc:
         print(str(exc), file=sys.stderr)
@@ -429,5 +439,5 @@ def _apply_zip_mode(info: zipfile.ZipInfo, dest: Path) -> None:
 def _windows_relaunch_cmd(argv: list[str]) -> str:
     extra = subprocess.list2cmdline(argv)
     if extra:
-        return f'start "" "%TARGET%" {extra}'
-    return 'start "" "%TARGET%"'
+        return f'"%TARGET%" {extra}'
+    return '"%TARGET%"'

@@ -216,15 +216,15 @@ def test_write_bootstrap_helper_windows_relaunches(tmp_path: Path, monkeypatch):
     text = helper.read_text(encoding="utf-8")
     assert "42" in text
     assert "taskmanager_update.log" in text
-    assert 'start ""' in text
-    assert "--help" in text
+    assert 'start ""' not in text
+    assert '"%TARGET%" --help' in text
     assert "start the app manually" not in text
 
 
 _CREATE_NEW_CONSOLE = 0x00000010
 
 
-def test_launch_bootstrap_helper_windows_has_no_window(
+def test_launch_bootstrap_helper_windows_gui_has_no_window(
     tmp_path: Path, monkeypatch
 ):
     monkeypatch.setattr(
@@ -250,6 +250,33 @@ def test_launch_bootstrap_helper_windows_has_no_window(
     assert kwargs["cwd"] == str(tmp_path)
 
 
+def test_launch_bootstrap_helper_windows_cli_inherits_console(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(
+        "taskmanager.bootstrap.platform.system",
+        lambda: "Windows",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_popen(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr("taskmanager.bootstrap.subprocess.Popen", fake_popen)
+    helper = tmp_path / "taskmanager_apply_onedir.bat"
+    helper.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setenv("COMSPEC", "cmd.exe")
+    launch_bootstrap_helper(helper, inherit_console=True)
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["creationflags"] == 0
+    assert kwargs["creationflags"] != _CREATE_NO_WINDOW
+    assert kwargs["creationflags"] != _CREATE_NEW_CONSOLE
+    assert kwargs["cwd"] == str(tmp_path)
+
+
 def test_render_bootstrap_spec_is_onefile(tmp_path: Path):
     payload = tmp_path / PAYLOAD_ZIP_NAME
     payload.write_bytes(b"zip")
@@ -259,7 +286,8 @@ def test_render_bootstrap_spec_is_onefile(tmp_path: Path):
         icon=Path("src/taskmanager/resources/app_icon.ico"),
     )
     assert "COLLECT" not in spec
-    assert "console=True" in spec
+    assert "console=False" in spec
+    assert "console=True" not in spec
     assert "TaskManager" in spec
     assert PAYLOAD_ZIP_NAME in spec
     assert "PySide6" in spec
@@ -277,11 +305,11 @@ def test_main_unpacks_and_launches_helper(tmp_path: Path, monkeypatch):
     payload.write_bytes(
         _zip_bytes({"TaskManager": b"loader", "data/a.txt": b"x"})
     )
-    launched: list[Path] = []
+    launched: list[tuple[Path, bool]] = []
     order: list[str] = []
     monkeypatch.setattr(
-        "taskmanager.bootstrap.hide_console_if_only_ours",
-        lambda: order.append("hide"),
+        "taskmanager.bootstrap.attach_parent_console",
+        lambda: order.append("attach"),
     )
     real_extract = extract_onedir_payload
 
@@ -299,21 +327,64 @@ def test_main_unpacks_and_launches_helper(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "taskmanager.bootstrap.default_loader_name", lambda **_: "TaskManager"
     )
+
+    def capture_launch(helper: Path, *, inherit_console: bool = False) -> None:
+        launched.append((helper, inherit_console))
+
     monkeypatch.setattr(
-        "taskmanager.bootstrap.launch_bootstrap_helper", launched.append
+        "taskmanager.bootstrap.launch_bootstrap_helper", capture_launch
     )
     monkeypatch.setattr("taskmanager.bootstrap.os.getpid", lambda: 321)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(dest / "TaskManager"))
     assert bootstrap_main(["TaskManager", "--help"]) == 0
-    assert order[:2] == ["hide", "extract"]
+    assert order[:2] == ["attach", "extract"]
     assert (dest / "TaskManager.onedir-new").read_bytes() == b"loader"
     assert (dest / "data" / "a.txt").read_bytes() == b"x"
     assert not leftover.exists()
     assert len(launched) == 1
-    helper_text = launched[0].read_text(encoding="utf-8")
+    helper_text = launched[0][0].read_text(encoding="utf-8")
+    assert launched[0][1] is True
     assert "321" in helper_text
     assert "--help" in helper_text
+    assert 'start ""' not in helper_text
+
+
+def test_main_gui_does_not_attach_and_helper_has_no_window(
+    tmp_path: Path, monkeypatch
+):
+    dest = tmp_path / "install"
+    dest.mkdir()
+    (dest / "TaskManager").write_bytes(b"bootstrap")
+    payload = tmp_path / PAYLOAD_ZIP_NAME
+    payload.write_bytes(
+        _zip_bytes({"TaskManager": b"loader", "data/a.txt": b"x"})
+    )
+    launched: list[tuple[Path, bool]] = []
+
+    def boom() -> None:
+        raise AssertionError("GUI bootstrap must not AttachConsole")
+
+    monkeypatch.setattr("taskmanager.bootstrap.attach_parent_console", boom)
+    monkeypatch.setattr(
+        "taskmanager.bootstrap.bundled_payload_path", lambda: payload
+    )
+    monkeypatch.setattr("taskmanager.bootstrap._install_dir", lambda: dest)
+    monkeypatch.setattr(
+        "taskmanager.bootstrap.default_loader_name", lambda **_: "TaskManager"
+    )
+    monkeypatch.setattr(
+        "taskmanager.bootstrap.launch_bootstrap_helper",
+        lambda helper, *, inherit_console=False: launched.append(
+            (helper, inherit_console)
+        ),
+    )
+    monkeypatch.setattr("taskmanager.bootstrap.os.getpid", lambda: 7)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(dest / "TaskManager"))
+    assert bootstrap_main(["TaskManager"]) == 0
+    assert len(launched) == 1
+    assert launched[0][1] is False
 
 
 def test_main_missing_payload_exits_1(monkeypatch, capsys):
@@ -333,7 +404,8 @@ def test_taskmanager_spec_is_onedir():
     assert "contents_directory='data'" in text
     assert "contents_directory='_internal'" not in text
     assert ONEDIR_DIST_NAME in text
-    assert "console=True" in text
+    assert "console=False" in text
+    assert "console=True" not in text
     assert "runtime_tmpdir" not in text
 
 

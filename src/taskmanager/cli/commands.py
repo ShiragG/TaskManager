@@ -4,6 +4,7 @@ from datetime import date, datetime
 from html import escape
 from pathlib import Path
 
+from taskmanager.cli.html_plain import html_to_cli_plain
 from taskmanager.cli.output import (
     emit_json,
     emit_json_value,
@@ -70,9 +71,9 @@ def task_payload(service: TaskService, project: Project, task: Task) -> dict[str
         "project": project.name,
         "number": task.number,
         "description": task.description,
-        "description_plain": task.description_plain,
+        "description_plain": html_to_cli_plain(task.description),
         "comment": task.comment,
-        "comment_plain": task.comment_plain,
+        "comment_plain": html_to_cli_plain(task.comment),
         "priority": task.priority,
         "status": task.status.value,
         "workflow_status": task.workflow_status.value,
@@ -97,7 +98,7 @@ def source_draft_payload(draft: SourceDraft) -> dict[str, object]:
         "external_id": draft.external_id,
         "number": draft.number,
         "description": draft.description,
-        "description_plain": draft.description,
+        "description_plain": html_to_cli_plain(draft.description),
         "priority": draft.priority,
         "source_label": draft.source_label,
         "source_status_id": draft.source_status_id,
@@ -177,8 +178,8 @@ def cmd_task_list(
             task.number,
             task.display_status,
             task.date_end.isoformat() if task.date_end else "",
-            task.description_plain,
-            task.comment_plain,
+            html_to_cli_plain(task.description),
+            html_to_cli_plain(task.comment),
         ]
         for task in tasks
     ]
@@ -188,8 +189,8 @@ def cmd_task_list(
             "number": task.number,
             "status": task.display_status,
             "date_end": task.date_end.isoformat() if task.date_end else None,
-            "description_plain": task.description_plain,
-            "comment_plain": task.comment_plain,
+            "description_plain": html_to_cli_plain(task.description),
+            "comment_plain": html_to_cli_plain(task.comment),
         }
         for task in tasks
     ]
@@ -222,8 +223,8 @@ def cmd_task_search(
             task.number,
             task.display_status,
             task.date_end.isoformat() if task.date_end else "",
-            task.description_plain,
-            task.comment_plain,
+            html_to_cli_plain(task.description),
+            html_to_cli_plain(task.comment),
         ]
         for task in tasks
     ]
@@ -234,8 +235,8 @@ def cmd_task_search(
             "number": task.number,
             "status": task.display_status,
             "date_end": task.date_end.isoformat() if task.date_end else None,
-            "description_plain": task.description_plain,
-            "comment_plain": task.comment_plain,
+            "description_plain": html_to_cli_plain(task.description),
+            "comment_plain": html_to_cli_plain(task.comment),
         }
         for task in tasks
     ]
