@@ -27,7 +27,7 @@ def hide_console_if_only_ours() -> None:
     process_list = (ctypes.c_uint * 4)()
     count = kernel32.GetConsoleProcessList(process_list, 4)
     if count <= 1:
-        kernel32.ShowWindow(console_window, SW_HIDE)
+        _windows_user32().ShowWindow(console_window, SW_HIDE)
 
 
 def _windows_kernel32() -> object:
@@ -38,5 +38,10 @@ def _windows_kernel32() -> object:
         ctypes.POINTER(ctypes.c_uint),
         ctypes.c_uint,
     ]
-    kernel32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
     return kernel32
+
+
+def _windows_user32() -> object:
+    user32 = ctypes.windll.user32
+    user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    return user32

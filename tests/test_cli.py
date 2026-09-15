@@ -452,6 +452,7 @@ def test_hide_console_noop_when_not_windows(monkeypatch: pytest.MonkeyPatch) -> 
         raise AssertionError("Windows console APIs must not run on Linux")
 
     monkeypatch.setattr(console, "_windows_kernel32", boom)
+    monkeypatch.setattr(console, "_windows_user32", boom)
     console.hide_console_if_only_ours()
 
 
@@ -469,10 +470,12 @@ def test_hide_console_noop_without_console_window(
         def GetConsoleProcessList(self, processes, count: int) -> int:
             raise AssertionError("must not query processes without a window")
 
+    class User:
         def ShowWindow(self, hwnd: int, cmd: int) -> int:
             raise AssertionError("must not hide without a console window")
 
     monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
+    monkeypatch.setattr(console, "_windows_user32", lambda: User())
     console.hide_console_if_only_ours()
 
 
@@ -490,12 +493,19 @@ def test_hide_console_hides_exclusive_window(monkeypatch: pytest.MonkeyPatch) ->
             return 1
 
         def ShowWindow(self, hwnd: int, cmd: int) -> int:
-            assert hwnd == 0xABC
-            assert cmd == console.SW_HIDE
+            raise AssertionError("ShowWindow lives in user32, not kernel32")
+
+    shown: list[tuple[int, int]] = []
+
+    class User:
+        def ShowWindow(self, hwnd: int, cmd: int) -> int:
+            shown.append((hwnd, cmd))
             return 1
 
     monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
+    monkeypatch.setattr(console, "_windows_user32", lambda: User())
     console.hide_console_if_only_ours()
+    assert shown == [(0xABC, console.SW_HIDE)]
 
 
 def test_hide_console_keeps_shared_window(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -512,10 +522,12 @@ def test_hide_console_keeps_shared_window(monkeypatch: pytest.MonkeyPatch) -> No
             processes[1] = 5678
             return 2
 
+    class User:
         def ShowWindow(self, hwnd: int, cmd: int) -> int:
             raise AssertionError("must not hide a shared console")
 
     monkeypatch.setattr(console, "_windows_kernel32", lambda: Kernel())
+    monkeypatch.setattr(console, "_windows_user32", lambda: User())
     console.hide_console_if_only_ours()
 
 
