@@ -115,32 +115,16 @@ uv run taskmanager --json task list --project Alpha
 
 ## Сборка (PyInstaller)
 
-Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). Артефакт: `TaskManager` на Linux, `TaskManager.exe` на Windows.
+Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). Один вход для Linux и Windows — `TaskManager.spec` (разделитель `--add-data` уже внутри spec, не в argv). Артефакт: `TaskManager` на Linux, `TaskManager.exe` на Windows.
 
 ```bash
 uv sync --all-groups
+uv run pyinstaller --noconfirm TaskManager.spec
 ```
 
-**Linux:**
+**Не** добавляйте `--windowed` / `--noconsole` на Windows. Эти флаги ставят GUI-подсистему Windows: у процесса нет stdout, поэтому `.\TaskManager.exe --help` в PowerShell молчит. Это не баг CLI и не отличие cmd от PowerShell. На Linux `--windowed` PyInstaller игнорирует; копировать linux-команду с `--windowed` на Windows нельзя. Команды вида `pyinstaller … src/taskmanager/__main__.py` устарели: флаги в argv побеждают spec, даже если spec лежит рядом.
 
-```bash
-uv run pyinstaller --noconfirm --onefile --windowed \
-  --name TaskManager \
-  --icon src/taskmanager/resources/app_icon.ico \
-  --add-data "src/taskmanager/ui/styles/app.qss:taskmanager/ui/styles" \
-  --add-data "src/taskmanager/ui/styles/app_dark.qss:taskmanager/ui/styles" \
-  --add-data "src/taskmanager/resources/app_icon.png:taskmanager/resources" \
-  --add-data "src/taskmanager/resources/app_icon.ico:taskmanager/resources" \
-  src/taskmanager/__main__.py
-```
-
-**Windows** (разделитель путей в `--add-data` — `;`):
-
-```bash
-uv run pyinstaller --noconfirm --onefile --name TaskManager --icon src/taskmanager/resources/app_icon.ico --add-data "src/taskmanager/ui/styles/app.qss;taskmanager/ui/styles" --add-data "src/taskmanager/ui/styles/app_dark.qss;taskmanager/ui/styles" --add-data "src/taskmanager/resources/app_icon.png;taskmanager/resources" --add-data "src/taskmanager/resources/app_icon.ico;taskmanager/resources" src/taskmanager/__main__.py
-```
-
-Windows: `--windowed` не используется — единый консольный бинарь даёт CLI «как из Linux» (pipe, перенаправление, коды возврата), а окно консоли при двойном клике скрывается самим приложением (см. `docs/adr/0015-windows-console-subsystem.md`).
+После смены флага консоли пересоберите `dist` на той же ОС. Проверка: `.\TaskManager.exe --help` (PowerShell) / `TaskManager.exe --help` (cmd) печатает Usage. GUI без аргументов: двойной клик прячет консоль; из терминала консоль остаётся (как на Linux). Подробности: [`docs/adr/0015-windows-console-subsystem.md`](docs/adr/0015-windows-console-subsystem.md).
 
 Готовый бинарник появится в `dist/`. Для публикации на GitHub Releases прикладывайте assets с именами **`TaskManager`** (Linux) и **`TaskManager.exe`** (Windows) — см. [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md).
 
