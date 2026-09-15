@@ -10,15 +10,18 @@ from pathlib import Path
 import pytest
 
 from taskmanager.bootstrap import (
+    ONEDIR_COLLECT_DISTPATH,
     ONEDIR_DIST_NAME,
     PAYLOAD_ZIP_NAME,
     BootstrapError,
     extract_onedir_payload,
+    launch_bootstrap_helper,
     loader_temp_path,
     main as bootstrap_main,
     render_bootstrap_spec,
     write_bootstrap_helper,
     write_onedir_payload_zip,
+    _CREATE_NO_WINDOW,
 )
 
 
@@ -30,13 +33,13 @@ def _zip_bytes(entries: dict[str, bytes]) -> bytes:
     return buf.getvalue()
 
 
-def test_extract_writes_loader_to_temp_and_internal(tmp_path: Path):
+def test_extract_writes_loader_to_temp_and_data(tmp_path: Path):
     payload = tmp_path / "payload.zip"
     payload.write_bytes(
         _zip_bytes(
             {
                 "TaskManager": b"loader-bytes",
-                "_internal/lib.txt": b"qt",
+                "data/lib.txt": b"qt",
             }
         )
     )
@@ -47,8 +50,9 @@ def test_extract_writes_loader_to_temp_and_internal(tmp_path: Path):
     )
     assert loader == dest / "TaskManager.onedir-new"
     assert loader.read_bytes() == b"loader-bytes"
-    assert (dest / "_internal" / "lib.txt").read_bytes() == b"qt"
+    assert (dest / "data" / "lib.txt").read_bytes() == b"qt"
     assert not (dest / "TaskManager").exists()
+    assert not (dest / "_internal").exists()
 
 
 def test_extract_does_not_touch_settings_db_or_modules(tmp_path: Path):
@@ -65,7 +69,7 @@ def test_extract_does_not_touch_settings_db_or_modules(tmp_path: Path):
         _zip_bytes(
             {
                 "TaskManager": b"new-loader",
-                "_internal/a.txt": b"ok",
+                "data/a.txt": b"ok",
                 "settings.json": b"from-zip",
                 "taskmanager.db": b"from-zip-db",
                 "modules/evil.zip": b"nope",
@@ -79,7 +83,7 @@ def test_extract_does_not_touch_settings_db_or_modules(tmp_path: Path):
     assert (modules / "razr.zip").read_bytes() == b"plugin"
     assert not (modules / "evil.zip").exists()
     assert not (modules / "nested").exists()
-    assert (dest / "_internal" / "a.txt").read_bytes() == b"ok"
+    assert (dest / "data" / "a.txt").read_bytes() == b"ok"
 
 
 def test_extract_rejects_zip_slip(tmp_path: Path):
@@ -89,7 +93,7 @@ def test_extract_rejects_zip_slip(tmp_path: Path):
             {
                 "TaskManager": b"loader",
                 "../outside.txt": b"bad",
-                "_internal/../outside2.txt": b"bad",
+                "data/../outside2.txt": b"bad",
             }
         )
     )
@@ -103,7 +107,7 @@ def test_extract_rejects_zip_slip(tmp_path: Path):
 
 def test_extract_requires_loader(tmp_path: Path):
     payload = tmp_path / "payload.zip"
-    payload.write_bytes(_zip_bytes({"_internal/a.txt": b"x"}))
+    payload.write_bytes(_zip_bytes({"data/a.txt": b"x"}))
     with pytest.raises(BootstrapError, match="loader"):
         extract_onedir_payload(
             payload, tmp_path / "app", loader_name="TaskManager"
@@ -116,27 +120,48 @@ def test_loader_temp_path_keeps_exe_suffix():
     assert loader_temp_path(dest, "TaskManager") == dest / "TaskManager.onedir-new"
 
 
+def test_extract_removes_leftover_internal_keeps_data(tmp_path: Path):
+    dest = tmp_path / "app"
+    dest.mkdir()
+    leftover = dest / "_internal"
+    leftover.mkdir()
+    (leftover / "old.so").write_bytes(b"old")
+    payload = tmp_path / "payload.zip"
+    payload.write_bytes(
+        _zip_bytes(
+            {
+                "TaskManager": b"loader",
+                "data/lib.txt": b"qt",
+            }
+        )
+    )
+    extract_onedir_payload(payload, dest, loader_name="TaskManager")
+    assert (dest / "data" / "lib.txt").read_bytes() == b"qt"
+    assert not leftover.exists()
+
+
 def test_write_onedir_payload_zip_requires_loader(tmp_path: Path):
     onedir = tmp_path / ONEDIR_DIST_NAME
-    (onedir / "_internal").mkdir(parents=True)
-    (onedir / "_internal" / "lib.so").write_bytes(b"so")
+    (onedir / "data").mkdir(parents=True)
+    (onedir / "data" / "lib.so").write_bytes(b"so")
     with pytest.raises(BootstrapError, match="loader"):
         write_onedir_payload_zip(onedir, tmp_path / PAYLOAD_ZIP_NAME)
 
 
 def test_write_onedir_payload_zip(tmp_path: Path):
     onedir = tmp_path / ONEDIR_DIST_NAME
-    (onedir / "_internal").mkdir(parents=True)
+    (onedir / "data").mkdir(parents=True)
     (onedir / "TaskManager").write_bytes(b"exe")
-    (onedir / "_internal" / "lib.so").write_bytes(b"so")
+    (onedir / "data" / "lib.so").write_bytes(b"so")
     (onedir / "settings.json").write_text("should-not-ship", encoding="utf-8")
     zip_path = tmp_path / PAYLOAD_ZIP_NAME
     write_onedir_payload_zip(onedir, zip_path)
     with zipfile.ZipFile(zip_path) as zf:
         names = set(zf.namelist())
     assert "TaskManager" in names
-    assert "_internal/lib.so" in names
+    assert "data/lib.so" in names
     assert "settings.json" not in names
+    assert "_internal/lib.so" not in names
 
 
 def test_bootstrap_helper_unix_replaces_and_relaunches(tmp_path: Path):
@@ -196,6 +221,35 @@ def test_write_bootstrap_helper_windows_relaunches(tmp_path: Path, monkeypatch):
     assert "start the app manually" not in text
 
 
+_CREATE_NEW_CONSOLE = 0x00000010
+
+
+def test_launch_bootstrap_helper_windows_has_no_window(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(
+        "taskmanager.bootstrap.platform.system",
+        lambda: "Windows",
+    )
+    captured: dict[str, object] = {}
+
+    def fake_popen(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr("taskmanager.bootstrap.subprocess.Popen", fake_popen)
+    helper = tmp_path / "taskmanager_apply_onedir.bat"
+    helper.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setenv("COMSPEC", "cmd.exe")
+    launch_bootstrap_helper(helper)
+    kwargs = captured["kwargs"]
+    assert isinstance(kwargs, dict)
+    assert kwargs["creationflags"] == _CREATE_NO_WINDOW
+    assert kwargs["creationflags"] != _CREATE_NEW_CONSOLE
+    assert kwargs["cwd"] == str(tmp_path)
+
+
 def test_render_bootstrap_spec_is_onefile(tmp_path: Path):
     payload = tmp_path / PAYLOAD_ZIP_NAME
     payload.write_bytes(b"zip")
@@ -216,11 +270,28 @@ def test_main_unpacks_and_launches_helper(tmp_path: Path, monkeypatch):
     dest = tmp_path / "install"
     dest.mkdir()
     (dest / "TaskManager").write_bytes(b"bootstrap")
+    leftover = dest / "_internal"
+    leftover.mkdir()
+    (leftover / "old.so").write_bytes(b"old")
     payload = tmp_path / PAYLOAD_ZIP_NAME
     payload.write_bytes(
-        _zip_bytes({"TaskManager": b"loader", "_internal/a.txt": b"x"})
+        _zip_bytes({"TaskManager": b"loader", "data/a.txt": b"x"})
     )
     launched: list[Path] = []
+    order: list[str] = []
+    monkeypatch.setattr(
+        "taskmanager.bootstrap.hide_console_if_only_ours",
+        lambda: order.append("hide"),
+    )
+    real_extract = extract_onedir_payload
+
+    def extract_and_record(*args, **kwargs):
+        order.append("extract")
+        return real_extract(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "taskmanager.bootstrap.extract_onedir_payload", extract_and_record
+    )
     monkeypatch.setattr(
         "taskmanager.bootstrap.bundled_payload_path", lambda: payload
     )
@@ -235,8 +306,10 @@ def test_main_unpacks_and_launches_helper(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(sys, "frozen", True, raising=False)
     monkeypatch.setattr(sys, "executable", str(dest / "TaskManager"))
     assert bootstrap_main(["TaskManager", "--help"]) == 0
+    assert order[:2] == ["hide", "extract"]
     assert (dest / "TaskManager.onedir-new").read_bytes() == b"loader"
-    assert (dest / "_internal" / "a.txt").read_bytes() == b"x"
+    assert (dest / "data" / "a.txt").read_bytes() == b"x"
+    assert not leftover.exists()
     assert len(launched) == 1
     helper_text = launched[0].read_text(encoding="utf-8")
     assert "321" in helper_text
@@ -257,7 +330,17 @@ def test_taskmanager_spec_is_onedir():
     text = spec.read_text(encoding="utf-8")
     assert "COLLECT(" in text
     assert "exclude_binaries=True" in text
-    assert "contents_directory='_internal'" in text
+    assert "contents_directory='data'" in text
+    assert "contents_directory='_internal'" not in text
     assert ONEDIR_DIST_NAME in text
     assert "console=True" in text
     assert "runtime_tmpdir" not in text
+
+
+def test_package_github_asset_reads_collect_from_build():
+    script = (
+        Path(__file__).resolve().parents[1] / "scripts" / "package_github_asset.py"
+    )
+    text = script.read_text(encoding="utf-8")
+    assert ONEDIR_COLLECT_DISTPATH.as_posix() in text
+    assert "onedir = ROOT / ONEDIR_COLLECT_DISTPATH / ONEDIR_DIST_NAME" in text

@@ -22,7 +22,7 @@ git push origin v0.2.0
 | Linux | `TaskManager` |
 | Windows | `TaskManager.exe` |
 
-Артефакты для релиза — `dist/TaskManager` и `dist/TaskManager.exe` (bootstrap). Каталог `dist/TaskManager-onedir/` на GitHub не прикладывают.
+Артефакты для релиза — `dist/TaskManager` и `dist/TaskManager.exe` (bootstrap). Каталог `build/onedir-collect/TaskManager-onedir/` на GitHub не прикладывают.
 
 ## 3. GitHub Release
 

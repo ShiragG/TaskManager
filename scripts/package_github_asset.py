@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Build the GitHub Releases bootstrap executable from dist/TaskManager-onedir.
+"""Build the GitHub Releases bootstrap executable from the onedir COLLECT.
 
-The published asset name stays TaskManager / TaskManager.exe. That file is a
-onefile bootstrap: it unpacks the onedir payload beside itself, then a helper
-replaces the bootstrap with the onedir loader and relaunches with the same
-argv. Run on the target OS after TaskManager.spec (onedir) has been built.
+COLLECT lives under build/onedir-collect/ (not dist/). The published asset
+name stays TaskManager / TaskManager.exe. That file is a onefile bootstrap: it
+unpacks the onedir payload beside itself, then a helper replaces the bootstrap
+with the onedir loader and relaunches with the same argv. Run on the target OS
+after TaskManager.spec (onedir) has been built into build/onedir-collect/.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -24,6 +26,7 @@ def main() -> int:
         sys.path.insert(0, str(src))
 
     from taskmanager.bootstrap import (
+        ONEDIR_COLLECT_DISTPATH,
         ONEDIR_DIST_NAME,
         PAYLOAD_ZIP_NAME,
         BootstrapError,
@@ -32,14 +35,19 @@ def main() -> int:
     )
 
     dist = ROOT / "dist"
-    onedir = dist / ONEDIR_DIST_NAME
+    onedir = ROOT / ONEDIR_COLLECT_DISTPATH / ONEDIR_DIST_NAME
     if not onedir.is_dir():
         print(
             f"Missing {onedir}. Build the onedir first:\n"
-            "  uv run pyinstaller --noconfirm TaskManager.spec",
+            "  uv run pyinstaller --noconfirm "
+            f"--distpath={ONEDIR_COLLECT_DISTPATH.as_posix()} TaskManager.spec",
             file=sys.stderr,
         )
         return 1
+
+    legacy_onedir = dist / ONEDIR_DIST_NAME
+    if legacy_onedir.is_dir():
+        shutil.rmtree(legacy_onedir)
 
     build = ROOT / "build"
     build.mkdir(parents=True, exist_ok=True)

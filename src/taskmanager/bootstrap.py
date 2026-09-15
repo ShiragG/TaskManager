@@ -12,11 +12,15 @@ import sys
 import zipfile
 from pathlib import Path
 
+from taskmanager.cli.console import hide_console_if_only_ours
+
 
 PAYLOAD_ZIP_NAME = "onedir-payload.zip"
 ONEDIR_DIST_NAME = "TaskManager-onedir"
+ONEDIR_COLLECT_DISTPATH = Path("build") / "onedir-collect"
 LOADER_TEMP_SUFFIX = ".onedir-new"
 UPDATE_LOG_NAME = "taskmanager_update.log"
+LEFTOVER_INTERNAL_NAME = "_internal"
 PROTECTED_ROOT_NAMES = frozenset(
     {
         "settings.json",
@@ -25,7 +29,9 @@ PROTECTED_ROOT_NAMES = frozenset(
     }
 )
 
-_CREATE_NEW_CONSOLE = 0x00000010
+# Windows CREATE_NO_WINDOW — do not use CREATE_NEW_CONSOLE (empty cmd flash).
+# The .new apply-on-exit helper still uses CREATE_NEW_CONSOLE (ADR 0003).
+_CREATE_NO_WINDOW = 0x08000000
 
 
 class BootstrapError(Exception):
@@ -84,7 +90,8 @@ def extract_onedir_payload(
 
     The onedir loader is written to a temporary name so a running bootstrap
     exe is not overwritten. ``settings.json``, ``taskmanager.db``, and
-    ``modules/`` are never replaced.
+    ``modules/`` are never replaced. After a successful extract, leftover
+    ``_internal`` from older runs is removed; ``data/`` is left in place.
     """
     payload = Path(payload)
     dest = Path(dest)
@@ -116,6 +123,7 @@ def extract_onedir_payload(
     if not platform.system().lower().startswith("win"):
         mode = loader_tmp.stat().st_mode
         loader_tmp.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    _remove_leftover_internal(dest)
     return loader_tmp
 
 
@@ -268,7 +276,7 @@ def launch_bootstrap_helper(helper: Path) -> None:
         subprocess.Popen(  # noqa: S603
             [cmd, "/c", str(helper)],
             cwd=str(helper.parent),
-            creationflags=_CREATE_NEW_CONSOLE,
+            creationflags=_CREATE_NO_WINDOW,
             close_fds=True,
         )
         return
@@ -334,6 +342,7 @@ exe = EXE(
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
+    hide_console_if_only_ours()
     try:
         dest = _install_dir()
         payload = bundled_payload_path()
@@ -363,6 +372,12 @@ def _install_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path.cwd()
+
+
+def _remove_leftover_internal(dest: Path) -> None:
+    leftover = dest / LEFTOVER_INTERNAL_NAME
+    if leftover.is_dir() and not leftover.is_symlink():
+        shutil.rmtree(leftover, ignore_errors=True)
 
 
 def _normalize_member(name: str) -> str:

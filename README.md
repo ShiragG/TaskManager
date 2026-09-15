@@ -115,19 +115,19 @@ uv run taskmanager --json task list --project Alpha
 
 ## Сборка (PyInstaller)
 
-Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). `TaskManager.spec` собирает onedir (`dist/TaskManager-onedir/`, загрузчик + `_internal`; разделитель `--add-data` уже внутри spec). Затем `scripts/package_github_asset.py` упаковывает этот onedir в bootstrap-onefile — GitHub asset с прежними именами **`TaskManager`** / **`TaskManager.exe`**. Первый запуск bootstrap распаковывает `_internal` рядом с exe, подменяет себя загрузчиком onedir и стартует GUI/CLI с теми же аргументами; `settings.json`, `taskmanager.db` и `modules/` не трогает.
+Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). `TaskManager.spec` собирает onedir в `build/onedir-collect/TaskManager-onedir/` (загрузчик + `data/`; разделитель `--add-data` уже внутри spec). Затем `scripts/package_github_asset.py` упаковывает этот onedir в bootstrap-onefile — GitHub asset с прежними именами **`TaskManager`** / **`TaskManager.exe`**. В `dist/` после этого только asset. Первый запуск bootstrap распаковывает `data/` рядом с exe, подменяет себя загрузчиком onedir и стартует GUI/CLI с теми же аргументами; `settings.json`, `taskmanager.db` и `modules/` не трогает.
 
 ```bash
 uv sync --all-groups
-uv run pyinstaller --noconfirm TaskManager.spec
+uv run pyinstaller --noconfirm --distpath=build/onedir-collect TaskManager.spec
 uv run python scripts/package_github_asset.py
 ```
 
-**Не** добавляйте `--windowed` / `--noconsole` на Windows. Эти флаги ставят GUI-подсистему Windows: у процесса нет stdout, поэтому `.\TaskManager.exe --help` в PowerShell молчит. Это не баг CLI и не отличие cmd от PowerShell. На Linux `--windowed` PyInstaller игнорирует; копировать linux-команду с `--windowed` на Windows нельзя. Команды вида `pyinstaller … src/taskmanager/__main__.py` устарели: флаги в argv побеждают spec, даже если spec лежит рядом.
+**Не** добавляйте `--windowed` / `--noconsole` на Windows. Эти флаги ставят GUI-подсистему Windows: у процесса нет stdout, поэтому `.\TaskManager.exe --help` в PowerShell молчит. Это не баг CLI и не отличие cmd от PowerShell. На Linux `--windowed` PyInstaller игнорирует; копировать linux-команду с `--windowed` на Windows нельзя. Команды вида `pyinstaller … src/taskmanager/__main__.py` устарели: флаги в argv побеждают spec, даже если spec лежит рядом. На Windows в логе PyInstaller должны быть `Building COLLECT` и `contents_directory` — если bootloader сразу пишет `dist/TaskManager.exe` без COLLECT, это старый onefile spec, не эта ветка.
 
 После смены флага консоли пересоберите `dist` на той же ОС (оба шага). Проверка: `.\TaskManager.exe --help` (PowerShell) / `TaskManager.exe --help` (cmd) печатает Usage. GUI без аргументов: двойной клик прячет консоль; из терминала консоль остаётся (как на Linux). Подробности: [`docs/adr/0015-windows-console-subsystem.md`](docs/adr/0015-windows-console-subsystem.md), [`docs/adr/0016-onedir-bootstrap-github-asset.md`](docs/adr/0016-onedir-bootstrap-github-asset.md).
 
-Готовый asset — `dist/TaskManager` (Linux) или `dist/TaskManager.exe` (Windows). Каталог `dist/TaskManager-onedir/` — промежуточный onedir, не имя релиза. Публикация: [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md).
+Готовый asset — `dist/TaskManager` (Linux) или `dist/TaskManager.exe` (Windows). Промежуточный onedir — `build/onedir-collect/TaskManager-onedir/`, не имя релиза. У пользователя после первого запуска: exe + `data/` рядом, без `_internal` и без `TaskManager-onedir`. Публикация: [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md).
 
 ## Что не входит в v1
 
