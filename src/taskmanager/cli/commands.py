@@ -4,7 +4,7 @@ from datetime import date, datetime
 from html import escape
 from pathlib import Path
 
-from taskmanager.cli.html_plain import html_to_cli_plain
+from taskmanager.cli.html_plain import html_for_cli, html_to_cli_plain
 from taskmanager.cli.output import (
     emit_json,
     emit_json_value,
@@ -13,6 +13,7 @@ from taskmanager.cli.output import (
 )
 from taskmanager.domain import PRIORITY_DEFAULT, Project, Task
 from taskmanager.services.excel_export import export_tasks_to_excel
+from taskmanager.services.inline_images import IMAGES_DIR_NAME
 from taskmanager.services.source_host import SourceHost
 from taskmanager.services.source_protocol import SourceDraft
 from taskmanager.services.task_service import (
@@ -65,15 +66,27 @@ def folder_path_or_none(service: TaskService, task: Task) -> str | None:
     return str(service.task_folder_path(task.id))
 
 
+def cli_images_dir(service: TaskService, task: Task) -> Path | None:
+    folder = folder_path_or_none(service, task)
+    if folder is None:
+        return None
+    return Path(folder) / IMAGES_DIR_NAME
+
+
+def _task_cli_plain(service: TaskService, task: Task, html: str) -> str:
+    return html_to_cli_plain(html, images_dir=cli_images_dir(service, task))
+
+
 def task_payload(service: TaskService, project: Project, task: Task) -> dict[str, object]:
     created = task.created_at.isoformat(timespec="seconds") if task.created_at else None
+    images_dir = cli_images_dir(service, task)
     return {
         "project": project.name,
         "number": task.number,
-        "description": task.description,
-        "description_plain": html_to_cli_plain(task.description),
-        "comment": task.comment,
-        "comment_plain": html_to_cli_plain(task.comment),
+        "description": html_for_cli(task.description, images_dir=images_dir),
+        "description_plain": html_to_cli_plain(task.description, images_dir=images_dir),
+        "comment": html_for_cli(task.comment, images_dir=images_dir),
+        "comment_plain": html_to_cli_plain(task.comment, images_dir=images_dir),
         "priority": task.priority,
         "status": task.status.value,
         "workflow_status": task.workflow_status.value,
@@ -93,12 +106,14 @@ def task_payload(service: TaskService, project: Project, task: Task) -> dict[str
     }
 
 
-def source_draft_payload(draft: SourceDraft) -> dict[str, object]:
+def source_draft_payload(
+    draft: SourceDraft, *, images_dir: Path | None = None
+) -> dict[str, object]:
     return {
         "external_id": draft.external_id,
         "number": draft.number,
-        "description": draft.description,
-        "description_plain": html_to_cli_plain(draft.description),
+        "description": html_for_cli(draft.description, images_dir=images_dir),
+        "description_plain": html_to_cli_plain(draft.description, images_dir=images_dir),
         "priority": draft.priority,
         "source_label": draft.source_label,
         "source_status_id": draft.source_status_id,
@@ -178,8 +193,8 @@ def cmd_task_list(
             task.number,
             task.display_status,
             task.date_end.isoformat() if task.date_end else "",
-            html_to_cli_plain(task.description),
-            html_to_cli_plain(task.comment),
+            _task_cli_plain(service, task, task.description),
+            _task_cli_plain(service, task, task.comment),
         ]
         for task in tasks
     ]
@@ -189,8 +204,8 @@ def cmd_task_list(
             "number": task.number,
             "status": task.display_status,
             "date_end": task.date_end.isoformat() if task.date_end else None,
-            "description_plain": html_to_cli_plain(task.description),
-            "comment_plain": html_to_cli_plain(task.comment),
+            "description_plain": _task_cli_plain(service, task, task.description),
+            "comment_plain": _task_cli_plain(service, task, task.comment),
         }
         for task in tasks
     ]
@@ -223,8 +238,8 @@ def cmd_task_search(
             task.number,
             task.display_status,
             task.date_end.isoformat() if task.date_end else "",
-            html_to_cli_plain(task.description),
-            html_to_cli_plain(task.comment),
+            _task_cli_plain(service, task, task.description),
+            _task_cli_plain(service, task, task.comment),
         ]
         for task in tasks
     ]
@@ -235,8 +250,8 @@ def cmd_task_search(
             "number": task.number,
             "status": task.display_status,
             "date_end": task.date_end.isoformat() if task.date_end else None,
-            "description_plain": html_to_cli_plain(task.description),
-            "comment_plain": html_to_cli_plain(task.comment),
+            "description_plain": _task_cli_plain(service, task, task.description),
+            "comment_plain": _task_cli_plain(service, task, task.comment),
         }
         for task in tasks
     ]
@@ -559,8 +574,14 @@ def cmd_task_source(
     service: TaskService, host: SourceHost, args, json_mode: bool
 ) -> int:
     module_id, external_id = _source_item_address(service, args)
+    images_dir: Path | None = None
+    project_name = _optional_flag(getattr(args, "project", None))
+    number = _optional_flag(getattr(args, "number", None))
+    if project_name is not None and number is not None:
+        _project, task = require_task(service, project_name, number)
+        images_dir = cli_images_dir(service, task)
     draft = host.get_item(module_id, external_id)
-    emit_json(source_draft_payload(draft))
+    emit_json(source_draft_payload(draft, images_dir=images_dir))
     return 0
 
 

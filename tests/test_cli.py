@@ -1062,6 +1062,23 @@ def test_unknown_workflow_status_is_usage(
     assert capsys.readouterr().err
 
 
+# Valid 1x1 RGB PNG (same fixture as GUI extract tests).
+_PNG_1x1 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d4948445200000001000000010802000000907753de"
+    "0000000c49444154789c63f8cfc0000003010100c9fe92ef0000000049454e44ae426082"
+)
+_PNG_HEX = _PNG_1x1.hex()
+_IMAGE_SUFFIXES = {".png", ".jpeg", ".jpg", ".gif", ".webp", ".pdf"}
+
+
+def _image_files(root: Path) -> set[Path]:
+    return {
+        p
+        for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in _IMAGE_SUFFIXES
+    }
+
+
 def _seed_html_task(
     isolated_app: Path,
     *,
@@ -1069,6 +1086,7 @@ def _seed_html_task(
     comment: str = "",
     number: str = "1",
     project: str = "Pics",
+    create_folder: bool = False,
 ) -> None:
     from taskmanager.infrastructure.paths import default_db_path
     from taskmanager.infrastructure.sqlite_repo import SqliteRepository
@@ -1085,7 +1103,7 @@ def _seed_html_task(
                 number=number,
                 description=description,
                 comment=comment,
-                create_folder=False,
+                create_folder=create_folder,
             )
         )
     finally:
@@ -1144,16 +1162,86 @@ def test_cli_disk_path_image_marker(
     assert payload["description_plain"] == f"disk {marker}"
 
 
+def test_cli_hex_dump_becomes_bare_marker_without_writing(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import base64
+
+    png_b64 = base64.b64encode(_PNG_1x1).decode("ascii")
+    description = f"<p>see {_PNG_HEX}</p>"
+    comment = f"<p>note {png_b64}</p>"
+    written_before = _image_files(isolated_app)
+    _seed_html_task(isolated_app, description=description, comment=comment)
+
+    assert invoke("task", "get", "--project", "Pics", "--number", "1") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert "[image]" in payload["description"]
+    assert "[image]" in payload["comment"]
+    assert "89504e47" not in payload["description"].casefold()
+    assert "89504e47" not in payload["comment"].casefold()
+    assert "data:" not in payload["description"]
+    assert "iVBORw0KGgo" not in payload["comment"]
+    assert payload["description_plain"] == "see [image]"
+    assert payload["comment_plain"] == "note [image]"
+    assert _image_files(isolated_app) == written_before
+
+    assert invoke("task", "list", "--project", "Pics") == 0
+    table = capsys.readouterr().out
+    assert "[image]" in table
+    assert "89504e47" not in table.casefold()
+    assert "iVBORw0KGgo" not in table
+
+    assert invoke("--json", "task", "search", "see") == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[0]["description_plain"] == "see [image]"
+    assert rows[0]["comment_plain"] == "note [image]"
+
+
+def test_cli_hex_dump_uses_existing_task_image_without_writing(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import hashlib
+
+    from taskmanager.services.inline_images import IMAGES_DIR_NAME
+
+    description = f"<p>see {_PNG_HEX}</p>"
+    _seed_html_task(isolated_app, description=description, create_folder=True)
+    png = (
+        isolated_app
+        / "work"
+        / "Pics"
+        / "1"
+        / IMAGES_DIR_NAME
+        / f"{hashlib.sha256(_PNG_1x1).hexdigest()}.png"
+    )
+    png.parent.mkdir(parents=True)
+    png.write_bytes(_PNG_1x1)
+    mtime = png.stat().st_mtime_ns
+    marker = f"[image: {png.resolve()}]"
+
+    assert invoke("task", "get", "--project", "Pics", "--number", "1") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert marker in payload["description"]
+    assert "89504e47" not in payload["description"].casefold()
+    assert payload["description_plain"] == f"see {marker}"
+    assert png.read_bytes() == _PNG_1x1
+    assert png.stat().st_mtime_ns == mtime
+
+
 def test_cli_source_live_image_is_bare_marker_without_download(
     isolated_app: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import base64
+
     from taskmanager.services.source_host import SourceHost
     from taskmanager.services.source_protocol import SourceDraft, SourceFileMeta
 
+    png_b64 = base64.b64encode(_PNG_1x1).decode("ascii")
     html = (
-        '<p>live</p><img src="data:image/png;base64,abc">'
+        f"<p>live {_PNG_HEX}</p>"
+        f'<img src="data:image/png;base64,{png_b64}">'
         '<img src="https://example.com/a.png">'
     )
     files = [SourceFileMeta(file_id="f1", name="a.pdf")]
@@ -1168,9 +1256,7 @@ def test_cli_source_live_image_is_bare_marker_without_download(
         source_status_id="3",
         source_status_label="В работе",
     )
-    written_before = {
-        p for p in isolated_app.rglob("*") if p.is_file() and p.suffix.lower() in {".png", ".jpeg", ".jpg", ".gif", ".webp", ".pdf"}
-    }
+    written_before = _image_files(isolated_app)
 
     def fake_host(repo, settings, service):
         host = SourceHost(repo, settings, service, modules_base=isolated_app)
@@ -1190,12 +1276,11 @@ def test_cli_source_live_image_is_bare_marker_without_download(
         invoke("task", "source", "--module", "fake", "--external-id", "ext-9") == 0
     )
     payload = json.loads(capsys.readouterr().out)
-    assert payload["description"] == html
-    assert payload["description_plain"] == "live [image] [image]"
+    assert "[image]" in payload["description"]
+    assert "89504e47" not in payload["description"].casefold()
+    assert "data:" not in payload["description"]
+    assert payload["description_plain"] == "live [image] [image] [image]"
     assert payload["files"] == [{"file_id": "f1", "name": "a.pdf"}]
     assert draft.files == files
-    written_after = {
-        p for p in isolated_app.rglob("*") if p.is_file() and p.suffix.lower() in {".png", ".jpeg", ".jpg", ".gif", ".webp", ".pdf"}
-    }
-    assert written_after == written_before
+    assert _image_files(isolated_app) == written_before
 

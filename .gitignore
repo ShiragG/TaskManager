@@ -179,3 +179,4 @@ output/
 taskmanager.db
 modules
 sounds
+.cursor
