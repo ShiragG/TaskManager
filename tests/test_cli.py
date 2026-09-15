@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -61,6 +64,55 @@ def test_help_all_ignores_json_flag(capsys: pytest.CaptureFixture[str]) -> None:
     assert "Usage:" in out
     assert "task source" in out
     assert not out.lstrip().startswith("{")
+
+
+def _src_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "src"
+
+
+def _cli_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    src = str(_src_dir())
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = src if not existing else src + os.pathsep + existing
+    return env
+
+
+def _importtime_cli(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-X", "importtime", "-m", "taskmanager", *args],
+        capture_output=True,
+        text=True,
+        env=_cli_subprocess_env(),
+        check=False,
+    )
+
+
+def _assert_help_path_skips_qt(result: subprocess.CompletedProcess[str]) -> None:
+    imported = result.stderr
+    assert "PySide6" not in imported
+    assert "taskmanager.cli.commands" not in imported
+    assert "taskmanager.services.task_service" not in imported
+
+
+def test_help_does_not_import_pyside6() -> None:
+    result = _importtime_cli("--help")
+    assert result.returncode == 0
+    assert "Usage:" in result.stdout
+    _assert_help_path_skips_qt(result)
+
+
+def test_help_all_does_not_import_pyside6() -> None:
+    result = _importtime_cli("--help-all")
+    assert result.returncode == 0
+    assert result.stdout.count("Usage:") >= 4
+    _assert_help_path_skips_qt(result)
+
+
+def test_usage_error_does_not_import_pyside6() -> None:
+    result = _importtime_cli("nope")
+    assert result.returncode == 2
+    _assert_help_path_skips_qt(result)
 
 
 def test_unknown_command_exits_two(capsys: pytest.CaptureFixture[str]) -> None:

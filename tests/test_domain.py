@@ -1,4 +1,8 @@
+import os
+import subprocess
+import sys
 from datetime import date
+from pathlib import Path
 
 from taskmanager.domain import (
     contrast_foreground,
@@ -36,6 +40,28 @@ def test_is_deadline_warning_lead_days():
 def test_html_to_plain():
     assert html_to_plain("<b>Hello</b> &amp; world") == "Hello & world"
     assert html_to_plain("") == ""
+
+
+def test_domain_import_does_not_load_pyside6() -> None:
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    env = os.environ.copy()
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = src if not existing else src + os.pathsep + existing
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-X",
+            "importtime",
+            "-c",
+            "from taskmanager.domain import WorkflowStatus, html_to_plain",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert "PySide6" not in result.stderr
 
 
 def test_html_to_plain_with_urls():

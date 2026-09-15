@@ -5,8 +5,6 @@ from datetime import date, datetime, timedelta
 from enum import StrEnum
 import re
 
-from PySide6.QtGui import QTextDocument
-
 from taskmanager.domain.reminders import (
     PLAIN_CELL_LIMIT,
     ReminderRule,
@@ -143,6 +141,8 @@ def html_to_plain(html: str) -> str:
     """Plain-text preview from stored HTML via QTextDocument (no CSS leftovers)."""
     if not html:
         return ""
+    from PySide6.QtGui import QTextDocument
+
     doc = QTextDocument()
     doc.setHtml(html)
     return " ".join(doc.toPlainText().split())

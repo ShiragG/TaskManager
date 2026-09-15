@@ -15,14 +15,14 @@ git push origin v0.2.0
 
 ## 2. Сборка бинарников
 
-Собирайте **на целевой ОС** (см. раздел «Сборка» в `README.md`):
+Собирайте **на целевой ОС** (`TaskManager.spec` + `scripts/package_github_asset.py`, см. раздел «Сборка» в `README.md`):
 
 | ОС | Имя asset |
 |----|-----------|
 | Linux | `TaskManager` |
 | Windows | `TaskManager.exe` |
 
-Артефакты лежат в `dist/`.
+Артефакты для релиза — `dist/TaskManager` и `dist/TaskManager.exe` (bootstrap). Каталог `dist/TaskManager-onedir/` на GitHub не прикладывают.
 
 ## 3. GitHub Release
 
@@ -36,4 +36,4 @@ API проверки обновлений:
 
 `GET https://api.github.com/repos/ShiragG/TaskManager/releases/latest`
 
-Приложение сравнивает `tag_name` с текущей версией и предлагает скачать нужный asset через «Сохранить как…» (самозамены exe нет).
+Приложение сравнивает `tag_name` с текущей версией, скачивает asset в `TaskManager[.exe].new` и после «Установить и закрыть» подменяет файл (старый helper не запускает новый процесс). Первый запуск нового файла — bootstrap: распаковка onedir рядом с exe и старт с теми же argv.

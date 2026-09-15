@@ -3,43 +3,17 @@ from __future__ import annotations
 import os
 from argparse import Namespace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from PySide6.QtWidgets import QApplication
-
-from taskmanager.cli.commands import (
-    CliError,
-    cmd_link_add,
-    cmd_link_list,
-    cmd_link_remove,
-    cmd_project_create,
-    cmd_project_delete,
-    cmd_project_list,
-    cmd_project_rename,
-    cmd_source_module_list,
-    cmd_task_archive,
-    cmd_task_comment,
-    cmd_task_create,
-    cmd_task_delete,
-    cmd_task_excel,
-    cmd_task_folder,
-    cmd_task_get,
-    cmd_task_hide,
-    cmd_task_list,
-    cmd_task_restore,
-    cmd_task_search,
-    cmd_task_source,
-    cmd_task_source_refresh,
-    cmd_task_update,
-)
 from taskmanager.cli.output import emit_error, emit_stdout
 from taskmanager.cli.parser import CLIUsageError, build_parser, format_help_all
-from taskmanager.infrastructure.logging_setup import setup_logging
-from taskmanager.infrastructure import paths as app_paths
-from taskmanager.infrastructure.sqlite_repo import SqliteRepository
-from taskmanager.services.settings_service import Settings, SettingsStore
-from taskmanager.services.source_host import SourceHost
-from taskmanager.services.source_protocol import SourceModuleError
-from taskmanager.services.task_service import ServiceError, TaskService
+
+if TYPE_CHECKING:
+    from PySide6.QtWidgets import QApplication
+    from taskmanager.infrastructure.sqlite_repo import SqliteRepository
+    from taskmanager.services.settings_service import Settings
+    from taskmanager.services.source_host import SourceHost
+    from taskmanager.services.task_service import TaskService
 
 
 def run_cli(argv: list[str]) -> int:
@@ -63,8 +37,20 @@ def run_cli(argv: list[str]) -> int:
         return _system_exit_code(exc)
 
     args.json = json_mode or bool(getattr(args, "json", False))
+    return _execute(args, parse_argv[:1] or argv[:1])
+
+
+def _execute(args: Namespace, qt_argv: list[str]) -> int:
+    from taskmanager.cli.commands import CliError
+    from taskmanager.infrastructure.logging_setup import setup_logging
+    from taskmanager.infrastructure import paths as app_paths
+    from taskmanager.infrastructure.sqlite_repo import SqliteRepository
+    from taskmanager.services.settings_service import SettingsStore
+    from taskmanager.services.source_protocol import SourceModuleError
+    from taskmanager.services.task_service import ServiceError, TaskService
+
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    _qapp(parse_argv[:1] or argv[:1])
+    _qapp(qt_argv)
 
     settings_store = SettingsStore(app_paths.default_settings_path())
     settings = settings_store.load()
@@ -105,6 +91,9 @@ def _make_source_host(
     settings: Settings,
     service: TaskService,
 ) -> SourceHost:
+    from taskmanager.infrastructure import paths as app_paths
+    from taskmanager.services.source_host import SourceHost
+
     return SourceHost(repo, settings, service, modules_base=app_paths.app_dir())
 
 
@@ -115,6 +104,31 @@ def _dispatch(
     repo: SqliteRepository,
     settings: Settings,
 ) -> int:
+    from taskmanager.cli.commands import (
+        cmd_link_add,
+        cmd_link_list,
+        cmd_link_remove,
+        cmd_project_create,
+        cmd_project_delete,
+        cmd_project_list,
+        cmd_project_rename,
+        cmd_source_module_list,
+        cmd_task_archive,
+        cmd_task_comment,
+        cmd_task_create,
+        cmd_task_delete,
+        cmd_task_excel,
+        cmd_task_folder,
+        cmd_task_get,
+        cmd_task_hide,
+        cmd_task_list,
+        cmd_task_restore,
+        cmd_task_search,
+        cmd_task_source,
+        cmd_task_source_refresh,
+        cmd_task_update,
+    )
+
     json_mode = bool(args.json)
     command = args.command
     host: SourceHost | None = None
@@ -229,6 +243,8 @@ def _prog_name(argv0: str) -> str:
 
 
 def _qapp(argv: list[str]) -> QApplication:
+    from PySide6.QtWidgets import QApplication
+
     existing = QApplication.instance()
     if isinstance(existing, QApplication):
         return existing

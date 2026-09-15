@@ -99,7 +99,7 @@ uv run taskmanager --json task list --project Alpha
 | `keep_priority_on_source_refresh` | Не изменять приоритет при обновлении из источника (по умолчанию выкл.) |
 | `debug_logging` | Писать INFO/DEBUG действий в `taskmanager.log` |
 
-Версия приложения и контакты — в настройках («О приложении»). Обновление (frozen): скачивание в `TaskManager[.exe].new` рядом с exe → баннер «Установить и закрыть» (после закрытия файл заменят — запустите приложение снова вручную) → helper ждёт PID и подменяет бинарник (`chmod` на Linux), без автозапуска. В dev — файл скачивается, замена вручную.
+Версия приложения и контакты — в настройках («О приложении»). Обновление (frozen): скачивание в `TaskManager[.exe].new` рядом с exe → баннер «Установить и закрыть» (после закрытия helper подменит файл — запустите приложение снова вручную) → helper ждёт PID и подменяет бинарник (`chmod` на Linux), без автозапуска нового процесса. Первый запуск нового файла распаковывает onedir и стартует с теми же аргументами. В dev — файл скачивается, замена вручную.
 
 ## Поиск и правки
 
@@ -115,19 +115,20 @@ uv run taskmanager --json task list --project Alpha
 
 ## Сборка (PyInstaller)
 
-Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). Один вход для Linux и Windows — `TaskManager.spec` (разделитель `--add-data` уже внутри spec, не в argv). Артефакт: `TaskManager` на Linux, `TaskManager.exe` на Windows.
+Сборку выполняйте **на целевой ОС** (кросс-сборка Win↔Linux не поддерживается). `TaskManager.spec` собирает onedir (`dist/TaskManager-onedir/`, загрузчик + `_internal`; разделитель `--add-data` уже внутри spec). Затем `scripts/package_github_asset.py` упаковывает этот onedir в bootstrap-onefile — GitHub asset с прежними именами **`TaskManager`** / **`TaskManager.exe`**. Первый запуск bootstrap распаковывает `_internal` рядом с exe, подменяет себя загрузчиком onedir и стартует GUI/CLI с теми же аргументами; `settings.json`, `taskmanager.db` и `modules/` не трогает.
 
 ```bash
 uv sync --all-groups
 uv run pyinstaller --noconfirm TaskManager.spec
+uv run python scripts/package_github_asset.py
 ```
 
 **Не** добавляйте `--windowed` / `--noconsole` на Windows. Эти флаги ставят GUI-подсистему Windows: у процесса нет stdout, поэтому `.\TaskManager.exe --help` в PowerShell молчит. Это не баг CLI и не отличие cmd от PowerShell. На Linux `--windowed` PyInstaller игнорирует; копировать linux-команду с `--windowed` на Windows нельзя. Команды вида `pyinstaller … src/taskmanager/__main__.py` устарели: флаги в argv побеждают spec, даже если spec лежит рядом.
 
-После смены флага консоли пересоберите `dist` на той же ОС. Проверка: `.\TaskManager.exe --help` (PowerShell) / `TaskManager.exe --help` (cmd) печатает Usage. GUI без аргументов: двойной клик прячет консоль; из терминала консоль остаётся (как на Linux). Подробности: [`docs/adr/0015-windows-console-subsystem.md`](docs/adr/0015-windows-console-subsystem.md).
+После смены флага консоли пересоберите `dist` на той же ОС (оба шага). Проверка: `.\TaskManager.exe --help` (PowerShell) / `TaskManager.exe --help` (cmd) печатает Usage. GUI без аргументов: двойной клик прячет консоль; из терминала консоль остаётся (как на Linux). Подробности: [`docs/adr/0015-windows-console-subsystem.md`](docs/adr/0015-windows-console-subsystem.md), [`docs/adr/0016-onedir-bootstrap-github-asset.md`](docs/adr/0016-onedir-bootstrap-github-asset.md).
 
-Готовый бинарник появится в `dist/`. Для публикации на GitHub Releases прикладывайте assets с именами **`TaskManager`** (Linux) и **`TaskManager.exe`** (Windows) — см. [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md).
+Готовый asset — `dist/TaskManager` (Linux) или `dist/TaskManager.exe` (Windows). Каталог `dist/TaskManager-onedir/` — промежуточный onedir, не имя релиза. Публикация: [`GITHUB_RELEASES_SETUP.md`](GITHUB_RELEASES_SETUP.md).
 
 ## Что не входит в v1
 
-Связи между заявками, поиск по содержимому файлов, массовый архив проекта, миграция старых `.taskData.json`, Oracle, автоудаление пустых папок проектов, onedir/installer вместо onefile helper, кросс-сборка Win↔Linux.
+Связи между заявками, поиск по содержимому файлов, массовый архив проекта, миграция старых `.taskData.json`, Oracle, автоудаление пустых папок проектов, NSIS/Inno в `.new`, кросс-сборка Win↔Linux.

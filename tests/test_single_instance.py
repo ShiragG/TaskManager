@@ -19,8 +19,14 @@ def test_second_run_raises_existing_and_skips_window(tmp_path: Path, qtbot, monk
     monkeypatch.setattr(
         "taskmanager.infrastructure.single_instance.app_dir", lambda: tmp_path
     )
-    monkeypatch.setattr("taskmanager.main.default_settings_path", lambda: tmp_path / "settings.json")
-    monkeypatch.setattr("taskmanager.main.default_db_path", lambda: tmp_path / "taskmanager.db")
+    monkeypatch.setattr(
+        "taskmanager.infrastructure.paths.default_settings_path",
+        lambda: tmp_path / "settings.json",
+    )
+    monkeypatch.setattr(
+        "taskmanager.infrastructure.paths.default_db_path",
+        lambda: tmp_path / "taskmanager.db",
+    )
     monkeypatch.setattr("taskmanager.infrastructure.paths.app_dir", lambda: tmp_path)
 
     created: list[object] = []
@@ -41,7 +47,7 @@ def test_second_run_raises_existing_and_skips_window(tmp_path: Path, qtbot, monk
         def run_startup_update_checks(self) -> None:
             return None
 
-    monkeypatch.setattr("taskmanager.main.MainWindow", FakeWindow)
+    monkeypatch.setattr("taskmanager.ui.main_window.MainWindow", FakeWindow)
 
     primary = InstanceGuard(tmp_path)
     assert primary.try_become_primary()

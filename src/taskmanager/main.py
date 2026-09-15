@@ -3,38 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QMessageBox
-
-from taskmanager.infrastructure.logging_setup import (
-    install_qt_message_handler,
-    setup_logging,
-)
-from taskmanager.infrastructure.paths import (
-    default_db_path,
-    default_settings_path,
-    resolve_work_dir,
-)
-from taskmanager.infrastructure.single_instance import InstanceGuard
-from taskmanager.infrastructure.sqlite_repo import SqliteRepository
-from taskmanager.resources import app_icon_png
-from taskmanager.services.settings_service import SettingsStore
-from taskmanager.services.source_host import SourceHost
-from taskmanager.services.task_service import TaskService
-from taskmanager.ui.main_window import MainWindow
-from taskmanager.ui.stylesheet import apply_stylesheet
-
-from taskmanager.cli.console import hide_console_if_only_ours
-
 logger = logging.getLogger(__name__)
-
-
-def _application(argv: list[str]) -> QApplication:
-    existing = QApplication.instance()
-    if isinstance(existing, QApplication):
-        return existing
-    return QApplication(argv)
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -47,6 +16,29 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def run_gui(argv: list[str]) -> int:
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QIcon
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from taskmanager.cli.console import hide_console_if_only_ours
+    from taskmanager.infrastructure.logging_setup import (
+        install_qt_message_handler,
+        setup_logging,
+    )
+    from taskmanager.infrastructure.paths import (
+        default_db_path,
+        default_settings_path,
+        resolve_work_dir,
+    )
+    from taskmanager.infrastructure.single_instance import InstanceGuard
+    from taskmanager.infrastructure.sqlite_repo import SqliteRepository
+    from taskmanager.resources import app_icon_png
+    from taskmanager.services.settings_service import SettingsStore
+    from taskmanager.services.source_host import SourceHost
+    from taskmanager.services.task_service import TaskService
+    from taskmanager.ui.main_window import MainWindow
+    from taskmanager.ui.stylesheet import apply_stylesheet
+
     hide_console_if_only_ours()
     app = _application(argv)
     app.setQuitOnLastWindowClosed(True)
@@ -100,6 +92,15 @@ def run_gui(argv: list[str]) -> int:
         guard.release()
         repo.close()
     return code
+
+
+def _application(argv: list[str]):
+    from PySide6.QtWidgets import QApplication
+
+    existing = QApplication.instance()
+    if isinstance(existing, QApplication):
+        return existing
+    return QApplication(argv)
 
 
 def main() -> None:
