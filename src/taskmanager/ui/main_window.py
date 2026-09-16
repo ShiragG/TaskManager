@@ -77,7 +77,6 @@ from taskmanager.ui.dialogs import (
     RichTextEditDialog,
     SWATCH_SIZE,
     TaskDialog,
-    source_refresh_confirm_phrases,
 )
 from taskmanager.infrastructure.event_sounds import event_ping_path
 from taskmanager.ui.event_sound_player import EventSoundPlayer
@@ -1124,63 +1123,98 @@ class MainWindow(QMainWindow):
             + (f", ошибок {len(errors)}" if errors else "")
         )
 
+    def _selected_source_task_ids(self) -> list[int]:
+        ids: list[int] = []
+        for task_id in self.selected_task_ids():
+            try:
+                task = self.service.get_task(task_id)
+            except ServiceError:
+                continue
+            if task.has_source:
+                ids.append(task_id)
+        return ids
+
     def refresh_selected_from_source(self) -> None:
         if self.source_host is None:
-            return
-        task_id = self._require_single_task_id()
-        if task_id is None:
-            return
-        try:
-            task = self.service.get_task(task_id)
-        except ServiceError as exc:
-            QMessageBox.warning(self, "Ошибка", str(exc))
-            return
-        if not task.has_source:
             QMessageBox.information(
-                self, "Источник", "У заявки нет привязки к источнику"
+                self, "Обновить из источника", "Модули источников недоступны"
             )
             return
-        fields, note = source_refresh_confirm_phrases(
-            keep_priority=self.settings.keep_priority_on_source_refresh
-        )
-        answer = QMessageBox.question(
+        if self._show_archive:
+            QMessageBox.information(
+                self, "Уведомление", "В режиме архива нельзя обновлять заявки"
+            )
+            return
+        if not self.source_host.enabled_modules():
+            QMessageBox.information(
+                self,
+                "Обновить из источника",
+                "Нет включённых модулей. Установите и включите модуль в Настройках.",
+            )
+            return
+        if self._bulk_refresh_running:
+            return
+        queue = self._selected_source_task_ids()
+        if not queue:
+            QMessageBox.information(
+                self,
+                "Обновить из источника",
+                "Нет выделенных заявок с источником",
+            )
+            return
+        dialog = BulkRefreshConfirmDialog(
+            len(queue),
             self,
-            "Обновить из источника",
-            f"Перезаписать {fields} из источника?\n{note}",
+            keep_priority=self.settings.keep_priority_on_source_refresh,
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        if dialog.exec() != BulkRefreshConfirmDialog.DialogCode.Accepted:
             return
-        logger.debug("UI: refresh from source task_id=%s", task_id)
-        try:
-            self.source_host.refresh_task_from_source(task_id)
-        except Exception as exc:
-            logger.warning("Refresh from source failed: %s", exc)
-            QMessageBox.warning(self, "Источник", str(exc))
-            return
-        logger.debug("UI: refresh from source done task_id=%s", task_id)
-        self.reload_current_tab()
+        self._run_bulk_refresh(queue, download=dialog.download_files)
 
     def download_selected_source_files(self) -> None:
         if self.source_host is None:
             return
-        task_id = self._require_single_task_id()
-        if task_id is None:
-            return
-        logger.debug("UI: download source files task_id=%s", task_id)
-        try:
-            saved = self.source_host.download_task_files(
-                task_id, create_folder_if_missing=True
+        task_ids = self._selected_source_task_ids()
+        if not task_ids:
+            QMessageBox.information(
+                self, "Файлы", "Нет выделенных заявок с источником"
             )
-        except Exception as exc:
-            logger.warning("Download source files failed: %s", exc)
-            QMessageBox.warning(self, "Файлы", str(exc))
             return
-        logger.debug("UI: download source files done count=%s", len(saved))
-        if saved:
+        downloaded: list[str] = []
+        errors: list[str] = []
+        task_count = 0
+        for task_id in task_ids:
+            task_count += 1
+            logger.debug("UI: download source files task_id=%s", task_id)
+            try:
+                saved = self.source_host.download_task_files(
+                    task_id, create_folder_if_missing=True
+                )
+            except Exception as exc:
+                logger.warning("Download source files failed: %s", exc)
+                number = "#" + str(task_id)
+                try:
+                    number = self.service.get_task(task_id).number
+                except ServiceError:
+                    pass
+                errors.append(f"{number}: {exc}")
+                continue
+            downloaded.extend(saved)
+        if errors:
+            QMessageBox.warning(
+                self, "Файлы", "Ошибки:\n" + "\n".join(errors[:10])
+            )
+            return
+        if downloaded:
+            if task_count == 1 and task_ids:
+                detail = "\n" + "\n".join(downloaded)
+            else:
+                detail = ""
             QMessageBox.information(
                 self,
                 "Файлы",
-                "Скачано:\n" + "\n".join(saved),
+                f"Скачано: {len(downloaded)} файлов по {task_count} заявкам"
+                + detail,
             )
         else:
             QMessageBox.information(
@@ -1219,7 +1253,7 @@ class MainWindow(QMainWindow):
     def refresh_all_from_source(self) -> None:
         if self.source_host is None:
             QMessageBox.information(
-                self, "Обновить все", "Модули источников недоступны"
+                self, "Обновить из источника", "Модули источников недоступны"
             )
             return
         if self._show_archive:
@@ -1230,7 +1264,7 @@ class MainWindow(QMainWindow):
         if not self.source_host.enabled_modules():
             QMessageBox.information(
                 self,
-                "Обновить все",
+                "Обновить из источника",
                 "Нет включённых модулей. Установите и включите модуль в Настройках.",
             )
             return
@@ -1240,7 +1274,7 @@ class MainWindow(QMainWindow):
         if not tasks:
             QMessageBox.information(
                 self,
-                "Обновить все",
+                "Обновить из источника",
                 "Нет заявок с источником в текущей таблице",
             )
             return
@@ -1359,7 +1393,7 @@ class MainWindow(QMainWindow):
             lines.extend(module_skips)
             if cancelled:
                 lines.append("Отменено")
-            QMessageBox.information(self, "Обновить все", "\n".join(lines))
+            QMessageBox.information(self, "Обновить из источника", "\n".join(lines))
             self.reload_current_tab()
             self._bulk_refresh_panel.hide()
             self._sync_mode_actions()
@@ -2305,19 +2339,20 @@ class MainWindow(QMainWindow):
             if task_id is not None:
                 menu.addAction("Событие…", self.add_reminder_for_selected)
 
+        if not self._show_archive and self._selected_source_task_ids():
+            menu.addSeparator()
+            menu.addAction(
+                "Обновить из источника…", self.refresh_selected_from_source
+            )
+            menu.addAction(
+                "Скачать файлы источника…", self.download_selected_source_files
+            )
+
         if task_id is not None:
             try:
                 task = self.service.get_task(task_id)
             except ServiceError:
                 task = None
-            if task and task.has_source and not self._show_archive:
-                menu.addSeparator()
-                menu.addAction(
-                    "Обновить из источника…", self.refresh_selected_from_source
-                )
-                menu.addAction(
-                    "Скачать файлы источника…", self.download_selected_source_files
-                )
             if task and task.links:
                 links_menu = menu.addMenu("Открыть ссылку")
                 for link in task.links:

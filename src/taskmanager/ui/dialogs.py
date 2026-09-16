@@ -1529,7 +1529,7 @@ class BulkRefreshConfirmDialog(QDialog):
         self, count: int, parent=None, *, keep_priority: bool = False
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Обновить все")
+        self.setWindowTitle("Обновить из источника")
         layout = QVBoxLayout(self)
         fields, note = source_refresh_confirm_phrases(keep_priority=keep_priority)
         overwrite = fields[:1].upper() + fields[1:]

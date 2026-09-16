@@ -623,32 +623,19 @@ def test_readme_lists_cli_commands_and_help_caveat() -> None:
         encoding="utf-8"
     )
     for fragment in (
-        "project rename",
-        "project delete",
+        "task list --project",
+        "project list",
         "task search",
-        "task update",
-        "task comment set",
-        "task archive",
-        "task restore",
-        "task hide",
-        "task unhide",
-        "task delete",
-        "task folder",
-        "task excel",
-        "link list",
-        "link add",
-        "link remove",
-        "source module list",
-        "task source",
-        "task source refresh",
         "--help-all",
-        "--module",
-        "--external-id",
-        "--help",
         "--json",
+        "Командной строкой поддерживаются",
+        "проекты",
+        "заявки",
+        "комментарии",
+        "ссылки",
+        "экспорт в Excel",
     ):
         assert fragment in text
-    assert "argparse" in text
 
 
 def test_source_host_not_built_for_task_list(

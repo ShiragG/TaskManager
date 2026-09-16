@@ -123,6 +123,7 @@ def test_confirm_dialog_count_and_download_checked_by_default(qtbot):
     dialog = BulkRefreshConfirmDialog(4)
     qtbot.addWidget(dialog)
     dialog.show()
+    assert dialog.windowTitle() == "Обновить из источника"
     labels = [w.text() for w in dialog.findChildren(QLabel)]
     assert any("4 заявок" in text for text in labels)
     assert any("Описание, приоритет и служебные ссылки перезапишутся" in text for text in labels)
@@ -309,3 +310,87 @@ def test_progress_bar_separate_from_app_update(bulk_env):
     assert window._bulk_refresh_panel.isHidden()
     assert window._bulk_refresh_cancel_btn.text() == "Отмена"
     assert window._update_panel.isHidden()
+
+
+def _select_tasks(window, task_ids):
+    from PySide6.QtCore import QItemSelectionModel
+
+    from taskmanager.ui.main_window import COL_NUMBER, TASK_ID_ROLE
+
+    table = window.current_table()
+    model = table.selectionModel()
+    wanted = set(task_ids)
+    flags = QItemSelectionModel.SelectionFlag.Rows | QItemSelectionModel.SelectionFlag.Select
+    for row in range(table.rowCount()):
+        item = table.item(row, COL_NUMBER)
+        if item is None:
+            continue
+        value = item.data(TASK_ID_ROLE)
+        if value in wanted:
+            model.select(table.model().index(row, 0), flags)
+
+
+def test_refresh_selected_updates_only_selected_sourced(bulk_env, monkeypatch):
+    window, service, host = bulk_env
+    project = service.create_project("P")
+    keep = _sourced_task(service, project.id, "1")
+    _sourced_task(service, project.id, "2")
+    local = service.create_task(
+        CreateTaskRequest(project_id=project.id, number="L", create_folder=False)
+    )
+    window.reload_projects()
+    _select_tasks(window, [keep.id, local.id])
+    _accept_confirm(monkeypatch, download=False)
+    texts = _capture_info(monkeypatch)
+    window.refresh_selected_from_source()
+    assert host.refresh_ids == [keep.id]
+    assert local.id not in host.refresh_ids
+    assert host.download_ids == []
+    assert texts[-1] == "Обновлено: 1"
+
+
+def test_refresh_selected_single_goes_through_bulk_dialog(bulk_env, monkeypatch):
+    window, service, host = bulk_env
+    project = service.create_project("P")
+    task = _sourced_task(service, project.id, "1")
+    window.reload_projects()
+    _select_tasks(window, [task.id])
+    _accept_confirm(monkeypatch, download=True)
+    _capture_info(monkeypatch)
+    window.refresh_selected_from_source()
+    assert host.refresh_ids == [task.id]
+    assert host.download_ids == [task.id]
+
+
+def test_refresh_selected_rejects_no_selection(bulk_env, monkeypatch):
+    window, service, host = bulk_env
+    project = service.create_project("P")
+    _sourced_task(service, project.id, "1")
+    window.reload_projects()
+    texts = _capture_info(monkeypatch)
+    window.refresh_selected_from_source()
+    assert host.refresh_ids == []
+    assert texts[-1] == "Нет выделенных заявок с источником"
+
+
+def test_download_selected_source_files_multi(bulk_env, monkeypatch):
+    window, service, host = bulk_env
+    project = service.create_project("P")
+    t1 = _sourced_task(service, project.id, "1")
+    t2 = _sourced_task(service, project.id, "2")
+    local = service.create_task(
+        CreateTaskRequest(project_id=project.id, number="L", create_folder=False)
+    )
+    window.reload_projects()
+    _select_tasks(window, [t1.id, t2.id, local.id])
+
+    def fake_download(task_id: int, *, create_folder_if_missing: bool = True):
+        host.download_ids.append(task_id)
+        return [f"{task_id}.txt"]
+
+    host.download_task_files = fake_download
+    texts = _capture_info(monkeypatch)
+    window.download_selected_source_files()
+    assert set(host.download_ids) == {t1.id, t2.id}
+    assert local.id not in host.download_ids
+    assert "2 файлов по 2 заявкам" in texts[-1]

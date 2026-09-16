@@ -527,6 +527,70 @@ def test_context_menu_preserves_multi_selection(app_env, qtbot):
     ]
 
 
+def test_context_menu_source_section_for_multi_selection(app_env, qtbot, monkeypatch):
+    from taskmanager.ui import main_window as mw_mod
+
+    class FakeMenu:
+        def __init__(self, *a, **k):
+            self.labels: list[str] = []
+
+        def addAction(self, *a, **k):
+            self.labels.append(a[0] if a else "")
+            return None
+
+        def addSeparator(self):
+            return None
+
+        def addMenu(self, title):
+            sub = FakeMenu()
+            sub.labels.append(title)
+            return sub
+
+        def exec(self, *_a, **_k):
+            return None
+
+    captured: dict[str, FakeMenu] = {}
+
+    def fake_factory(*a, **k):
+        menu = FakeMenu()
+        captured["menu"] = menu
+        return menu
+
+    monkeypatch.setattr(mw_mod, "QMenu", fake_factory)
+    window, service = app_env
+    project = service.create_project("CtxSrc")
+    service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="1",
+            create_folder=False,
+            source_module_id="m",
+            external_id="x1",
+            source_label="M",
+        )
+    )
+    service.create_task(
+        CreateTaskRequest(project_id=project.id, number="2", create_folder=False)
+    )
+    window.reload_projects()
+    table = window.current_table()
+    from PySide6.QtCore import QItemSelectionModel
+
+    table.selectRow(0)
+    model = table.selectionModel()
+    model.select(
+        table.model().index(1, 0),
+        QItemSelectionModel.SelectionFlag.Rows
+        | QItemSelectionModel.SelectionFlag.Select,
+    )
+    assert len(window.selected_task_ids()) == 2
+    pos = table.visualItemRect(table.item(1, COL_NUMBER)).center()
+    window._show_context_menu(table, pos)
+    menu = captured["menu"]
+    assert "Обновить из источника…" in menu.labels
+    assert "Скачать файлы источника…" in menu.labels
+
+
 def test_delete_disabled_in_archive_mode(app_env, qtbot, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 

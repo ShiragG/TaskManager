@@ -113,5 +113,5 @@ Bringing a Source item into the current Project as a Task. The single path snaps
 _Avoid_: sync, clone
 
 **Refresh from source**:
-A manual overwrite of the mapped Task fields from the Source item. Comment is never overwritten. Priority is overwritten from Source priority unless the operator chose to keep Priority on the Task. Source files are not downloaded.
+A manual overwrite of the mapped Task fields from the Source item. Comment is never overwritten. Priority is overwritten from Source priority unless the operator chose to keep Priority on the Task. Source files are downloaded when the «Скачать файлы источника» checkbox is enabled in the confirmation dialog (enabled by default).
 _Avoid_: sync, pull all
