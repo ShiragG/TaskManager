@@ -28,6 +28,7 @@ from PySide6.QtGui import (
     QContextMenuEvent,
     QFont,
     QFontInfo,
+    QGuiApplication,
     QImage,
     QImageReader,
     QKeySequence,
@@ -36,6 +37,7 @@ from PySide6.QtGui import (
     QPalette,
     QPen,
     QPolygon,
+    QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
     QTextFormat,
@@ -80,7 +82,9 @@ from taskmanager.services.settings_service import (
     IMAGE_PREVIEW_ORIGINAL,
     IMAGE_PREVIEW_SMALL,
 )
+from taskmanager.services.settings_service import THEME_DARK, THEME_SYSTEM
 from taskmanager.services.task_service import ServiceError
+from taskmanager.ui.stylesheet import resolve_theme_mode
 
 _IMAGE_FILTER = "Изображения (*.png *.jpg *.jpeg *.gif *.webp)"
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -115,34 +119,66 @@ _LINK_RE = re.compile(r"^\[([^\[\]]+)\]\(([^()\s]+)\)\s*$")
 _FENCE_RE = re.compile(r"^```[^\n]*\n(.*)\n```$", re.DOTALL)
 
 # Isolate toolbar buttons from the app stylesheet so checked state stays visible.
-_TOOLBAR_QSS = """
+# Background is the dialog surface (light #f1f5f9, dark #0f172a), not palette(window)
+# and not the main window's teal bar.
+_TOOLBAR_QSS_LIGHT = """
 QToolBar {
-    background: palette(window);
+    background: #f1f5f9;
     border: none;
     spacing: 4px;
     padding: 4px;
 }
 QToolBar QToolButton {
     background: transparent;
-    color: palette(window-text);
+    color: #0f172a;
     border: 1px solid transparent;
     border-radius: 3px;
     padding: 4px 8px;
 }
 QToolBar QToolButton:hover {
-    background: palette(midlight);
-    border-color: palette(mid);
+    background: #e2e8f0;
+    border-color: #cbd5e1;
 }
 QToolBar QToolButton:pressed {
-    background: palette(mid);
+    background: #cbd5e1;
 }
 QToolBar QToolButton:checked {
-    background: palette(highlight);
-    color: palette(highlighted-text);
-    border-color: palette(dark);
+    background: #99f6e4;
+    color: #0f172a;
+    border-color: #0d9488;
 }
 QToolBar QToolButton:checked:hover {
-    background: palette(highlight);
+    background: #5eead4;
+}
+"""
+_TOOLBAR_QSS_DARK = """
+QToolBar {
+    background: #0f172a;
+    border: none;
+    spacing: 4px;
+    padding: 4px;
+}
+QToolBar QToolButton {
+    background: transparent;
+    color: #e2e8f0;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    padding: 4px 8px;
+}
+QToolBar QToolButton:hover {
+    background: #1e293b;
+    border-color: #334155;
+}
+QToolBar QToolButton:pressed {
+    background: #334155;
+}
+QToolBar QToolButton:checked {
+    background: #115e59;
+    color: #ecfdf5;
+    border-color: #2dd4bf;
+}
+QToolBar QToolButton:checked:hover {
+    background: #134e4a;
 }
 """
 
@@ -228,6 +264,8 @@ class MarkdownTextEdit(QTextEdit):
         # task item would otherwise have no box. An empty box leaves the list.
         if not _is_bare_enter(event) or not _cursor_in_task(self):
             super().keyPressEvent(event)
+            if event.text() == "-":
+                _promote_horizontal_rule(self)
             return
         block = self.textCursor().block()
         if not _task_item_body(block).strip():
@@ -254,6 +292,13 @@ class MarkdownTextEdit(QTextEdit):
                 self._open_image(hit.cursor.charFormat().toImageFormat().name())
                 event.accept()
                 return
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                href = self.anchorAt(pos)
+                if href and not href.startswith("tm-task:"):
+                    self._press_pos = None
+                    self._open_link(href)
+                    event.accept()
+                    return
             if hit is not None and _near_image_corner(hit.view_rect, pos):
                 self._press_pos = None
                 self._drag_resize = (hit.position, hit.view_rect.left())
@@ -303,11 +348,16 @@ class MarkdownTextEdit(QTextEdit):
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802
         hit = self._image_hit_at(event.pos())
-        if hit is None:
-            super().contextMenuEvent(event)
+        if hit is not None:
+            self._exec_menu(self._image_size_menu(hit), event.globalPos())
+            event.accept()
             return
-        self._exec_menu(self._image_size_menu(hit), event.globalPos())
-        event.accept()
+        menu = _table_cell_menu(self, event.pos())
+        if menu is not None:
+            self._exec_menu(menu, event.globalPos())
+            event.accept()
+            return
+        super().contextMenuEvent(event)
 
     def changeEvent(self, event) -> None:  # noqa: N802
         super().changeEvent(event)
@@ -506,6 +556,17 @@ class MarkdownTextEdit(QTextEdit):
         except PlatformOpenError as exc:
             QMessageBox.warning(self, "Предупреждение", str(exc))
 
+    def _open_link(self, href: str) -> None:
+        """Ctrl+click: http(s) in the browser, anything else with the system."""
+        if href.startswith(("http://", "https://")):
+            target = href
+        else:
+            target = _image_file_path(href) or href
+        try:
+            open_target(target)
+        except PlatformOpenError as exc:
+            QMessageBox.warning(self, "Предупреждение", str(exc))
+
     def _cursor_for_image_at(self, position: int) -> QTextCursor | None:
         cursor = QTextCursor(self.document())
         cursor.setPosition(position)
@@ -616,9 +677,13 @@ class MarkdownEditDialog(QDialog):
         header.addWidget(self.mode_combo)
 
         toolbar = QToolBar()
-        toolbar.setStyleSheet(_TOOLBAR_QSS)
         toolbar.setMovable(False)
         toolbar.setFloatable(False)
+        self.toolbar = toolbar
+        self._apply_toolbar_chrome()
+        QGuiApplication.styleHints().colorSchemeChanged.connect(
+            self._apply_toolbar_chrome
+        )
         self.heading_combo = QComboBox()
         self.heading_combo.setToolTip("Заголовок")
         self.heading_combo.setSizeAdjustPolicy(
@@ -700,6 +765,16 @@ class MarkdownEditDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def changeEvent(self, event) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.StyleChange):
+            if getattr(self, "toolbar", None) is not None:
+                self._apply_toolbar_chrome()
+
+    def _apply_toolbar_chrome(self, *_args) -> None:
+        """Paint the format bar like the dialog, in the active theme."""
+        self.toolbar.setStyleSheet(_toolbar_qss())
 
     def set_markdown_mode(self, source: bool) -> None:
         """Show Markdown source or the rendered Text editor."""
@@ -1941,6 +2016,120 @@ def _insert_text_table(edit: QTextEdit) -> None:
     _style_tables(edit)
     if table is not None:
         edit.setTextCursor(table.cellAt(0, 0).firstCursorPosition())
+
+
+def _promote_horizontal_rule(edit: QTextEdit) -> None:
+    """A line that is only ``---`` becomes the same ruler markdown ``---`` loads."""
+    cursor = edit.textCursor()
+    block = cursor.block()
+    if block.text().strip() != "---":
+        return
+    if cursor.currentTable() is not None or block.textList() is not None:
+        return
+    block_format = block.blockFormat()
+    if block_format.headingLevel() or block_format.leftMargin() >= 20:
+        return
+    if _is_fenced_code_block(block):
+        return
+    rule = QTextBlockFormat()
+    rule.setProperty(
+        QTextFormat.Property.BlockTrailingHorizontalRulerWidth,
+        QTextLength(QTextLength.Type.VariableLength, 0),
+    )
+    cursor.beginEditBlock()
+    cursor.setPosition(block.position())
+    cursor.movePosition(
+        QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
+    )
+    cursor.removeSelectedText()
+    cursor.setBlockFormat(rule)
+    cursor.insertBlock(QTextBlockFormat())
+    cursor.endEditBlock()
+    edit.setTextCursor(cursor)
+
+
+def _toolbar_qss() -> str:
+    """Dialog surface, not the system palette and not the main window bar."""
+    sheet = ""
+    app = QGuiApplication.instance()
+    if app is not None:
+        sheet = app.styleSheet()
+    background = _dialog_background(sheet)
+    if background == "#0f172a":
+        return _TOOLBAR_QSS_DARK
+    if background == "#f1f5f9":
+        return _TOOLBAR_QSS_LIGHT
+    if resolve_theme_mode(THEME_SYSTEM) == THEME_DARK:
+        return _TOOLBAR_QSS_DARK
+    return _TOOLBAR_QSS_LIGHT
+
+
+def _dialog_background(sheet: str) -> str | None:
+    marker = "QMainWindow, QDialog {"
+    if marker not in sheet:
+        return None
+    block = sheet.split(marker, 1)[1].split("}", 1)[0]
+    if "#0f172a" in block:
+        return "#0f172a"
+    if "#f1f5f9" in block:
+        return "#f1f5f9"
+    return None
+
+
+def _table_cell_menu(edit: QTextEdit, pos: QPoint) -> QMenu | None:
+    cursor = edit.cursorForPosition(pos)
+    table = cursor.currentTable()
+    if table is None:
+        return None
+    cell = table.cellAt(cursor)
+    if not cell.isValid():
+        return None
+    row = cell.row()
+    column = cell.column()
+    menu = edit.createStandardContextMenu()
+    menu.addSeparator()
+    menu.addAction("Строка ниже", lambda: _insert_table_row_below(edit, table, row))
+    menu.addAction(
+        "Столбец справа", lambda: _insert_table_column_after(edit, table, row, column)
+    )
+    menu.addAction("Удалить строку", lambda: _delete_table_row(edit, table, row))
+    menu.addAction(
+        "Удалить столбец", lambda: _delete_table_column(edit, table, row, column)
+    )
+    return menu
+
+
+def _insert_table_row_below(edit: QTextEdit, table, row: int) -> None:
+    table.insertRows(row + 1, 1)
+    _style_tables(edit)
+    edit.setTextCursor(table.cellAt(row + 1, 0).firstCursorPosition())
+
+
+def _insert_table_column_after(edit: QTextEdit, table, row: int, column: int) -> None:
+    table.insertColumns(column + 1, 1)
+    _style_tables(edit)
+    edit.setTextCursor(table.cellAt(row, column + 1).firstCursorPosition())
+
+
+def _delete_table_row(edit: QTextEdit, table, row: int) -> None:
+    stay = table.rows() > 1
+    table.removeRows(row, 1)
+    _style_tables(edit)
+    if not stay:
+        return
+    next_row = min(row, table.rows() - 1)
+    edit.setTextCursor(table.cellAt(next_row, 0).firstCursorPosition())
+
+
+def _delete_table_column(edit: QTextEdit, table, row: int, column: int) -> None:
+    stay = table.columns() > 1
+    table.removeColumns(column, 1)
+    _style_tables(edit)
+    if not stay:
+        return
+    next_row = min(row, table.rows() - 1)
+    next_column = min(column, table.columns() - 1)
+    edit.setTextCursor(table.cellAt(next_row, next_column).firstCursorPosition())
 
 
 def _handle_table_tab(edit: QTextEdit, event) -> bool:

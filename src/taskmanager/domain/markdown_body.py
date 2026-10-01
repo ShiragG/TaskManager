@@ -108,6 +108,9 @@ def html_to_markdown(html: str) -> str:
         return html
     from PySide6.QtGui import QTextDocument
 
+    from taskmanager.domain import ensure_qt_app
+
+    ensure_qt_app()
     doc = QTextDocument()
     doc.setHtml(html)
     return document_to_markdown(doc)
@@ -155,6 +158,13 @@ def document_to_markdown(doc) -> str:
                 gap = False
             last = table.cellAt(table.rows() - 1, table.columns() - 1)
             skip_until = last.lastPosition()
+        elif _is_horizontal_rule(block):
+            flush_code()
+            rendered = _horizontal_rule_markdown(block)
+            _append_block(parts, "hr", rendered, prev_kind, prev_style, None, gap=gap)
+            prev_kind = "hr"
+            prev_style = None
+            gap = False
         elif _is_fenced_code_block(block):
             text = (
                 block.text()
@@ -273,6 +283,21 @@ def _block_markdown(block) -> tuple[str, str, object]:
         )
         return "quote", quoted, None
     return "para", inline, None
+
+
+def _is_horizontal_rule(block) -> bool:
+    """Qt stores a thematic break as an empty block with a trailing ruler."""
+    from PySide6.QtGui import QTextFormat
+
+    return block.blockFormat().hasProperty(
+        QTextFormat.Property.BlockTrailingHorizontalRulerWidth
+    )
+
+
+def _horizontal_rule_markdown(block) -> str:
+    if block.blockFormat().leftMargin() >= 20:
+        return "> ---"
+    return "---"
 
 
 def _is_fenced_code_block(block) -> bool:

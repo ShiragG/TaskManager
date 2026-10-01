@@ -238,6 +238,29 @@ def test_settings_to_sqlite_migration(tmp_path: Path):
     repo.close()
 
 
+def test_host_init_does_not_fetch_catalogs(tmp_path: Path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    settings = Settings(work_dir=str(work))
+    repo = SqliteRepository(tmp_path / "c.db")
+    service = TaskService(repo, settings)
+    repo.upsert_source_module(
+        module_id="fake",
+        display_name="Fake",
+        enabled=True,
+        installed_version="1",
+    )
+    calls: list[list[str] | None] = []
+
+    def _refresh(self, module_ids: list[str] | None = None) -> None:
+        calls.append(module_ids)
+
+    monkeypatch.setattr(SourceHost, "refresh_catalogs", _refresh)
+    SourceHost(repo, settings, service, modules_base=tmp_path)
+    assert calls == []
+    repo.close()
+
+
 def test_catalog_cache_and_import_blocked_on_error(tmp_path: Path, monkeypatch):
     work = tmp_path / "work"
     work.mkdir()

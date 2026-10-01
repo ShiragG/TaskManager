@@ -137,12 +137,31 @@ _HREF_RE = re.compile(
 )
 
 
+_qt_app = None
+
+
+def ensure_qt_app():
+    """Return a QApplication. ``setHtml`` segfaults when none exists."""
+    global _qt_app
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        return app
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    _qt_app = QApplication([])
+    return _qt_app
+
+
 def html_to_plain(html: str) -> str:
     """Plain-text preview from stored HTML via QTextDocument (no CSS leftovers)."""
     if not html:
         return ""
     from PySide6.QtGui import QTextDocument
 
+    ensure_qt_app()
     doc = QTextDocument()
     doc.setHtml(html)
     return " ".join(doc.toPlainText().split())

@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from taskmanager.domain.markdown_body import (
@@ -77,7 +80,7 @@ def test_html_image_under_images_dir_becomes_relative_link():
     assert "<img" not in markdown
 
 
-def test_preview_round_trip_keeps_text_formatting():
+def test_preview_round_trip_keeps_text_formatting(qapp):
     samples = (
         "**жирный** и *курсив* и ~~нет~~ и `код`",
         "**жирный**\n\n- [ ] дело",
@@ -93,9 +96,47 @@ def test_preview_round_trip_keeps_text_formatting():
         "[ссылка](https://example.com)",
         "строка\nещё",
         "| a | b |\n| --- | --- |\n| 1 | 2 |",
+        "---",
+        "before\n\n---\n\nafter",
+        "> ---",
+        "```\n---\n```",
     )
     for source in samples:
         assert html_to_markdown(preview_html(source)) == source
+
+
+def test_horizontal_rule_round_trips_and_other_markers_become_dashes(qapp):
+    assert html_to_markdown(preview_html("---")) == "---"
+    assert html_to_markdown(preview_html("***")) == "---"
+    assert html_to_markdown(preview_html("___")) == "---"
+    assert html_to_markdown(preview_html("before\n\n---\n\nafter")) == (
+        "before\n\n---\n\nafter"
+    )
+    assert html_to_markdown("<p>a</p><hr /><p>b</p>") == "a\n\n---\n\nb"
+    assert html_to_markdown(preview_html("Title\n---\n")) == "## Title"
+    migrated = html_to_markdown("<p><u>under</u></p><hr>")
+    assert "<u>" not in migrated
+    assert migrated == "under\n\n---"
+
+
+def test_html_round_trip_does_not_crash_without_a_qt_app():
+    """setHtml segfaults the process when pytest did not create QApplication."""
+    script = (
+        "from taskmanager.domain.markdown_body import html_to_markdown, preview_html\n"
+        "source = '**жирный** и *курсив* и `код`'\n"
+        "assert html_to_markdown(preview_html(source)) == source\n"
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    env.setdefault("QT_QPA_PLATFORM", "offscreen")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_plain_text_is_not_treated_as_html():

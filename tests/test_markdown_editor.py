@@ -338,6 +338,56 @@ def test_toolbar_tooltips_and_no_underline(qtbot):
     assert dialog.heading_combo.toolTip() == "Заголовок"
 
 
+def test_editor_toolbar_matches_the_dialog_surface(qtbot, qapp, monkeypatch):
+    def theme(_mode):
+        return theme.mode
+
+    theme.mode = "light"
+    monkeypatch.setattr("taskmanager.ui.markdown_editor.resolve_theme_mode", theme)
+    previous = qapp.styleSheet()
+    qapp.setStyleSheet("")
+    dialog = MarkdownEditDialog(markdown="текст")
+    qtbot.addWidget(dialog)
+    try:
+        dialog._apply_toolbar_chrome()
+        light = _toolbar_background(dialog.toolbar.styleSheet())
+        assert "#f1f5f9" in light
+        assert "#0f172a" not in light
+        assert "palette(window)" not in dialog.toolbar.styleSheet()
+        assert "#0f766e" not in dialog.toolbar.styleSheet()
+
+        theme.mode = "dark"
+        dialog._apply_toolbar_chrome()
+        dark = _toolbar_background(dialog.toolbar.styleSheet())
+        assert "#0f172a" in dark
+        assert "#f1f5f9" not in dark
+        assert "#0f766e" not in dialog.toolbar.styleSheet()
+    finally:
+        qapp.setStyleSheet(previous)
+
+
+def test_editor_toolbar_follows_the_dialog_stylesheet(qtbot, qapp):
+    from taskmanager.ui.stylesheet import load_stylesheet
+
+    light_sheet, _source = load_stylesheet("app.qss")
+    dark_sheet, _source = load_stylesheet("app_dark.qss")
+    previous = qapp.styleSheet()
+    dialog = MarkdownEditDialog(markdown="текст")
+    qtbot.addWidget(dialog)
+    try:
+        qapp.setStyleSheet(light_sheet)
+        dialog._apply_toolbar_chrome()
+        assert "#f1f5f9" in _toolbar_background(dialog.toolbar.styleSheet())
+        assert "#0f766e" not in dialog.toolbar.styleSheet()
+        qapp.setStyleSheet(dark_sheet)
+        dialog._apply_toolbar_chrome()
+        assert "#0f172a" in _toolbar_background(dialog.toolbar.styleSheet())
+        assert "#f1f5f9" not in _toolbar_background(dialog.toolbar.styleSheet())
+        assert "#0f766e" not in dialog.toolbar.styleSheet()
+    finally:
+        qapp.setStyleSheet(previous)
+
+
 def test_description_row_is_markdown(qtbot, tmp_path: Path):
     from taskmanager.services.settings_service import Settings
     from taskmanager.ui.dialogs import TaskDialog
@@ -577,6 +627,97 @@ def test_table_button_inserts_a_bordered_grid(qtbot):
     assert "| --- | --- | --- |" in text
 
 
+def test_horizontal_rule_is_visible_and_survives_the_mode_switch(qtbot):
+    source = "до\n\n---\n\nпосле"
+    dialog = MarkdownEditDialog(markdown=source)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog.markdown == source
+    assert _horizontal_rules(dialog.text_edit)
+    dialog.set_markdown_mode(True)
+    assert dialog.source_edit.toPlainText() == source
+    dialog.set_markdown_mode(False)
+    assert dialog.markdown == source
+    assert _horizontal_rules(dialog.text_edit)
+
+    typed = MarkdownEditDialog(markdown="")
+    qtbot.addWidget(typed)
+    typed.show()
+    _type_minus(qtbot, typed.text_edit, 3)
+    assert typed.markdown == "---"
+    assert _horizontal_rules(typed.text_edit)
+    qtbot.keyClick(typed.text_edit, Qt.Key.Key_X)
+    assert typed.markdown == "---\n\nx"
+
+    inline = MarkdownEditDialog(markdown="аб")
+    qtbot.addWidget(inline)
+    inline.show()
+    _end_of_block(inline.text_edit, 0)
+    _type_minus(qtbot, inline.text_edit, 3)
+    assert inline.markdown == "аб---"
+    assert not _horizontal_rules(inline.text_edit)
+
+
+def test_cell_menu_inserts_and_deletes_the_clicked_row_and_column(qtbot, monkeypatch):
+    dialog = MarkdownEditDialog(markdown="")
+    qtbot.addWidget(dialog)
+    dialog.resize(900, 700)
+    dialog.show()
+    QApplication.processEvents()
+    dialog.table_action.trigger()
+    edit = dialog.text_edit
+    table = _first_table(edit)
+    assert table is not None
+    edit.setTextCursor(table.cellAt(0, 0).firstCursorPosition())
+    _type_minus(qtbot, edit, 3)
+    assert _first_table(edit) is not None
+    assert _first_table(edit).rows() == 2
+
+    labels = _cell_menu_labels(edit, 0, 1, monkeypatch)
+    assert labels[-4:] == [
+        "Строка ниже",
+        "Столбец справа",
+        "Удалить строку",
+        "Удалить столбец",
+    ]
+
+    _run_cell_action(edit, 0, 0, "Строка ниже", monkeypatch)
+    table = _first_table(edit)
+    assert table.rows() == 3
+    assert table.cellAt(edit.textCursor()).row() == 1
+    _set_cell_text(edit, 0, 0, "шапка")
+    _set_cell_text(edit, 1, 0, "середина")
+    _set_cell_text(edit, 2, 0, "низ")
+    _set_cell_text(edit, 0, 1, "право")
+
+    _run_cell_action(edit, 1, 0, "Удалить строку", monkeypatch)
+    table = _first_table(edit)
+    assert table.rows() == 2
+    assert "середина" not in dialog.markdown
+    assert "шапка" in dialog.markdown
+    assert "низ" in dialog.markdown
+
+    _run_cell_action(edit, 0, 0, "Столбец справа", monkeypatch)
+    table = _first_table(edit)
+    assert table.columns() == 4
+    assert table.cellAt(edit.textCursor()).column() == 1
+    assert "| --- | --- | --- | --- |" in dialog.markdown
+
+    _run_cell_action(edit, 0, 2, "Удалить столбец", monkeypatch)
+    table = _first_table(edit)
+    assert table.columns() == 3
+    assert "право" not in dialog.markdown
+    assert "шапка" in dialog.markdown
+    assert "| --- | --- | --- |" in dialog.markdown
+
+    last = table.cellAt(table.rows() - 1, table.columns() - 1).firstCursorPosition()
+    edit.setTextCursor(last)
+    rows = table.rows()
+    qtbot.keyClick(edit, Qt.Key.Key_Tab)
+    assert _first_table(edit).rows() == rows
+    assert _first_table(edit).columns() == 3
+
+
 def test_mixed_task_and_bullet_stay_one_list(qtbot):
     source = "- [ ] дело\n- пункт\n\n*курсив*"
     dialog = MarkdownEditDialog(markdown=source)
@@ -586,6 +727,105 @@ def test_mixed_task_and_bullet_stay_one_list(qtbot):
     dialog = MarkdownEditDialog(markdown=nested)
     qtbot.addWidget(dialog)
     assert dialog.markdown == nested
+
+
+def _type_minus(qtbot, edit, count: int) -> None:
+    for _ in range(count):
+        qtbot.keyClick(edit, Qt.Key.Key_Minus)
+
+
+def _toolbar_background(qss: str) -> str:
+    return qss.split("QToolBar {", 1)[1].split("}", 1)[0]
+
+
+def _horizontal_rules(edit) -> list:
+    from PySide6.QtGui import QTextFormat
+
+    prop = QTextFormat.Property.BlockTrailingHorizontalRulerWidth
+    found = []
+    block = edit.document().begin()
+    while block.isValid():
+        if block.blockFormat().hasProperty(prop):
+            found.append(block)
+        block = block.next()
+    return found
+
+
+def _set_cell_text(edit, row: int, column: int, text: str) -> None:
+    table = _first_table(edit)
+    cell = table.cellAt(row, column)
+    cursor = cell.firstCursorPosition()
+    cursor.setPosition(cell.lastPosition(), QTextCursor.MoveMode.KeepAnchor)
+    cursor.removeSelectedText()
+    cursor.insertText(text)
+    edit.setTextCursor(cursor)
+
+
+def _cell_menu_labels(edit, row: int, column: int, monkeypatch) -> list[str]:
+    captured: dict[str, list[str]] = {}
+
+    def fake_exec(_edit, menu, _pos):
+        captured["labels"] = [action.text() for action in menu.actions() if action.text()]
+
+    monkeypatch.setattr(MarkdownTextEdit, "_exec_menu", fake_exec)
+    _open_cell_menu(edit, row, column)
+    return captured["labels"]
+
+
+def _run_cell_action(edit, row: int, column: int, label: str, monkeypatch) -> None:
+    def fake_exec(_edit, menu, _pos):
+        for action in menu.actions():
+            if action.text() == label:
+                action.trigger()
+                return
+        raise AssertionError(label)
+
+    monkeypatch.setattr(MarkdownTextEdit, "_exec_menu", fake_exec)
+    _open_cell_menu(edit, row, column)
+
+
+def _open_cell_menu(edit, row: int, column: int) -> None:
+    table = _first_table(edit)
+    cursor = table.cellAt(row, column).firstCursorPosition()
+    pos = edit.cursorRect(cursor).center()
+    edit.contextMenuEvent(
+        QContextMenuEvent(
+            QContextMenuEvent.Reason.Mouse,
+            pos,
+            edit.viewport().mapToGlobal(pos),
+        )
+    )
+
+
+def _select_word(edit, word: str) -> None:
+    block = edit.document().begin()
+    while block.isValid():
+        text = block.text()
+        index = text.find(word)
+        if index >= 0:
+            cursor = QTextCursor(edit.document())
+            start = block.position() + index
+            cursor.setPosition(start)
+            cursor.setPosition(start + len(word), QTextCursor.MoveMode.KeepAnchor)
+            edit.setTextCursor(cursor)
+            return
+        block = block.next()
+    raise AssertionError(word)
+
+
+def _anchor_point(edit, href_part: str) -> QPoint:
+    block = edit.document().begin()
+    while block.isValid():
+        iterator = block.begin()
+        while not iterator.atEnd():
+            fragment = iterator.fragment()
+            if fragment.isValid() and href_part in fragment.charFormat().anchorHref():
+                cursor = QTextCursor(edit.document())
+                cursor.setPosition(fragment.position())
+                return edit.cursorRect(cursor).center()
+            iterator += 1
+        block = block.next()
+    raise AssertionError(href_part)
 
 
 def _first_table(edit):
@@ -871,6 +1111,55 @@ def test_ctrl_click_opens_the_image_file(tmp_path: Path, qtbot, monkeypatch):
     )
     assert opened == [str((images / "wide.png").resolve())]
     assert dialog.markdown.startswith("- [ ] дело")
+
+
+def test_ctrl_click_opens_a_link_in_text_mode(tmp_path: Path, qtbot, monkeypatch):
+    note = tmp_path / "note.txt"
+    note.write_text("hi", encoding="utf-8")
+    dialog = _shown_editor(
+        qtbot,
+        markdown=f"[сайт](https://example.com/a)\n\nфайл",
+    )
+    opened: list[str] = []
+    monkeypatch.setattr(
+        "taskmanager.ui.markdown_editor.open_target",
+        lambda target: opened.append(target),
+    )
+    qtbot.mouseClick(
+        dialog.text_edit.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ControlModifier,
+        pos=_anchor_point(dialog.text_edit, "https://example.com/a"),
+    )
+    assert opened == ["https://example.com/a"]
+
+    opened.clear()
+    qtbot.mouseClick(
+        dialog.text_edit.viewport(),
+        Qt.MouseButton.LeftButton,
+        pos=_anchor_point(dialog.text_edit, "https://example.com/a"),
+    )
+    assert opened == []
+
+    _select_word(dialog.text_edit, "файл")
+    dialog.apply_link(note.as_uri())
+    qtbot.mouseClick(
+        dialog.text_edit.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ControlModifier,
+        pos=_anchor_point(dialog.text_edit, note.as_uri()),
+    )
+    assert opened == [str(note.resolve())]
+
+    opened.clear()
+    dialog.set_markdown_mode(True)
+    qtbot.mouseClick(
+        dialog.source_edit.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.ControlModifier,
+        pos=QPoint(12, 12),
+    )
+    assert opened == []
 
 
 def test_click_on_image_does_not_toggle_a_task(tmp_path: Path, qtbot):

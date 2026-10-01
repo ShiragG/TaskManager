@@ -95,7 +95,8 @@ class SourceHost:
         if pending_migration:
             self._migrate_legacy_configs(pending_migration)
         self.reload()
-        self.refresh_catalogs()
+        # Do not fetch catalogs here. Login is a network call and would keep
+        # the window from opening while the source host is unreachable.
 
     def _migrate_legacy_configs(self, configs: list[SourceModuleConfig]) -> None:
         for cfg in configs:
