@@ -81,6 +81,7 @@ from taskmanager.domain import (
     priority_color_hex,
 )
 from taskmanager.infrastructure.filesystem import source_files_present
+from taskmanager.ui.markdown_editor import MarkdownEditRow
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.inline_images import sniff_image
 from taskmanager.services.settings_service import (
@@ -229,7 +230,7 @@ def _natural_image_size(
         comma = name.find(",")
         if comma >= 0:
             try:
-                image.loadFromData(base64.b64decode(name[comma + 1 :]))
+                image.loadFromData(base64.b64decode(name[comma + 1:]))
             except Exception:
                 image = QImage()
     elif path:
@@ -251,7 +252,7 @@ def _read_preview_pixmap(name: str, _display_width: int = 0) -> tuple[QPixmap, Q
         comma = name.find(",")
         if comma >= 0:
             try:
-                pix.loadFromData(base64.b64decode(name[comma + 1 :]))
+                pix.loadFromData(base64.b64decode(name[comma + 1:]))
             except Exception:
                 return QPixmap(), QSize(0, 0)
     if pix.isNull():
@@ -925,6 +926,7 @@ class TaskDialog(QDialog):
         self._on_delete_reminder = on_delete_reminder
         self._reminder_service = reminder_service
         self._on_reminders_changed = on_reminders_changed
+        self.prepared_image_number: str | None = None
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -934,18 +936,18 @@ class TaskDialog(QDialog):
         form.addRow("Номер", self.number_edit)
 
         desc_value = task.description if task else initial_description
-        self.description_row = HtmlEditRow(
+        self.description_row = MarkdownEditRow(
             title="Описание",
-            html=desc_value,
-            image_preview_width=settings.image_preview_width,
+            markdown=desc_value,
             source_files_dir=source_files_dir,
             show_source_files_button=True,
+            image_preview_width=settings.image_preview_width,
         )
         form.addRow("Описание", self.description_row)
 
-        self.comment_row = HtmlEditRow(
+        self.comment_row = MarkdownEditRow(
             title="Комментарий",
-            html=task.comment if task else "",
+            markdown=task.comment if task else "",
             image_preview_width=settings.image_preview_width,
         )
         form.addRow("Комментарий", self.comment_row)
@@ -1245,13 +1247,22 @@ class TaskDialog(QDialog):
     def number(self) -> str:
         return self.number_edit.text().strip()
 
+    def set_images_dir_provider(
+        self,
+        ensure: Callable[[], Path],
+        locate: Callable[[], Path | None] | None = None,
+    ) -> None:
+        for row in (self.description_row, self.comment_row):
+            row.ensure_images_dir = ensure
+            row.locate_images_dir = locate
+
     @property
     def description(self) -> str:
-        return self.description_row.html
+        return self.description_row.markdown
 
     @property
     def comment(self) -> str:
-        return self.comment_row.html
+        return self.comment_row.markdown
 
     @property
     def priority(self) -> int:

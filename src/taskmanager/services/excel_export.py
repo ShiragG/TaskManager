@@ -8,9 +8,9 @@ from taskmanager.domain import (
     Task,
     TaskStatus,
     contrast_foreground,
-    html_to_plain_with_urls,
     is_deadline_warning,
 )
+from taskmanager.domain.markdown_body import markdown_to_plain_with_urls
 from taskmanager.services.task_service import ServiceError, TaskService
 
 
@@ -157,8 +157,8 @@ def _task_row(task: Task) -> list[object]:
         task.priority,
         task.number,
         task.date_end.isoformat() if task.date_end else "",
-        html_to_plain_with_urls(task.description),
-        html_to_plain_with_urls(task.comment),
+        markdown_to_plain_with_urls(task.description),
+        markdown_to_plain_with_urls(task.comment),
     ]
 
 

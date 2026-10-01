@@ -20,7 +20,7 @@ def run(argv: list[str] | None = None) -> int:
 def run_gui(argv: list[str]) -> int:
     from PySide6.QtCore import QTimer
     from PySide6.QtGui import QIcon
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtWidgets import QMessageBox
 
     from taskmanager.infrastructure.logging_setup import (
         install_qt_message_handler,

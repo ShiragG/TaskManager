@@ -77,6 +77,44 @@ def test_plain_cell_is_truncated(app_env, qtbot):
     assert service.get_task(service.list_tasks(project.id)[0].id).description_plain == long_text
 
 
+def test_project_table_sort_restored_after_rebuild(app_env, qtbot):
+    from PySide6.QtCore import Qt
+
+    from taskmanager.ui.main_window import COL_NUMBER, COL_PRIORITY
+
+    window, service = app_env
+    project = service.create_project("Sort")
+    service.create_task(
+        CreateTaskRequest(
+            project_id=project.id, number="2", priority=1, create_folder=False
+        )
+    )
+    service.create_task(
+        CreateTaskRequest(
+            project_id=project.id, number="1", priority=9, create_folder=False
+        )
+    )
+    window.reload_projects()
+    header = window.current_table().horizontalHeader()
+    assert header.sortIndicatorSection() == COL_NUMBER
+    assert header.sortIndicatorOrder() == Qt.SortOrder.AscendingOrder
+
+    header.setSortIndicator(COL_PRIORITY, Qt.SortOrder.DescendingOrder)
+    window.reload_projects()
+    header = window.current_table().horizontalHeader()
+    assert header.sortIndicatorSection() == COL_PRIORITY
+    assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+    stored = next(item for item in service.list_projects() if item.name == "Sort")
+    assert stored.table_sort_column == "priority"
+    assert stored.table_sort_direction == "desc"
+
+    window._show_hidden = True
+    window.reload_projects()
+    header = window.current_table().horizontalHeader()
+    assert header.sortIndicatorSection() == COL_PRIORITY
+    assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+
+
 def test_main_window_creates_project_and_task(app_env, qtbot):
     window, service = app_env
     project = service.create_project("UIDir")

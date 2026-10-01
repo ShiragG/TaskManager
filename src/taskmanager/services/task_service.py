@@ -17,7 +17,6 @@ from taskmanager.domain import (
     WorkflowStatus,
     acknowledge_series,
     clamp_priority,
-    html_to_plain,
     make_folder_name,
     missed_occurrence,
     parse_whole_number,
@@ -25,6 +24,7 @@ from taskmanager.domain import (
     sanitize_for_folder,
     skip_occurrence,
 )
+from taskmanager.domain.markdown_body import markdown_to_plain
 from taskmanager.infrastructure.filesystem import (
     NOTES_LINK_NAME,
     FilesystemError,
@@ -61,6 +61,7 @@ class CreateTaskRequest:
     source_status_id: str | None = None
     source_status_label: str | None = None
     proposed_number: str | None = None
+    reuse_folder: bool = False
 
 
 @dataclass
@@ -181,6 +182,21 @@ class TaskService:
             "Renamed project id=%s %r -> %r", project_id, old_name, new_name
         )
         return self._require_project(project_id)
+
+    def set_table_sort(self, project_id: int, column: str, direction: str) -> None:
+        if column not in {
+            "priority",
+            "number",
+            "status",
+            "date",
+            "description",
+            "comment",
+        }:
+            raise ServiceError("Неизвестный столбец сортировки")
+        if direction not in {"asc", "desc"}:
+            raise ServiceError("Неизвестное направление сортировки")
+        self._require_project(project_id)
+        self.repo.set_table_sort(project_id, column, direction)
 
     def delete_project(self, project_id: int, *, remove_folder: bool = False) -> None:
         project = self._require_project(project_id)
@@ -306,18 +322,28 @@ class TaskService:
         link_pairs: list[tuple[str, str]] = list(request.links or [])
         folder_path: Path | None = None
 
-        if create_folder:
+        if request.reuse_folder:
+            create_folder = True
+            try:
+                folder_path = self.fs.ensure_project(project) / folder_name
+                if folder_path.exists() and not folder_path.is_dir():
+                    raise ServiceError(f"Путь заявки занят файлом: {folder_path}")
+                folder_path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise ServiceError(f"Не удалось подготовить папку заявки: {exc}") from exc
+        elif create_folder:
             try:
                 folder_path = self.fs.create_task_folder(
                     project, folder_name, by_template=request.by_template
                 )
             except FilesystemError as exc:
                 raise ServiceError(str(exc)) from exc
-            if request.create_notes_file:
-                try:
-                    notes_path = self.fs.ensure_notes_file(folder_path)
-                except OSError as exc:
-                    raise ServiceError(f"Не удалось создать файл заметок: {exc}") from exc
+        if create_folder and request.create_notes_file and folder_path is not None:
+            try:
+                notes_path = self.fs.ensure_notes_file(folder_path)
+            except OSError as exc:
+                raise ServiceError(f"Не удалось создать файл заметок: {exc}") from exc
+            if not any(name == NOTES_LINK_NAME for name, _target in link_pairs):
                 link_pairs.append((NOTES_LINK_NAME, str(notes_path)))
 
         task = Task(
@@ -344,8 +370,8 @@ class TaskService:
             ),
             source_status_id=request.source_status_id,
             source_status_label=request.source_status_label,
-            description_plain=html_to_plain(request.description),
-            comment_plain=html_to_plain(request.comment),
+            description_plain=markdown_to_plain(request.description),
+            comment_plain=markdown_to_plain(request.comment),
         )
         try:
             task = self.repo.add_task(task)
@@ -419,10 +445,10 @@ class TaskService:
 
         if request.description is not None:
             task.description = request.description
-            task.description_plain = html_to_plain(request.description)
+            task.description_plain = markdown_to_plain(request.description)
         if request.comment is not None:
             task.comment = request.comment
-            task.comment_plain = html_to_plain(request.comment)
+            task.comment_plain = markdown_to_plain(request.comment)
         if request.clear_date_end:
             task.date_end = None
         elif request.date_end is not None:

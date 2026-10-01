@@ -303,3 +303,65 @@ def test_show_in_tray_roundtrip_and_default_on(tmp_path: Path):
     )
     loaded2 = SettingsStore(path2).load()
     assert loaded2.show_in_tray is True
+
+
+def test_settings_load_skips_write_when_values_match(tmp_path: Path):
+    work = tmp_path / "w"
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    store.save(Settings(work_dir=str(work)))
+    store.load()
+    canonical = json.loads(path.read_text(encoding="utf-8"))
+    reordered = {key: canonical[key] for key in reversed(list(canonical))}
+    path.write_text(
+        json.dumps(reordered, ensure_ascii=False, indent=4) + "\n",
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+    if work.exists():
+        work.rmdir()
+    loaded = SettingsStore(path).load()
+    assert loaded.to_dict() == canonical
+    assert path.read_bytes() == before
+    assert work.is_dir()
+
+
+def test_settings_load_rewrites_missing_keys(tmp_path: Path):
+    work = tmp_path / "w"
+    work.mkdir()
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"work_dir": str(work)}), encoding="utf-8")
+    before = path.read_bytes()
+    loaded = SettingsStore(path).load()
+    assert path.read_bytes() != before
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk == loaded.to_dict()
+    assert "template_name" in on_disk
+
+
+def test_settings_load_rewrites_legacy_source_modules_key(tmp_path: Path):
+    work = tmp_path / "w"
+    work.mkdir()
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    store.save(Settings(work_dir=str(work)))
+    store.load()
+    canonical = json.loads(path.read_text(encoding="utf-8"))
+    raw = dict(canonical)
+    raw["source_modules"] = [
+        {
+            "module_id": "razr",
+            "enabled": True,
+            "github_repo": "https://github.com/ShiragG/taskmanager-source-razr",
+            "display_name": "Разработка (razr)",
+            "login": "user",
+        }
+    ]
+    path.write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+    before = path.read_bytes()
+    loaded_store = SettingsStore(path)
+    loaded = loaded_store.load()
+    assert path.read_bytes() != before
+    assert loaded.to_dict() == canonical
+    assert "source_modules" not in json.loads(path.read_text(encoding="utf-8"))
+    assert loaded_store.pending_source_module_migration[0].module_id == "razr"

@@ -12,7 +12,7 @@ from taskmanager.services.inline_images import (
     apply_inline_images_for_task,
 )
 from taskmanager.services.settings_service import Settings, SourceModuleConfig
-from taskmanager.services.source_host import SourceHost, plain_text_to_html
+from taskmanager.services.source_host import SourceHost
 from taskmanager.services.source_protocol import SourceDraft, SourceFileMeta
 from taskmanager.services.task_service import CreateTaskRequest, TaskService, UpdateTaskRequest
 
@@ -98,9 +98,9 @@ def test_import_hex_png_writes_hash_file_and_img(tmp_path: Path):
     assert stored.is_file()
     assert stored.read_bytes() == PNG_1x1
     assert not (folder / f"{PNG_SHA256}.png").exists()
-    assert "<img" in task.description
-    assert "<a href=" in task.description
-    assert "file://" in task.description
+    assert f"![](.images/{PNG_SHA256}.png)" in task.description
+    assert "<img" not in task.description
+    assert "file://" not in task.description
     assert PNG_HEX not in task.description.replace(" ", "")
     assert draft.files == files
     assert (folder / "doc.pdf").exists() is False
@@ -121,7 +121,7 @@ def test_import_base64_png_writes_hash_file(tmp_path: Path):
     )
     folder = service.task_folder_path(task.id)  # type: ignore[arg-type]
     assert _image_file(folder, f"{PNG_SHA256}.png").read_bytes() == PNG_1x1
-    assert "<img" in task.description
+    assert f"![](.images/{PNG_SHA256}.png)" in task.description
     repo.close()
 
 
@@ -138,7 +138,7 @@ def test_import_hex_jpeg_writes_hash_file(tmp_path: Path):
     stored = _image_file(folder, f"{JPEG_SHA256}.jpeg")
     assert stored.is_file()
     assert stored.read_bytes() == JPEG_BYTES
-    assert "<img" in task.description
+    assert f"![](.images/{JPEG_SHA256}.jpeg)" in task.description
     repo.close()
 
 
@@ -182,7 +182,7 @@ def test_refresh_same_picture_reuses_hash_filename(tmp_path: Path, monkeypatch):
     assert len(pngs) == 1
     assert pngs[0].name == first[0].name
     assert "v2" in refreshed.description
-    assert "<img" in refreshed.description
+    assert f"![](.images/{PNG_SHA256}.png)" in refreshed.description
     repo.close()
 
 
@@ -284,7 +284,7 @@ def test_existing_hex_in_sqlite_unchanged_until_refresh(tmp_path: Path, monkeypa
     host._by_id["fake"].module = _Mod()
     monkeypatch.setattr(host, "get_credentials", lambda mid: ("u", "p"))
     refreshed = host.refresh_task_from_source(task.id)  # type: ignore[arg-type]
-    assert "<img" in refreshed.description
+    assert f"![](.images/{PNG_SHA256}.png)" in refreshed.description
     assert _image_file(folder, f"{PNG_SHA256}.png").is_file()
     repo.close()
 
@@ -300,7 +300,7 @@ def test_save_description_hex_dump_substitutes(tmp_path: Path):
             create_folder=True,
         )
     )
-    html = plain_text_to_html(f"note\n{PNG_HEX}")
+    html = f"note<br>\n{PNG_HEX}"
     new_html = apply_inline_images_for_task(service, task.id, html)  # type: ignore[arg-type]
     service.update_task(task.id, UpdateTaskRequest(description=new_html))  # type: ignore[arg-type]
     got = service.get_task(task.id)  # type: ignore[arg-type]
@@ -322,7 +322,7 @@ def test_save_comment_hex_dump_substitutes(tmp_path: Path):
             create_folder=True,
         )
     )
-    html = plain_text_to_html(PNG_HEX)
+    html = PNG_HEX
     new_html = apply_inline_images_for_task(service, task.id, html)  # type: ignore[arg-type]
     service.update_task(task.id, UpdateTaskRequest(comment=new_html))  # type: ignore[arg-type]
     got = service.get_task(task.id)  # type: ignore[arg-type]
@@ -344,7 +344,7 @@ def test_save_without_folder_creates_folder(tmp_path: Path):
         )
     )
     assert task.has_folder is False
-    html = plain_text_to_html(PNG_HEX)
+    html = PNG_HEX
     new_html = apply_inline_images_for_task(service, task.id, html)  # type: ignore[arg-type]
     service.update_task(task.id, UpdateTaskRequest(description=new_html))  # type: ignore[arg-type]
     got = service.get_task(task.id)  # type: ignore[arg-type]
@@ -395,19 +395,19 @@ def test_save_task_html_extracts_description_and_comment(tmp_path: Path, qtbot):
     )
     window._save_task_html(
         task.id,  # type: ignore[arg-type]
-        description=plain_text_to_html(f"d\n{PNG_HEX}"),
+        description=f"d\n{PNG_HEX}",
     )
     got = service.get_task(task.id)  # type: ignore[arg-type]
-    assert "<img" in got.description
-    assert "<a href=" in got.description
-    assert "file://" in got.description
+    link = f"![](.images/{PNG_SHA256}.png)"
+    assert link in got.description
+    assert "<img" not in got.description
     window._save_task_html(
         task.id,  # type: ignore[arg-type]
-        comment=plain_text_to_html(PNG_HEX),
+        comment=PNG_HEX,
     )
     got = service.get_task(task.id)  # type: ignore[arg-type]
-    assert "<img" in got.comment
-    assert "<a href=" in got.comment
+    assert link in got.comment
+    assert "<img" not in got.comment
     folder = service.task_folder_path(task.id)  # type: ignore[arg-type]
     assert _image_file(folder, f"{PNG_SHA256}.png").is_file()
     repo.close()
@@ -559,10 +559,9 @@ def test_save_pasted_image_writes_dot_images_and_file_uri(tmp_path: Path, qtbot)
     assert stored.is_file()
     assert stored.read_bytes() == PNG_1x1
     assert not (folder / f"{PNG_SHA256}.png").exists()
-    assert "file://" in got.description
-    assert "<img" in got.description
+    assert f"![](.images/{PNG_SHA256}.png)" in got.description
+    assert "file://" not in got.description
     assert uri not in got.description
-    assert _img_width(got.description) == 480
     repo.close()
 
 

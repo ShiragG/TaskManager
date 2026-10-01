@@ -77,12 +77,16 @@ An integer urgency score on a task from 0 (critical) to 10 (calm). Distinct from
 _Avoid_: severity, importance, rank, color
 
 **Description** (описание):
-Task body text stored in SQLite (HTML in the UI); on Import or Refresh from source it may be wholly replaced from a Source item.
-_Avoid_: comment
+The Task's markdown body. On Import or Refresh from source it may be wholly replaced from a Source item.
+_Avoid_: comment, HTML
 
 **Comment** (комментарий):
-Personal HTML notes on a Task in SQLite; never filled from a Source item and never overwritten by Refresh from source. Distinct from the optional Notes file on disk.
-_Avoid_: notes, description, memo
+Personal markdown notes on a Task. Never filled from a Source item and never overwritten by Refresh from source. Distinct from the optional Notes file on disk.
+_Avoid_: notes, description, memo, HTML
+
+**Image** (картинка):
+A picture file in `.images` referenced by Description and Comment. Not a Source file. On-screen size is not part of the image.
+_Avoid_: Source file
 
 **Source module** (модуль источника):
 An optional in-process plugin that reads external work items while TaskManager runs. Without installed/enabled modules, locally created Tasks work as usual; Import / Refresh from source are unavailable.

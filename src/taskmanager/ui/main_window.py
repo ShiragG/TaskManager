@@ -37,6 +37,7 @@ from taskmanager.domain import (
     contrast_foreground,
     html_to_plain,
     is_deadline_warning,
+    make_folder_name,
     natural_sort_key,
     priority_color_hex,
     truncate_plain,
@@ -51,7 +52,10 @@ from taskmanager.services.settings_service import (
     Settings,
     SettingsStore,
 )
-from taskmanager.services.inline_images import apply_inline_images_for_task
+from taskmanager.services.inline_images import (
+    IMAGES_DIR_NAME,
+    apply_markdown_images_for_task,
+)
 from taskmanager.services.task_service import (
     CreateTaskRequest,
     ServiceError,
@@ -74,10 +78,10 @@ from taskmanager.ui.dialogs import (
     ExcelExportDialog,
     MissingFoldersDialog,
     ProjectDialog,
-    RichTextEditDialog,
     SWATCH_SIZE,
     TaskDialog,
 )
+from taskmanager.ui.markdown_editor import MarkdownEditDialog
 from taskmanager.infrastructure.event_sounds import event_ping_path
 from taskmanager.ui.event_sound_player import EventSoundPlayer
 from taskmanager.ui.reminders_window import (
@@ -109,8 +113,30 @@ COL_DATE = 3
 COL_DESCRIPTION = 4
 COL_COMMENT = 5
 
+_SORT_COLUMN_KEYS = {
+    COL_PRIORITY: "priority",
+    COL_NUMBER: "number",
+    COL_STATUS: "status",
+    COL_DATE: "date",
+    COL_DESCRIPTION: "description",
+    COL_COMMENT: "comment",
+}
+_SORT_KEY_COLUMNS = {name: index for index, name in _SORT_COLUMN_KEYS.items()}
+
 DESC_COL_WIDTH = 720
 MSG_SELECT_ONE = "Выберите одну заявку"
+
+
+def _sort_indicator(project: Project | None) -> tuple[int, Qt.SortOrder]:
+    column = project.table_sort_column if project is not None else "number"
+    direction = project.table_sort_direction if project is not None else "asc"
+    section = _SORT_KEY_COLUMNS.get(column, COL_NUMBER)
+    order = (
+        Qt.SortOrder.DescendingOrder
+        if direction == "desc"
+        else Qt.SortOrder.AscendingOrder
+    )
+    return section, order
 
 
 def _format_bytes(n: int) -> str:
@@ -502,7 +528,7 @@ class MainWindow(QMainWindow):
         self.tabs.tabBar().blockSignals(True)
         self.tabs.clear()
         for project in self.service.list_projects():
-            table = self._make_table()
+            table = self._make_table(project)
             self.tabs.addTab(table, project.name)
             self.tabs.tabBar().setTabData(self.tabs.count() - 1, project.id)
         self.tabs.tabBar().blockSignals(False)
@@ -537,7 +563,7 @@ class MainWindow(QMainWindow):
         assert isinstance(table, QTableWidget)
         self._fill_table(table, project)
 
-    def _make_table(self) -> QTableWidget:
+    def _make_table(self, project: Project | None = None) -> QTableWidget:
         table = QTableWidget(0, 6)
         table.setHorizontalHeaderLabels(
             ["Приоритет", "Номер", "Статус", "Срок", "Описание", "Комментарий"]
@@ -558,7 +584,17 @@ class MainWindow(QMainWindow):
         header.resizeSection(COL_DESCRIPTION, DESC_COL_WIDTH)
         header.setMinimumSectionSize(60)
         header.setSortIndicatorShown(True)
-        header.setSortIndicator(COL_NUMBER, Qt.SortOrder.AscendingOrder)
+        section, order = _sort_indicator(project)
+        header.blockSignals(True)
+        header.setSortIndicator(section, order)
+        header.blockSignals(False)
+        if project is not None and project.id is not None:
+            project_id = project.id
+            header.sortIndicatorChanged.connect(
+                lambda logical, sort_order, pid=project_id: self._on_table_sort_changed(
+                    pid, logical, sort_order
+                )
+            )
         table.verticalHeader().setVisible(False)
         table.doubleClicked.connect(self._on_table_double_clicked)
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -569,6 +605,16 @@ class MainWindow(QMainWindow):
         delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         delete_shortcut.activated.connect(self.delete_selected_task)
         return table
+
+    def _on_table_sort_changed(self, project_id: int, section: int, order: Qt.SortOrder) -> None:
+        column = _SORT_COLUMN_KEYS.get(section)
+        if column is None:
+            return
+        direction = "desc" if order == Qt.SortOrder.DescendingOrder else "asc"
+        try:
+            self.service.set_table_sort(project_id, column, direction)
+        except ServiceError as exc:
+            logger.debug("Save table sort failed: %s", exc)
 
     def _fill_table(self, table: QTableWidget, project: Project) -> None:
         query = self._search_query or None
@@ -676,8 +722,67 @@ class MainWindow(QMainWindow):
             mode = "заявок"
         self.statusBar().showMessage(f"{project.name}: {len(tasks)} {mode}")
 
+    def _bind_draft_images(self, dialog: TaskDialog, project_id: int) -> None:
+        dialog.set_images_dir_provider(
+            lambda: self._ensure_draft_images_dir(project_id, dialog),
+            lambda: self._locate_draft_images_dir(project_id, dialog),
+        )
+
+    def _draft_task_folder(self, project_id: int, number: str) -> Path:
+        cleaned = number.strip()
+        if not cleaned:
+            raise ServiceError("Введите номер заявки, чтобы вставить изображение")
+        folder_name = make_folder_name(cleaned)
+        if not folder_name:
+            raise ServiceError("Номер заявки содержит только недопустимые символы")
+        return self.service.project_folder_path(project_id) / folder_name
+
+    def _ensure_draft_images_dir(self, project_id: int, dialog: TaskDialog) -> Path:
+        folder = self._draft_task_folder(project_id, dialog.number)
+        folder.mkdir(parents=True, exist_ok=True)
+        images = folder / IMAGES_DIR_NAME
+        images.mkdir(parents=True, exist_ok=True)
+        dialog.prepared_image_number = dialog.number.strip()
+        dialog.create_folder_cb.setChecked(True)
+        return images
+
+    def _locate_draft_images_dir(
+        self, project_id: int, dialog: TaskDialog
+    ) -> Path | None:
+        number = (dialog.prepared_image_number or "").strip()
+        if not number:
+            return None
+        images = self._draft_task_folder(project_id, number) / IMAGES_DIR_NAME
+        return images if images.is_dir() else None
+
+    def _finalize_prepared_folder(self, project_id: int, dialog: TaskDialog) -> bool:
+        prepared = (dialog.prepared_image_number or "").strip()
+        if not prepared:
+            return False
+        final = dialog.number.strip()
+        if prepared != final:
+            source = self._draft_task_folder(project_id, prepared)
+            dest = self._draft_task_folder(project_id, final)
+            if source.is_dir() and source != dest:
+                if dest.exists():
+                    raise ServiceError(f"Папка заявки уже существует: {dest}")
+                source.rename(dest)
+            dialog.prepared_image_number = final
+        return True
+
+    def _ensure_task_images_dir(self, task_id: int) -> Path:
+        images = self.service.open_task_folder(task_id) / IMAGES_DIR_NAME
+        images.mkdir(parents=True, exist_ok=True)
+        return images
+
+    def _locate_task_images_dir(self, task_id: int) -> Path | None:
+        task = self.service.get_task(task_id)
+        if not task.has_folder:
+            return None
+        return self.service.task_folder_path(task_id) / IMAGES_DIR_NAME
+
     def _html_with_inline_images(self, task_id: int, html: str) -> str:
-        return apply_inline_images_for_task(self.service, task_id, html)
+        return apply_markdown_images_for_task(self.service, task_id, html)
 
     def _save_task_html(
         self,
@@ -736,20 +841,22 @@ class MainWindow(QMainWindow):
             html = task.comment
             files_dir = None
             show_files = False
-        dialog = RichTextEditDialog(
+        dialog = MarkdownEditDialog(
             self,
             title=title,
-            html=html,
-            image_preview_width=self.settings.image_preview_width,
+            markdown=html,
+            ensure_images_dir=lambda: self._ensure_task_images_dir(task_id),
+            images_dir=self._locate_task_images_dir(task_id),
             source_files_dir=files_dir,
             show_source_files_button=show_files,
+            image_preview_width=self.settings.image_preview_width,
         )
-        if dialog.exec() != RichTextEditDialog.DialogCode.Accepted:
+        if dialog.exec() != MarkdownEditDialog.DialogCode.Accepted:
             return
         if column == COL_DESCRIPTION:
-            self._save_task_html(task_id, description=dialog.html)
+            self._save_task_html(task_id, description=dialog.markdown)
         else:
-            self._save_task_html(task_id, comment=dialog.html)
+            self._save_task_html(task_id, comment=dialog.markdown)
 
     # --- selection helpers ---
 
@@ -892,9 +999,11 @@ class MainWindow(QMainWindow):
             folder_validator=self._make_create_folder_validator(project_id),
             initial_number=initial_number,
         )
+        self._bind_draft_images(dialog, project_id)
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return
         try:
+            reuse_folder = self._finalize_prepared_folder(project_id, dialog)
             task = self.service.create_task(
                 CreateTaskRequest(
                     project_id=project_id,
@@ -906,11 +1015,12 @@ class MainWindow(QMainWindow):
                     color=None,
                     priority=dialog.priority,
                     hidden=dialog.hidden,
-                    by_template=dialog.by_template,
+                    by_template=dialog.by_template and not reuse_folder,
                     create_notes_file=dialog.create_notes_file,
                     create_folder=dialog.create_folder,
                     links=dialog.links,
                     workflow_status=dialog.workflow_status,
+                    reuse_folder=reuse_folder,
                 )
             )
             new_desc = self._html_with_inline_images(
@@ -992,6 +1102,7 @@ class MainWindow(QMainWindow):
             ),
             **kwargs,
         )
+        self._bind_draft_images(dialog, project_id)
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             logger.debug("UI: import TaskDialog cancelled")
             return
@@ -1002,14 +1113,16 @@ class MainWindow(QMainWindow):
             dialog.number,
         )
         try:
+            reuse_folder = self._finalize_prepared_folder(project_id, dialog)
             task = self.source_host.create_task_from_draft(
                 project_id=project_id,
                 module_id=module_id,
                 draft=draft,
                 create_folder=dialog.create_folder,
                 create_notes_file=dialog.create_notes_file,
-                by_template=dialog.by_template,
+                by_template=dialog.by_template and not reuse_folder,
                 download_files=False,
+                reuse_folder=reuse_folder,
                 comment=dialog.comment,
                 date_end=dialog.date_end,
                 hidden=dialog.hidden,
@@ -1405,6 +1518,13 @@ class MainWindow(QMainWindow):
 
     def _make_create_folder_validator(self, project_id: int):
         def validate(dialog: TaskDialog) -> str | None:
+            prepared = (dialog.prepared_image_number or "").strip()
+            if prepared and prepared == dialog.number.strip():
+                if dialog.by_template:
+                    return (
+                        "Нельзя создать из шаблона: папка уже создана для изображения"
+                    )
+                return None
             need_folder = (
                 dialog.create_folder or dialog.by_template or dialog.create_notes_file
             )
@@ -1479,6 +1599,10 @@ class MainWindow(QMainWindow):
                 if task.has_folder
                 else None
             ),
+        )
+        dialog.set_images_dir_provider(
+            lambda: self._ensure_task_images_dir(task_id),
+            lambda: self._locate_task_images_dir(task_id),
         )
         if dialog.exec() != TaskDialog.DialogCode.Accepted:
             return

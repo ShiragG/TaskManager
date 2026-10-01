@@ -290,3 +290,71 @@ def apply_inline_images_for_task(
     dest = task_service.task_folder_path(task_id) / IMAGES_DIR_NAME
     new_html, _written = apply_inline_images(html_text, dest)
     return new_html
+
+
+def apply_inline_images_as_markdown(text: str, dest_dir: Path) -> tuple[str, list[str]]:
+    """Write image dumps and replace them with ``![](.images/name.ext)``.
+
+    ``dest_dir`` is the ``.images`` directory and is created if missing.
+    Existing files with the same hash are overwritten. Orphans are kept.
+    """
+    if not text:
+        return text, []
+    blobs = iter_inline_image_blobs(text)
+    if not blobs:
+        return text, []
+    written: list[str] = []
+    pieces: list[str] = []
+    last = 0
+    for start, end, data in blobs:
+        ext = sniff_image(data)
+        if ext is None:
+            continue
+        name, _uri = _write_image(dest_dir, data, ext)
+        written.append(name)
+        pieces.append(text[last:start])
+        pieces.append(f"![]({IMAGES_DIR_NAME}/{name})")
+        last = end
+    pieces.append(text[last:])
+    return "".join(pieces), written
+
+
+def apply_markdown_images_for_task(
+    task_service: TaskService, task_id: int, text: str
+) -> str:
+    """Create the task folder if needed and store image dumps as markdown links."""
+    if not text or not html_has_extractable_images(text):
+        return text
+    task = task_service.get_task(task_id)
+    if not task.has_folder:
+        task_service.recreate_task_folder(task_id)
+    dest = task_service.task_folder_path(task_id) / IMAGES_DIR_NAME
+    new_text, _written = apply_inline_images_as_markdown(text, dest)
+    return new_text
+
+
+def write_markdown_image(images_dir: Path, data: bytes, preferred_name: str) -> str:
+    """Write ``data`` into ``.images`` and return ``![](.images/name.ext)``.
+
+    Reuses a file that already holds the same bytes. A different file with the
+    same name gets a numeric suffix.
+    """
+    ext = sniff_image(data)
+    if ext is None:
+        raise ValueError("unsupported image")
+    stem = _safe_image_stem(preferred_name) or "image"
+    images_dir.mkdir(parents=True, exist_ok=True)
+    candidate = images_dir / f"{stem}.{ext}"
+    suffix = 2
+    while candidate.exists() and candidate.read_bytes() != data:
+        candidate = images_dir / f"{stem}-{suffix}.{ext}"
+        suffix += 1
+    if not candidate.exists():
+        candidate.write_bytes(data)
+    return f"![]({IMAGES_DIR_NAME}/{candidate.name})"
+
+
+def _safe_image_stem(name: str) -> str:
+    stem = Path(name).stem
+    cleaned = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in stem)
+    return cleaned.strip("-_")[:80]

@@ -248,12 +248,14 @@ class SettingsStore:
             raw = json.load(fh)
         if not isinstance(raw, dict):
             raw = {}
+        # Key order and trailing whitespace are not a difference: compare values.
+        had_source_modules = "source_modules" in raw
         self.pending_source_module_migration = parse_source_module_configs(
             raw.pop("source_modules", None)
         )
         settings = Settings.from_dict(raw)
-        # Normalize: drop unknown keys / fill missing by rewriting (no source_modules)
-        self.save(settings)
+        if had_source_modules or settings.to_dict() != raw:
+            self.save(settings)
         self._ensure_work_dir(settings)
         return settings
 

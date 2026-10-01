@@ -24,8 +24,8 @@ def test_export_excel(tmp_path: Path):
         CreateTaskRequest(
             project_id=project.id,
             number="1",
-            description='<a href="https://example.com"><b>Hello</b></a>',
-            comment="<i>c</i>",
+            description="[Hello](https://example.com)",
+            comment="*c*",
             date_end=date(2020, 1, 1),
             color="#ffff00",
             create_folder=False,

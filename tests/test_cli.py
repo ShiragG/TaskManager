@@ -146,15 +146,16 @@ def test_no_arguments_uses_gui_not_cli(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_project_list_create_get_and_comment_append(
     isolated_app: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert invoke("project", "create", "--name", "Alpha") == 0
+    assert invoke("--human", "project", "create", "--name", "Alpha") == 0
     assert capsys.readouterr().out.strip() == "Alpha"
 
-    assert invoke("project", "list") == 0
+    assert invoke("--human", "project", "list") == 0
     listed = capsys.readouterr().out
     assert "NAME" in listed
     assert "Alpha" in listed
 
     assert invoke(
+        "--human",
         "task",
         "create",
         "--project",
@@ -166,7 +167,7 @@ def test_project_list_create_get_and_comment_append(
     ) == 0
     assert capsys.readouterr().out.strip() == "42"
 
-    assert invoke("task", "list", "--project", "Alpha") == 0
+    assert invoke("--human", "task", "list", "--project", "Alpha") == 0
     table = capsys.readouterr().out
     assert "PRIORITY" in table
     assert "42" in table
@@ -177,7 +178,8 @@ def test_project_list_create_get_and_comment_append(
     assert payload["number"] == "42"
     assert payload["project"] == "Alpha"
     assert payload["description"] == "hello"
-    assert payload["description_plain"] == "hello"
+    assert "description_plain" not in payload
+    assert "comment_plain" not in payload
     assert payload["priority"] == 10
     assert payload["folder"] is None
     assert "id" not in payload
@@ -197,13 +199,46 @@ def test_project_list_create_get_and_comment_append(
         )
         == 0
     )
-    capsys.readouterr()
+    appended = json.loads(capsys.readouterr().out)
+    assert set(appended) == {"project", "number", "comment"}
+    assert appended["project"] == "Alpha"
+    assert appended["number"] == "42"
+    assert "<p>" not in appended["comment"]
+    assert "note <ok>" in appended["comment"]
+    assert "note &lt;ok&gt;" not in appended["comment"]
+    assert re.search(r"^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}$", appended["comment"], re.M)
     assert invoke("task", "get", "--project", "Alpha", "--number", "42") == 0
     after = json.loads(capsys.readouterr().out)
-    assert "<p>" in after["comment"]
-    assert "note &lt;ok&gt;" in after["comment"]
-    assert re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", after["comment"])
-    assert "note <ok>" in after["comment_plain"]
+    assert after["comment"] == appended["comment"]
+
+
+def test_comment_append_reads_stdin(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    invoke("project", "create", "--name", "Alpha")
+    invoke("task", "create", "--project", "Alpha", "--number", "1", "--comment", "keep")
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("from stdin\n- [ ] item"))
+    assert (
+        invoke(
+            "task",
+            "comment",
+            "append",
+            "--project",
+            "Alpha",
+            "--number",
+            "1",
+            "--text",
+            "-",
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert invoke("task", "get", "--project", "Alpha", "--number", "1", "--field", "comment") == 0
+    comment = json.loads(capsys.readouterr().out)
+    assert comment.startswith("keep\n\n## ")
+    assert "- [ ] item" in comment
+    assert "<p>" not in comment
 
 
 def test_folder_null_then_ensure(
@@ -221,7 +256,7 @@ def test_folder_null_then_ensure(
     err = capsys.readouterr().err
     assert "no folder" in err.lower()
 
-    assert invoke("task", "folder", "ensure", "--project", "Beta", "--number", "1") == 0
+    assert invoke("--human", "task", "folder", "ensure", "--project", "Beta", "--number", "1") == 0
     path = Path(capsys.readouterr().out.strip())
     assert path.is_dir()
 
@@ -239,7 +274,7 @@ def test_cli_runs_while_instance_lock_held(
     guard = InstanceGuard(isolated_app)
     assert guard.try_become_primary()
     try:
-        assert invoke("project", "list") == 0
+        assert invoke("--human", "project", "list") == 0
         out = capsys.readouterr().out
         assert "NAME" in out
     finally:
@@ -254,16 +289,18 @@ def test_hide_archive_restore_delete(
     capsys.readouterr()
 
     assert invoke("task", "hide", "--project", "Gamma", "--number", "7") == 0
-    assert invoke("task", "list", "--project", "Gamma") == 0
+    capsys.readouterr()
+    assert invoke("--human", "task", "list", "--project", "Gamma") == 0
     assert "7" not in _task_numbers(capsys.readouterr().out)
-    assert invoke("task", "list", "--project", "Gamma", "--hidden") == 0
+    assert invoke("--human", "task", "list", "--project", "Gamma", "--hidden") == 0
     assert "7" in _task_numbers(capsys.readouterr().out)
 
     assert invoke("task", "unhide", "--project", "Gamma", "--number", "7") == 0
     assert invoke("task", "archive", "--project", "Gamma", "--number", "7") == 0
-    assert invoke("task", "list", "--project", "Gamma") == 0
+    capsys.readouterr()
+    assert invoke("--human", "task", "list", "--project", "Gamma") == 0
     assert "7" not in _task_numbers(capsys.readouterr().out)
-    assert invoke("task", "list", "--project", "Gamma", "--archive") == 0
+    assert invoke("--human", "task", "list", "--project", "Gamma", "--archive") == 0
     assert "7" in _task_numbers(capsys.readouterr().out)
 
     assert invoke("task", "restore", "--project", "Gamma", "--number", "7") == 0
@@ -309,7 +346,7 @@ def test_task_search_table_has_project_column(
     )
     capsys.readouterr()
 
-    assert invoke("task", "search", "needle") == 0
+    assert invoke("--human", "task", "search", "needle") == 0
     table = capsys.readouterr().out
     assert "PROJECT" in table
     assert "Alpha" in table
@@ -318,19 +355,15 @@ def test_task_search_table_has_project_column(
     assert "Beta" not in table
     assert "20" not in table
 
-    assert invoke("--json", "task", "search", "needle") == 0
+    assert invoke("task", "search", "needle") == 0
     rows = json.loads(capsys.readouterr().out)
-    assert rows == [
-        {
-            "project": "Alpha",
-            "priority": 10,
-            "number": "10",
-            "status": "Новая",
-            "date_end": None,
-            "description_plain": "needle in alpha",
-            "comment_plain": "",
-        }
-    ]
+    assert invoke("task", "get", "--project", "Alpha", "--number", "10") == 0
+    got = json.loads(capsys.readouterr().out)
+    assert rows == [got]
+    assert "partial" not in got
+    assert "description_plain" not in got
+    assert got["description"] == "needle in alpha"
+    assert got["status"] == "active"
 
 
 def test_task_search_archive_excludes_active(
@@ -354,11 +387,206 @@ def test_task_search_archive_excludes_active(
     active = capsys.readouterr().out
     assert "7" not in active
 
-    assert invoke("task", "search", "needle", "--archive") == 0
+    assert invoke("--human", "task", "search", "needle", "--archive") == 0
     archived = capsys.readouterr().out
     assert "PROJECT" in archived
     assert "Gamma" in archived
     assert "7" in archived
+
+
+def test_search_json_one_hit_two_hits_and_empty(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    invoke("project", "create", "--name", "Alpha")
+    invoke("project", "create", "--name", "Beta")
+    long_comment = "needle " + ("y" * 200)
+    invoke(
+        "task",
+        "create",
+        "--project",
+        "Alpha",
+        "--number",
+        "1",
+        "--description",
+        "alpha text",
+        "--comment",
+        "needle lives in the first comment",
+    )
+    invoke(
+        "task",
+        "create",
+        "--project",
+        "Beta",
+        "--number",
+        "2",
+        "--description",
+        "beta text",
+        "--comment",
+        long_comment,
+    )
+    capsys.readouterr()
+
+    assert invoke("task", "search", "no-such-token") == 0
+    assert json.loads(capsys.readouterr().out) == []
+
+    assert invoke("task", "search", "alpha text") == 0
+    one = json.loads(capsys.readouterr().out)
+    assert invoke("task", "get", "--project", "Alpha", "--number", "1") == 0
+    got = json.loads(capsys.readouterr().out)
+    assert one == [got]
+    assert "partial" not in got
+
+    assert invoke("task", "search", "needle") == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert len(rows) == 2
+    by_number = {row["number"]: row for row in rows}
+    assert set(by_number) == {"1", "2"}
+    for row in rows:
+        assert row["partial"] is True
+        assert "description" not in row
+        assert "comment" not in row
+        assert row["status"] == "active"
+        assert row["source_status_label"] is None
+    assert by_number["1"]["project"] == "Alpha"
+    assert by_number["1"]["snippet"] == "needle lives in the first comment"
+    assert by_number["2"]["snippet"] == long_comment[:160] + "…"
+    assert len(by_number["2"]["snippet"]) == 161
+
+
+def test_search_number_only_snippet_follows_list(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    invoke("project", "create", "--name", "Alpha")
+    invoke("project", "create", "--name", "Beta")
+    invoke(
+        "task",
+        "create",
+        "--project",
+        "Alpha",
+        "--number",
+        "19",
+        "--description",
+        "alpha body",
+        "--comment",
+        "alpha note",
+    )
+    invoke(
+        "task",
+        "create",
+        "--project",
+        "Beta",
+        "--number",
+        "91",
+        "--comment",
+        "beta note only",
+    )
+    capsys.readouterr()
+    assert invoke("task", "search", "9") == 0
+    rows = json.loads(capsys.readouterr().out)
+    by_number = {row["number"]: row for row in rows}
+    assert by_number["19"]["partial"] is True
+    assert by_number["19"]["snippet"] == "alpha body"
+    assert by_number["91"]["snippet"] == "beta note only"
+
+
+def test_create_and_update_read_one_stdin_body(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+
+    invoke("project", "create", "--name", "Alpha")
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin", io.StringIO("desc from stdin\n"))
+    assert (
+        invoke(
+            "task",
+            "create",
+            "--project",
+            "Alpha",
+            "--number",
+            "1",
+            "--description",
+            "-",
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert invoke("task", "get", "--project", "Alpha", "--number", "1") == 0
+    created = json.loads(capsys.readouterr().out)
+    assert created["description"] == "desc from stdin"
+    assert created["comment"] == ""
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("comment from stdin\n"))
+    assert (
+        invoke(
+            "task",
+            "update",
+            "--project",
+            "Alpha",
+            "--number",
+            "1",
+            "--comment",
+            "-",
+        )
+        == 0
+    )
+    capsys.readouterr()
+    assert invoke("task", "get", "--project", "Alpha", "--number", "1") == 0
+    updated = json.loads(capsys.readouterr().out)
+    assert updated["description"] == "desc from stdin"
+    assert updated["comment"] == "comment from stdin"
+
+
+def test_two_stdin_bodies_are_usage(
+    isolated_app: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import io
+
+    invoke("project", "create", "--name", "Alpha")
+    invoke("task", "create", "--project", "Alpha", "--number", "1", "--description", "keep")
+    capsys.readouterr()
+    monkeypatch.setattr("sys.stdin", io.StringIO("should not be read"))
+    assert (
+        invoke(
+            "task",
+            "create",
+            "--project",
+            "Alpha",
+            "--number",
+            "2",
+            "--description",
+            "-",
+            "--comment",
+            "-",
+        )
+        == 2
+    )
+    err = json.loads(capsys.readouterr().err)
+    assert err["code"] == "usage"
+    assert invoke("task", "get", "--project", "Alpha", "--number", "2") == 1
+    capsys.readouterr()
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("should not be read"))
+    assert (
+        invoke(
+            "task",
+            "update",
+            "--project",
+            "Alpha",
+            "--number",
+            "1",
+            "--description",
+            "-",
+            "--comment",
+            "-",
+        )
+        == 2
+    )
+    err = json.loads(capsys.readouterr().err)
+    assert err["code"] == "usage"
+    assert invoke("task", "get", "--project", "Alpha", "--number", "1") == 0
+    kept = json.loads(capsys.readouterr().out)
+    assert kept["description"] == "keep"
 
 
 def test_task_search_without_query_is_usage(
@@ -397,6 +625,7 @@ def test_links_and_excel(isolated_app: Path, capsys: pytest.CaptureFixture[str])
         )
         == 0
     )
+    capsys.readouterr()
     assert invoke("link", "list", "--project", "Epsilon", "--number", "1") == 0
     listed = capsys.readouterr().out
     assert "docs" in listed
@@ -410,6 +639,7 @@ def test_links_and_excel(isolated_app: Path, capsys: pytest.CaptureFixture[str])
     assert dest.stat().st_size > 4
 
     assert invoke("link", "remove", "--project", "Epsilon", "--number", "1", "--name", "docs") == 0
+    capsys.readouterr()
     assert invoke("--json", "link", "list", "--project", "Epsilon", "--number", "1") == 0
     assert json.loads(capsys.readouterr().out) == []
 
@@ -454,7 +684,9 @@ def test_comment_set_replaces_field(
         )
         == 0
     )
-    capsys.readouterr()
+    replaced = json.loads(capsys.readouterr().out)
+    assert set(replaced) == {"project", "number", "comment"}
+    assert replaced["comment"] == "new only"
     invoke("task", "get", "--project", "Notes", "--number", "1")
     payload = json.loads(capsys.readouterr().out)
     assert payload["comment"] == "new only"
@@ -683,7 +915,7 @@ def test_source_module_list_table_and_json(
     finally:
         repo.close()
 
-    assert invoke("source", "module", "list") == 0
+    assert invoke("--human", "source", "module", "list") == 0
     table = capsys.readouterr().out
     assert "ID" in table
     assert "fake" in table
@@ -997,27 +1229,36 @@ def test_task_list_status_is_display_status(
         "in_progress",
     )
     capsys.readouterr()
-    assert invoke("task", "list", "--project", "W") == 0
+    assert invoke("--human", "task", "list", "--project", "W") == 0
     table = capsys.readouterr().out
     assert "В работе" in table
+    assert "SNIPPET" in table
     for line in table.splitlines():
         assert line == line.rstrip()
     assert not table.endswith("\n\n")
 
-    assert invoke("--json", "task", "list", "--project", "W") == 0
+    assert invoke("task", "list", "--project", "W") == 0
     rows = json.loads(capsys.readouterr().out)
-    assert rows[0]["status"] == "В работе"
+    assert rows[0]["partial"] is True
+    assert rows[0]["status"] == "active"
+    assert rows[0]["workflow_status"] == "in_progress"
+    assert "project" not in rows[0]
+    assert "description" not in rows[0]
+    assert "comment" not in rows[0]
 
     assert invoke("task", "get", "--project", "W", "--number", "1") == 0
     got = json.loads(capsys.readouterr().out)
     assert got["status"] == "active"
     assert got["workflow_status"] == "in_progress"
+    assert "partial" not in got
 
     invoke("task", "archive", "--project", "W", "--number", "1")
     capsys.readouterr()
-    assert invoke("--json", "task", "list", "--project", "W", "--archive") == 0
+    assert invoke("task", "list", "--project", "W", "--archive") == 0
     archived = json.loads(capsys.readouterr().out)
-    assert archived[0]["status"] == "В работе"
+    assert archived[0]["status"] == "archived"
+    assert archived[0]["partial"] is True
+    assert archived[0]["workflow_status"] == "in_progress"
 
 
 def test_json_comment_keeps_inner_blank_lines(
@@ -1118,20 +1359,21 @@ def test_cli_file_image_marker_from_html_not_sqlite_column(
     payload = json.loads(capsys.readouterr().out)
     assert payload["description"] == html
     assert payload["comment"] == html
-    assert payload["description_plain"] == f"see {marker}"
-    assert payload["comment_plain"] == f"see {marker}"
-    assert "\ufffc" not in payload["description_plain"]
-    assert "\ufffc" not in payload["comment_plain"]
+    assert "description_plain" not in payload
+    assert "comment_plain" not in payload
+    assert "\ufffc" not in payload["description"]
+    assert "\ufffc" not in payload["comment"]
 
     assert invoke("task", "list", "--project", "Pics") == 0
-    table = capsys.readouterr().out
-    assert marker in table
-    assert "\ufffc" not in table
-
-    assert invoke("--json", "task", "search", "see") == 0
     rows = json.loads(capsys.readouterr().out)
-    assert rows[0]["description_plain"] == f"see {marker}"
-    assert rows[0]["comment_plain"] == f"see {marker}"
+    assert rows[0]["partial"] is True
+    assert rows[0]["snippet"].startswith("<p>see</p>")
+    assert "\ufffc" not in rows[0]["snippet"]
+    assert "description" not in rows[0]
+
+    assert invoke("task", "search", "see") == 0
+    found = json.loads(capsys.readouterr().out)
+    assert found == [payload]
 
 
 def test_cli_disk_path_image_marker(
@@ -1146,7 +1388,7 @@ def test_cli_disk_path_image_marker(
     assert invoke("task", "get", "--project", "Pics", "--number", "1") == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["description"] == html
-    assert payload["description_plain"] == f"disk {marker}"
+    assert "description_plain" not in payload
 
 
 def test_cli_hex_dump_becomes_bare_marker_without_writing(
@@ -1168,20 +1410,19 @@ def test_cli_hex_dump_becomes_bare_marker_without_writing(
     assert "89504e47" not in payload["comment"].casefold()
     assert "data:" not in payload["description"]
     assert "iVBORw0KGgo" not in payload["comment"]
-    assert payload["description_plain"] == "see [image]"
-    assert payload["comment_plain"] == "note [image]"
+    assert "description_plain" not in payload
+    assert "comment_plain" not in payload
     assert _image_files(isolated_app) == written_before
 
     assert invoke("task", "list", "--project", "Pics") == 0
-    table = capsys.readouterr().out
-    assert "[image]" in table
-    assert "89504e47" not in table.casefold()
-    assert "iVBORw0KGgo" not in table
-
-    assert invoke("--json", "task", "search", "see") == 0
     rows = json.loads(capsys.readouterr().out)
-    assert rows[0]["description_plain"] == "see [image]"
-    assert rows[0]["comment_plain"] == "note [image]"
+    assert "[image]" in rows[0]["snippet"]
+    assert "89504e47" not in rows[0]["snippet"].casefold()
+    assert "iVBORw0KGgo" not in rows[0]["snippet"]
+
+    assert invoke("task", "search", "see") == 0
+    found = json.loads(capsys.readouterr().out)
+    assert found == [payload]
 
 
 def test_cli_hex_dump_uses_existing_task_image_without_writing(
@@ -1210,7 +1451,7 @@ def test_cli_hex_dump_uses_existing_task_image_without_writing(
     payload = json.loads(capsys.readouterr().out)
     assert marker in payload["description"]
     assert "89504e47" not in payload["description"].casefold()
-    assert payload["description_plain"] == f"see {marker}"
+    assert "description_plain" not in payload
     assert png.read_bytes() == _PNG_1x1
     assert png.stat().st_mtime_ns == mtime
 

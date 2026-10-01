@@ -21,8 +21,8 @@ def test_plain_written_on_save_and_search_uses_plain(tmp_path: Path):
         CreateTaskRequest(
             project_id=project.id,
             number="1",
-            description="<b>visible word</b> and more",
-            comment="<i>note token</i>",
+            description="**visible word** and more",
+            comment="*note token*",
             create_folder=False,
         )
     )
@@ -33,8 +33,7 @@ def test_plain_written_on_save_and_search_uses_plain(tmp_path: Path):
     assert len(found) == 1
     found_comment = service.list_tasks(project.id, query="note token")
     assert len(found_comment) == 1
-    # HTML tags are not searchable
-    assert service.list_tasks(project.id, query="<b>") == []
+    assert service.list_tasks(project.id, query="**") == []
     service.repo.close()
 
 
@@ -80,10 +79,25 @@ def test_plain_backfill_on_legacy_db(tmp_path: Path):
     repo = SqliteRepository(db)
     task = repo.get_task(1)
     assert task is not None
+    assert task.description == "**backfilled**"
+    assert task.comment == "*cplain*"
     assert task.description_plain == "backfilled"
     assert task.comment_plain == "cplain"
     found = repo.list_tasks(1, query="backfilled")
     assert len(found) == 1
+    repo.close()
+
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE tasks SET description = ?, description_plain = ? WHERE id = 1",
+        ("<b>again</b>", "again"),
+    )
+    conn.commit()
+    conn.close()
+    repo = SqliteRepository(db)
+    task = repo.get_task(1)
+    assert task is not None
+    assert task.description == "<b>again</b>"
     repo.close()
 
 

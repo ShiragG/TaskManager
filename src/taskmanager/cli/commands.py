@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import sys
 from datetime import date, datetime
-from html import escape
 from pathlib import Path
 
 from taskmanager.cli.html_plain import html_for_cli, html_to_cli_plain
+from taskmanager.domain.markdown_body import looks_like_html, markdown_to_plain
 from taskmanager.cli.output import (
     emit_json,
     emit_json_value,
@@ -73,20 +74,92 @@ def cli_images_dir(service: TaskService, task: Task) -> Path | None:
     return Path(folder) / IMAGES_DIR_NAME
 
 
-def _task_cli_plain(service: TaskService, task: Task, html: str) -> str:
-    return html_to_cli_plain(html, images_dir=cli_images_dir(service, task))
+_SNIPPET_LIMIT = 160
+
+
+def resolve_cli_text(value: str) -> str:
+    """``-`` reads the body from stdin."""
+    if value == "-":
+        return sys.stdin.read()
+    return value
+
+
+def resolve_description_comment(
+    description: str | None, comment: str | None
+) -> tuple[str | None, str | None]:
+    """Resolve ``--description`` / ``--comment``. ``-`` reads stdin; both at once is an error."""
+    if description == "-" and comment == "-":
+        raise CliError(
+            "only one of --description and --comment can read stdin",
+            code="usage",
+        )
+    if description is not None:
+        description = resolve_cli_text(description)
+    if comment is not None:
+        comment = resolve_cli_text(comment)
+    return description, comment
+
+
+def clip_snippet(text: str) -> str:
+    if len(text) > _SNIPPET_LIMIT:
+        return text[:_SNIPPET_LIMIT] + "…"
+    return text
+
+
+def list_snippet(description: str, comment: str) -> str:
+    return clip_snippet(description if description else comment)
+
+
+def search_snippet(description: str, comment: str, query: str) -> str:
+    needle = query.casefold()
+    if needle in description.casefold():
+        return clip_snippet(description)
+    if needle in comment.casefold():
+        return clip_snippet(comment)
+    return list_snippet(description, comment)
+
+
+def append_comment_markdown(existing: str, text: str, *, now: datetime | None = None) -> str:
+    """Blank line, ``## YYYY-MM-DD HH:MM``, then the markdown body."""
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
+    block = f"## {stamp}\n{text}"
+    previous = (existing or "").rstrip()
+    if not previous:
+        return block
+    return f"{previous}\n\n{block}"
+
+
+def cli_body(text: str, *, images_dir: Path | None) -> tuple[str, str]:
+    """Stored markdown for agents, plus a plain preview.
+
+    HTML left from before the markdown migration still uses the old preview.
+    """
+    shown = html_for_cli(text or "", images_dir=images_dir)
+    if looks_like_html(shown):
+        plain = html_to_cli_plain(text or "", images_dir=images_dir)
+    else:
+        plain = markdown_to_plain(shown)
+    return shown, plain
+
+
+def _task_cli_body(service: TaskService, task: Task, text: str) -> tuple[str, str]:
+    return cli_body(text, images_dir=cli_images_dir(service, task))
+
+
+def _shown_bodies(service: TaskService, task: Task) -> tuple[str, str]:
+    description, _plain = _task_cli_body(service, task, task.description)
+    comment, _plain = _task_cli_body(service, task, task.comment)
+    return description, comment
 
 
 def task_payload(service: TaskService, project: Project, task: Task) -> dict[str, object]:
     created = task.created_at.isoformat(timespec="seconds") if task.created_at else None
-    images_dir = cli_images_dir(service, task)
+    description, comment = _shown_bodies(service, task)
     return {
         "project": project.name,
         "number": task.number,
-        "description": html_for_cli(task.description, images_dir=images_dir),
-        "description_plain": html_to_cli_plain(task.description, images_dir=images_dir),
-        "comment": html_for_cli(task.comment, images_dir=images_dir),
-        "comment_plain": html_to_cli_plain(task.comment, images_dir=images_dir),
+        "description": description,
+        "comment": comment,
         "priority": task.priority,
         "status": task.status.value,
         "workflow_status": task.workflow_status.value,
@@ -106,14 +179,54 @@ def task_payload(service: TaskService, project: Project, task: Task) -> dict[str
     }
 
 
+def comment_payload(
+    service: TaskService, project: Project, task: Task
+) -> dict[str, object]:
+    comment, _plain = _task_cli_body(service, task, task.comment)
+    return {
+        "project": project.name,
+        "number": task.number,
+        "comment": comment,
+    }
+
+
+def partial_task_row(
+    task: Task, snippet: str, *, project: str | None = None
+) -> dict[str, object]:
+    row: dict[str, object] = {}
+    if project is not None:
+        row["project"] = project
+    row.update(
+        {
+            "partial": True,
+            "snippet": snippet,
+            "number": task.number,
+            "priority": task.priority,
+            "status": task.status.value,
+            "workflow_status": task.workflow_status.value,
+            "source_status_label": (
+                task.source_status_label if task.has_source else None
+            ),
+            "date_end": task.date_end.isoformat() if task.date_end else None,
+            "hidden": task.hidden,
+            "has_folder": task.has_folder,
+            "has_source": task.has_source,
+        }
+    )
+    return row
+
+
 def source_draft_payload(
     draft: SourceDraft, *, images_dir: Path | None = None
 ) -> dict[str, object]:
+    description, description_plain = cli_body(
+        draft.description, images_dir=images_dir
+    )
     return {
         "external_id": draft.external_id,
         "number": draft.number,
-        "description": html_for_cli(draft.description, images_dir=images_dir),
-        "description_plain": html_to_cli_plain(draft.description, images_dir=images_dir),
+        "description": description,
+        "description_plain": description_plain,
         "priority": draft.priority,
         "source_label": draft.source_label,
         "source_status_id": draft.source_status_id,
@@ -184,31 +297,23 @@ def cmd_task_list(
         "NUMBER",
         "STATUS",
         "DATE_END",
-        "DESCRIPTION",
-        "COMMENT",
+        "SNIPPET",
     )
-    rows = [
-        [
-            task.priority,
-            task.number,
-            task.display_status,
-            task.date_end.isoformat() if task.date_end else "",
-            _task_cli_plain(service, task, task.description),
-            _task_cli_plain(service, task, task.comment),
-        ]
-        for task in tasks
-    ]
-    json_rows = [
-        {
-            "priority": task.priority,
-            "number": task.number,
-            "status": task.display_status,
-            "date_end": task.date_end.isoformat() if task.date_end else None,
-            "description_plain": _task_cli_plain(service, task, task.description),
-            "comment_plain": _task_cli_plain(service, task, task.comment),
-        }
-        for task in tasks
-    ]
+    rows: list[list[object]] = []
+    json_rows: list[dict[str, object]] = []
+    for task in tasks:
+        description, comment = _shown_bodies(service, task)
+        snippet = list_snippet(description, comment)
+        rows.append(
+            [
+                task.priority,
+                task.number,
+                task.display_status,
+                task.date_end.isoformat() if task.date_end else "",
+                snippet,
+            ]
+        )
+        json_rows.append(partial_task_row(task, snippet))
     emit_table(headers, rows, json_mode=json_mode, json_rows=json_rows)
     return 0
 
@@ -221,40 +326,36 @@ def cmd_task_search(
     json_mode: bool,
 ) -> int:
     tasks = service.search(query, archived=archived)
-    names = {p.id: p.name for p in service.list_projects() if p.id is not None}
+    projects = {p.id: p for p in service.list_projects() if p.id is not None}
+    if json_mode and len(tasks) == 1:
+        task = tasks[0]
+        emit_json([task_payload(service, projects[task.project_id], task)])
+        return 0
     headers = (
         "PROJECT",
         "PRIORITY",
         "NUMBER",
         "STATUS",
         "DATE_END",
-        "DESCRIPTION",
-        "COMMENT",
+        "SNIPPET",
     )
-    rows = [
-        [
-            names.get(task.project_id, ""),
-            task.priority,
-            task.number,
-            task.display_status,
-            task.date_end.isoformat() if task.date_end else "",
-            _task_cli_plain(service, task, task.description),
-            _task_cli_plain(service, task, task.comment),
-        ]
-        for task in tasks
-    ]
-    json_rows = [
-        {
-            "project": names.get(task.project_id, ""),
-            "priority": task.priority,
-            "number": task.number,
-            "status": task.display_status,
-            "date_end": task.date_end.isoformat() if task.date_end else None,
-            "description_plain": _task_cli_plain(service, task, task.description),
-            "comment_plain": _task_cli_plain(service, task, task.comment),
-        }
-        for task in tasks
-    ]
+    rows: list[list[object]] = []
+    json_rows: list[dict[str, object]] = []
+    for task in tasks:
+        project = projects[task.project_id]
+        description, comment = _shown_bodies(service, task)
+        snippet = search_snippet(description, comment, query)
+        rows.append(
+            [
+                project.name,
+                task.priority,
+                task.number,
+                task.display_status,
+                task.date_end.isoformat() if task.date_end else "",
+                snippet,
+            ]
+        )
+        json_rows.append(partial_task_row(task, snippet, project=project.name))
     emit_table(headers, rows, json_mode=json_mode, json_rows=json_rows)
     return 0
 
@@ -279,6 +380,7 @@ def cmd_task_get(
 
 
 def cmd_task_create(service: TaskService, args, json_mode: bool) -> int:
+    description, comment = resolve_description_comment(args.description, args.comment)
     project = require_project(service, args.project)
     proposed: str | None = None
     number = (args.number or "").strip()
@@ -290,8 +392,8 @@ def cmd_task_create(service: TaskService, args, json_mode: bool) -> int:
         CreateTaskRequest(
             project_id=project.id,  # type: ignore[arg-type]
             number=number,
-            description=args.description or "",
-            comment=args.comment or "",
+            description="" if description is None else description,
+            comment="" if comment is None else comment,
             date_end=date_end,
             priority=PRIORITY_DEFAULT if args.priority is None else args.priority,
             hidden=bool(args.hidden),
@@ -309,14 +411,15 @@ def cmd_task_create(service: TaskService, args, json_mode: bool) -> int:
 
 
 def cmd_task_update(service: TaskService, args, json_mode: bool) -> int:
+    description, comment = resolve_description_comment(args.description, args.comment)
     project, task = require_task(service, args.project, args.number)
     date_end = parse_iso_date(args.date_end) if args.date_end else None
     updated = service.update_task(
         task.id,  # type: ignore[arg-type]
         UpdateTaskRequest(
             number=args.new_number,
-            description=args.description,
-            comment=args.comment,
+            description=description,
+            comment=comment,
             date_end=date_end,
             priority=args.priority,
             workflow_status=args.status,
@@ -332,17 +435,16 @@ def cmd_task_update(service: TaskService, args, json_mode: bool) -> int:
 
 def cmd_task_comment(service: TaskService, args, json_mode: bool) -> int:
     project, task = require_task(service, args.project, args.number)
+    text = resolve_cli_text(args.text)
     if args.comment_action == "set":
-        comment = args.text
+        comment = text
     else:
-        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        block = f"<p>{stamp}\n{escape(args.text)}</p>"
-        comment = (task.comment or "") + block
+        comment = append_comment_markdown(task.comment, text)
     updated = service.update_task(
         task.id,  # type: ignore[arg-type]
         UpdateTaskRequest(comment=comment),
     )
-    payload = task_payload(service, project, updated)
+    payload = comment_payload(service, project, updated)
     if json_mode:
         emit_json(payload)
     else:

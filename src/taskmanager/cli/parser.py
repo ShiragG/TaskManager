@@ -53,7 +53,12 @@ def build_parser(prog: str) -> CliParser:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Print JSON instead of a table or plain text",
+        help="Print JSON (already the default; kept so older commands still work)",
+    )
+    parser.add_argument(
+        "--human",
+        action="store_true",
+        help="Print tables, names, and paths instead of JSON",
     )
     parser.add_argument(
         "--help-all",
@@ -146,8 +151,16 @@ def build_parser(prog: str) -> CliParser:
     )
     create_t.add_argument("--project", required=True, help="Project name")
     create_t.add_argument("--number", help="Task number (default: next proposed)")
-    create_t.add_argument("--description", default=None, help="Description")
-    create_t.add_argument("--comment", default=None, help="Comment")
+    create_t.add_argument(
+        "--description",
+        default=None,
+        help="Description; '-' reads stdin",
+    )
+    create_t.add_argument(
+        "--comment",
+        default=None,
+        help="Comment; '-' reads stdin",
+    )
     create_t.add_argument("--priority", type=int, default=None, help="Priority 0..10")
     create_t.add_argument(
         "--status",
@@ -181,8 +194,16 @@ def build_parser(prog: str) -> CliParser:
         default=None,
         help="New task number (renames the folder when one exists)",
     )
-    update_t.add_argument("--description", default=None, help="Description")
-    update_t.add_argument("--comment", default=None, help="Comment")
+    update_t.add_argument(
+        "--description",
+        default=None,
+        help="Description; '-' reads stdin",
+    )
+    update_t.add_argument(
+        "--comment",
+        default=None,
+        help="Comment; '-' reads stdin",
+    )
     update_t.add_argument("--priority", type=int, default=None, help="Priority 0..10")
     update_t.add_argument(
         "--status",
@@ -207,9 +228,13 @@ def build_parser(prog: str) -> CliParser:
     comment_t.add_argument(
         "comment_action",
         choices=("set", "append"),
-        help="set replaces the field; append adds a dated plain-text block",
+        help="set replaces the field; append adds a dated markdown heading",
     )
-    comment_t.add_argument("--text", required=True, help="Comment text")
+    comment_t.add_argument(
+        "--text",
+        required=True,
+        help="Comment markdown; '-' reads stdin",
+    )
 
     for action, help_text in (
         ("archive", "Archive a task"),

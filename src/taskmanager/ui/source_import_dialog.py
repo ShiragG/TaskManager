@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
-from taskmanager.services.source_host import SourceHost, plain_text_to_html
+from taskmanager.services.source_host import SourceHost
 from taskmanager.services.source_protocol import (
     SourceDraft,
     SourceModuleError,
@@ -603,7 +603,7 @@ class SourceImportDialog(QDialog):
 def draft_to_dialog_kwargs(draft: SourceDraft) -> dict:
     return {
         "initial_number": draft.number,
-        "initial_description": plain_text_to_html(draft.description),
+        "initial_description": draft.description or "",
         "initial_priority": draft.priority,
         "initial_links": list(draft.links),
         "title": f"Импорт: {draft.number}",

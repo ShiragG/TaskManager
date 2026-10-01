@@ -20,7 +20,7 @@ from taskmanager.services.settings_service import (
     SettingsStore,
     SourceModuleConfig,
 )
-from taskmanager.services.source_host import SourceHost, plain_text_to_html
+from taskmanager.services.source_host import SourceHost
 from taskmanager.services.source_protocol import (
     SourceModuleError,
     SourcePriorityOption,
@@ -52,11 +52,6 @@ def test_source_host_without_modules(tmp_path: Path):
     assert host.enabled_modules() == []
     assert host.list_loaded() == []
     repo.close()
-
-
-def test_plain_text_to_html_escapes():
-    assert "&lt;b&gt;" in plain_text_to_html("<b>x</b>")
-    assert "<br>" in plain_text_to_html("a\nb")
 
 
 _STUB_PLUGIN = '''

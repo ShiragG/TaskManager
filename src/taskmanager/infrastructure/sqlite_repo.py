@@ -19,13 +19,16 @@ from taskmanager.domain import (
     parse_whole_number,
     parse_workflow_status,
 )
+from taskmanager.domain.markdown_body import html_to_markdown, markdown_to_plain
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS directories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    number_high_water INTEGER NOT NULL DEFAULT 0
+    number_high_water INTEGER NOT NULL DEFAULT 0,
+    table_sort_column TEXT NOT NULL DEFAULT 'number',
+    table_sort_direction TEXT NOT NULL DEFAULT 'asc'
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -229,7 +232,9 @@ class SqliteRepository:
         self._conn.executescript(SOURCE_LINK_UNIQUE_INDEX)
 
         self._migrate_plain_columns()
+        self._migrate_markdown_bodies()
         self._migrate_number_high_water()
+        self._migrate_table_sort()
         self._migrate_reminders_table()
         self._migrate_reminders_task_id_nullable()
         self._migrate_reminders_color()
@@ -277,6 +282,49 @@ class SqliteRepository:
                 ),
             )
 
+    def _migrate_markdown_bodies(self) -> None:
+        """Convert stored Description/Comment HTML to markdown once."""
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        row = self._conn.execute(
+            "SELECT value FROM app_meta WHERE key = 'task_body_format'"
+        ).fetchone()
+        if row is not None and row["value"] == "markdown":
+            return
+        tasks = self._conn.execute(
+            "SELECT id, description, comment FROM tasks"
+        ).fetchall()
+        for task in tasks:
+            description = html_to_markdown(task["description"] or "")
+            comment = html_to_markdown(task["comment"] or "")
+            self._conn.execute(
+                """
+                UPDATE tasks
+                SET description = ?, comment = ?,
+                    description_plain = ?, comment_plain = ?
+                WHERE id = ?
+                """,
+                (
+                    description,
+                    comment,
+                    markdown_to_plain(description),
+                    markdown_to_plain(comment),
+                    task["id"],
+                ),
+            )
+        self._conn.execute(
+            """
+            INSERT INTO app_meta (key, value) VALUES ('task_body_format', 'markdown')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """
+        )
+
     def _migrate_number_high_water(self) -> None:
         cols = {
             row[1]
@@ -302,6 +350,22 @@ class SqliteRepository:
             self._conn.execute(
                 "UPDATE directories SET number_high_water = ? WHERE id = ?",
                 (water, project["id"]),
+            )
+
+    def _migrate_table_sort(self) -> None:
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(directories)").fetchall()
+        }
+        if "table_sort_column" not in cols:
+            self._conn.execute(
+                "ALTER TABLE directories ADD COLUMN table_sort_column "
+                "TEXT NOT NULL DEFAULT 'number'"
+            )
+        if "table_sort_direction" not in cols:
+            self._conn.execute(
+                "ALTER TABLE directories ADD COLUMN table_sort_direction "
+                "TEXT NOT NULL DEFAULT 'asc'"
             )
 
     def _migrate_reminders_table(self) -> None:
@@ -506,14 +570,16 @@ class SqliteRepository:
 
     def list_projects(self) -> list[Project]:
         rows = self._conn.execute(
-            "SELECT id, name, sort_order, number_high_water "
+            "SELECT id, name, sort_order, number_high_water, "
+            "table_sort_column, table_sort_direction "
             "FROM directories ORDER BY sort_order, name"
         ).fetchall()
         return [self._project_from_row(r) for r in rows]
 
     def get_project(self, project_id: int) -> Project | None:
         row = self._conn.execute(
-            "SELECT id, name, sort_order, number_high_water "
+            "SELECT id, name, sort_order, number_high_water, "
+            "table_sort_column, table_sort_direction "
             "FROM directories WHERE id = ?",
             (project_id,),
         ).fetchone()
@@ -523,7 +589,8 @@ class SqliteRepository:
 
     def get_project_by_name(self, name: str) -> Project | None:
         row = self._conn.execute(
-            "SELECT id, name, sort_order, number_high_water "
+            "SELECT id, name, sort_order, number_high_water, "
+            "table_sort_column, table_sort_direction "
             "FROM directories WHERE name = ?",
             (name,),
         ).fetchone()
@@ -551,12 +618,32 @@ class SqliteRepository:
     def _project_from_row(row: sqlite3.Row) -> Project:
         keys = row.keys()
         water = int(row["number_high_water"]) if "number_high_water" in keys else 0
+        column = (
+            str(row["table_sort_column"])
+            if "table_sort_column" in keys and row["table_sort_column"]
+            else "number"
+        )
+        direction = (
+            str(row["table_sort_direction"])
+            if "table_sort_direction" in keys and row["table_sort_direction"]
+            else "asc"
+        )
         return Project(
             id=row["id"],
             name=row["name"],
             sort_order=row["sort_order"],
             number_high_water=water,
+            table_sort_column=column,
+            table_sort_direction=direction,
         )
+
+    def set_table_sort(self, project_id: int, column: str, direction: str) -> None:
+        self._conn.execute(
+            "UPDATE directories SET table_sort_column = ?, table_sort_direction = ? "
+            "WHERE id = ?",
+            (column, direction, project_id),
+        )
+        self._conn.commit()
 
     def set_number_high_water(self, project_id: int, value: int) -> None:
         self._conn.execute(

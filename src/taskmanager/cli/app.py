@@ -17,7 +17,10 @@ if TYPE_CHECKING:
 
 
 def run_cli(argv: list[str]) -> int:
-    json_mode, parse_argv = _extract_flag(argv, "--json")
+    _, parse_argv = _extract_flag(argv, "--json")
+    human_mode, parse_argv = _extract_flag(parse_argv, "--human")
+    # JSON is the default. --json is accepted and does not change it.
+    json_mode = not human_mode
     help_all, parse_argv = _extract_flag(parse_argv, "--help-all")
     parser = build_parser(_prog_name(parse_argv[0] if parse_argv else argv[0]))
     if help_all:

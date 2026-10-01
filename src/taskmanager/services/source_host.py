@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import html
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,7 +17,7 @@ from taskmanager.infrastructure.filesystem import (
     source_files_dir,
 )
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
-from taskmanager.services.inline_images import apply_inline_images_for_task
+from taskmanager.services.inline_images import apply_markdown_images_for_task
 from taskmanager.services.module_loader import (
     PluginManifest,
     instantiate_module,
@@ -44,14 +43,6 @@ from taskmanager.services.task_service import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def plain_text_to_html(text: str) -> str:
-    """Escape plain text and preserve line breaks for Task description HTML."""
-    if not text:
-        return ""
-    escaped = html.escape(text, quote=False)
-    return escaped.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>\n")
 
 
 @dataclass
@@ -643,6 +634,7 @@ class SourceHost:
         priority: int | None = None,
         number: str | None = None,
         links: list[tuple[str, str]] | None = None,
+        reuse_folder: bool = False,
     ) -> Task:
         loaded = self.get(module_id)
         label = (
@@ -652,7 +644,7 @@ class SourceHost:
         desc = (
             description_html
             if description_html is not None
-            else plain_text_to_html(draft.description)
+            else (draft.description or "")
         )
         link_pairs = list(links) if links is not None else list(draft.links)
         if extra_links:
@@ -677,11 +669,14 @@ class SourceHost:
                 source_label=label,
                 source_status_id=draft.source_status_id or None,
                 source_status_label=draft.source_status_label or None,
+                reuse_folder=reuse_folder,
             )
         )
         task_id = task.id  # type: ignore[assignment]
-        new_desc = apply_inline_images_for_task(self.task_service, task_id, desc)
-        new_comment = apply_inline_images_for_task(self.task_service, task_id, comment)
+        new_desc = apply_markdown_images_for_task(self.task_service, task_id, desc)
+        new_comment = apply_markdown_images_for_task(
+            self.task_service, task_id, comment
+        )
         if new_desc != desc or new_comment != comment:
             self.task_service.update_task(
                 task_id,
@@ -716,8 +711,8 @@ class SourceHost:
             if name not in seen:
                 ordered.append((name, target))
 
-        description = apply_inline_images_for_task(
-            self.task_service, task_id, plain_text_to_html(draft.description)
+        description = apply_markdown_images_for_task(
+            self.task_service, task_id, draft.description or ""
         )
         keep_priority = self.settings.keep_priority_on_source_refresh
         self.task_service.update_task(

@@ -186,6 +186,8 @@ class Project:
     name: str
     sort_order: int = 0
     number_high_water: int = 0
+    table_sort_column: str = "number"
+    table_sort_direction: str = "asc"
 
 
 @dataclass
