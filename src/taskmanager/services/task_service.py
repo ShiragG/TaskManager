@@ -221,6 +221,7 @@ class TaskService:
         only_hidden: bool = False,
         archived: bool = False,
         query: str | None = None,
+        bodies: bool = True,
     ) -> list[Task]:
         status = TaskStatus.ARCHIVED if archived else TaskStatus.ACTIVE
         only_hidden_filter: bool | None
@@ -233,6 +234,7 @@ class TaskService:
             status=status,
             only_hidden=only_hidden_filter,
             query=query,
+            bodies=bodies,
         )
 
     def validate_create_folder(
@@ -627,7 +629,7 @@ class TaskService:
         """Return (project, task) pairs with has_folder whose folders are missing."""
         missing: list[tuple[Project, Task]] = []
         for project in self.repo.list_projects():
-            tasks = self.repo.list_tasks(project.id, status=TaskStatus.ACTIVE)  # type: ignore[arg-type]
+            tasks = self.repo.list_active_task_folders(project.id)  # type: ignore[arg-type]
             for task in self.fs.missing_task_folders(project, tasks):
                 missing.append((project, task))
         return missing
@@ -791,11 +793,15 @@ class TaskService:
     def task_ids_with_missed_reminders(
         self, *, now: datetime | None = None
     ) -> set[int]:
-        return {
-            task.id
-            for _, _, task, _ in self.list_missed_reminders(now=now)
-            if task is not None and task.id
-        }
+        moment = now or datetime.now()
+        linked_ids: list[int] = []
+        for series in self.repo.list_reminders():
+            if series.task_id is None:
+                continue
+            if missed_occurrence(series, moment) is None:
+                continue
+            linked_ids.append(series.task_id)
+        return self.repo.task_ids_with_existing_projects(linked_ids)
 
     @staticmethod
     def _validate_reminder_rule(

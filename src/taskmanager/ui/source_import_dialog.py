@@ -15,11 +15,11 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QToolButton,
@@ -38,6 +38,28 @@ logger = logging.getLogger(__name__)
 
 # UserRole+1: True when the Source item is already linked in this Project.
 _ROLE_ALREADY_IMPORTED = Qt.ItemDataRole.UserRole + 1
+
+_NUMBER_HINT = "По номеру — одна карточка или несколько номеров пакетом."
+_LIST_HINT = (
+    "Список — задачи текущего пользователя; статусы из каталога модуля. "
+    + _NUMBER_HINT
+)
+_NO_STATUS_HINT = (
+    "Статусы: нет данных. Можно загрузить список без фильтра qstatus. "
+    + _NUMBER_HINT
+)
+
+
+def parse_source_item_ids(text: str) -> list[str]:
+    """Split source item ids on whitespace; keep the first occurrence, in order."""
+    seen: set[str] = set()
+    ids: list[str] = []
+    for token in text.split():
+        if token in seen:
+            continue
+        seen.add(token)
+        ids.append(token)
+    return ids
 
 
 class SourceImportDialog(QDialog):
@@ -85,13 +107,17 @@ class SourceImportDialog(QDialog):
         self.module_combo.currentIndexChanged.connect(self._on_module_changed)
         form.addRow("Модуль", self.module_combo)
 
-        self.number_edit = QLineEdit()
-        self.number_edit.setPlaceholderText("Номер элемента источника…")
+        self.number_edit = QPlainTextEdit()
+        self.number_edit.setPlaceholderText(
+            "Один или несколько номеров через пробел или с новой строки"
+        )
+        self.number_edit.setFixedHeight(72)
+        self.number_edit.setTabChangesFocus(True)
         num_row = QHBoxLayout()
         num_row.addWidget(self.number_edit)
         self.fetch_btn = QPushButton("Открыть номер")
         self.fetch_btn.clicked.connect(self._fetch_by_number)
-        num_row.addWidget(self.fetch_btn)
+        num_row.addWidget(self.fetch_btn, alignment=Qt.AlignmentFlag.AlignTop)
         form.addRow("По номеру", num_row)
 
         layout.addLayout(form)
@@ -133,10 +159,7 @@ class SourceImportDialog(QDialog):
         self.download_cb.setChecked(True)
         layout.addWidget(self.download_cb)
 
-        self.hint = QLabel(
-            "Список — задачи текущего пользователя; статусы из каталога модуля. "
-            "По номеру — любая доступная карточка."
-        )
+        self.hint = QLabel(_LIST_HINT)
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color: #64748b;")
         layout.addWidget(self.hint)
@@ -269,16 +292,10 @@ class SourceImportDialog(QDialog):
             self.hint.setText(f"Ошибка каталога: {self._catalog_error}")
             self.status_btn.setEnabled(False)
         elif not self._status_options:
-            self.hint.setText(
-                "Статусы: нет данных. Можно загрузить список без фильтра qstatus. "
-                "По номеру — любая доступная карточка."
-            )
+            self.hint.setText(_NO_STATUS_HINT)
             self.status_btn.setEnabled(True)
         else:
-            self.hint.setText(
-                "Список — задачи текущего пользователя; статусы из каталога модуля. "
-                "По номеру — любая доступная карточка."
-            )
+            self.hint.setText(_LIST_HINT)
             self.status_btn.setEnabled(True)
 
     def _build_status_menu(self) -> None:
@@ -319,10 +336,7 @@ class SourceImportDialog(QDialog):
         if self._loaded_filters is not None and self._status_filters() != self._loaded_filters:
             self._reset_list_pagination()
             if not self._catalog_error and self._status_options:
-                self.hint.setText(
-                    "Список — задачи текущего пользователя; статусы из каталога модуля. "
-                    "По номеру — любая доступная карточка."
-                )
+                self.hint.setText(_LIST_HINT)
 
     def _sync_status_button_text(self, *_args) -> None:
         if self._catalog_error:
@@ -513,15 +527,36 @@ class SourceImportDialog(QDialog):
         if not module_id:
             return
         candidates = self._selectable_checked_ids()
-        # Skip any that became imported since load (belt and suspenders).
-        importable = [eid for eid in candidates if eid not in self._imported_ids]
-        skipped = len(candidates) - len(importable)
-        if not importable:
+        if not candidates:
             QMessageBox.information(
                 self,
                 "Импорт",
                 "Нет выбранных элементов для импорта.",
             )
+            return
+        self._emit_bulk_import(candidates)
+
+    def _emit_bulk_import(self, external_ids: list[str]) -> None:
+        """Confirm when two or more ids are still new, then start bulk import.
+
+        The dialog stays open. Already-imported ids are left out of the batch.
+        """
+        module_id = self._current_module_id()
+        if not module_id or not external_ids:
+            return
+        self._reload_imported_ids()
+        importable = [eid for eid in external_ids if eid not in self._imported_ids]
+        skipped = len(external_ids) - len(importable)
+        if not importable:
+            if skipped:
+                text = (
+                    "Этот элемент уже импортирован в текущий проект."
+                    if len(external_ids) == 1
+                    else "Эти элементы уже импортированы в текущий проект."
+                )
+            else:
+                text = "Нет выбранных элементов для импорта."
+            QMessageBox.information(self, "Импорт", text)
             return
         if len(importable) >= 2:
             msg = f"Импортировать {len(importable)} элементов?"
@@ -553,18 +588,22 @@ class SourceImportDialog(QDialog):
         self._fetch(str(external_id))
 
     def _fetch_by_number(self) -> None:
-        number = self.number_edit.text().strip()
-        if not number:
+        ids = parse_source_item_ids(self.number_edit.toPlainText())
+        if not ids:
             QMessageBox.warning(self, "Импорт", "Введите номер")
             return
-        if number in self._imported_ids:
-            QMessageBox.information(
-                self,
-                "Импорт",
-                "Этот элемент уже импортирован в текущий проект.",
-            )
+        if len(ids) == 1:
+            self._reload_imported_ids()
+            if ids[0] in self._imported_ids:
+                QMessageBox.information(
+                    self,
+                    "Импорт",
+                    "Этот элемент уже импортирован в текущий проект.",
+                )
+                return
+            self._fetch(ids[0])
             return
-        self._fetch(number)
+        self._emit_bulk_import(ids)
 
     def _fetch(self, external_id: str) -> None:
         module_id = self._current_module_id()

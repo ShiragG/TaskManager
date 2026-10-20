@@ -143,3 +143,44 @@ def test_plain_text_is_not_treated_as_html():
     assert looks_like_html("hello") is False
     assert html_to_markdown("**already**") == "**already**"
     assert html_to_markdown("see <file>") == "see <file>"
+
+
+def test_drop_images_keeps_text_and_removes_pictures():
+    import base64
+
+    from taskmanager.domain.markdown_body import strip_markdown_images
+
+    png = base64.b64encode(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+        )
+    ).decode()
+    html = (
+        "<p>see <b>bold</b> <u>under</u></p>"
+        f'<p><img src="data:image/png;base64,{png}"></p>'
+        "<p>after</p>"
+    )
+    markdown = html_to_markdown(html, drop_images=True)
+    assert "**bold**" in markdown
+    assert "under" in markdown
+    assert "see" in markdown
+    assert "after" in markdown
+    assert "<u>" not in markdown
+    assert "![](" not in markdown
+    assert "data:image" not in markdown
+    kept = html_to_markdown(html)
+    assert "![](" in kept
+    assert "data:image" in kept
+
+    uri = Path("/tmp/task/.images/hash.png").resolve().as_uri()
+    linked = f'<p>see</p><a href="{uri}"><img src="{uri}"></a><p>tail</p>'
+    without = html_to_markdown(linked, drop_images=True)
+    assert "see" in without
+    assert "tail" in without
+    assert "![](" not in without
+    assert "file:" not in without
+
+    plain = html_to_markdown("**keep** ![](pic.png)\n\nstay", drop_images=True)
+    assert plain == "**keep** \n\nstay"
+    assert strip_markdown_images("see ![](a.png) tail") == "see  tail"

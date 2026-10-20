@@ -45,8 +45,8 @@ An optional date on a Task (no time of day) when the work should be done. Distin
 _Avoid_: reminder, event, deadline (as a separate entity)
 
 **Event** (событие):
-A calendar record (text, local date/time, repeat rule, optional Event color, optional sound file) that may be linked to a Task. Not Срок and not a notification toast; the Calendar window is where occurrences are browsed. The UI never says «серия» — delete is «Удалить событие»; snooze («Напомнить через») delays a ping and is not a second entity. If the Event has no sound file, the ping uses the melody from settings.
-_Avoid_: reminder, серия, срок, toast, notification (the UI chrome)
+A calendar record (text, local date/time, repeat rule, optional Event color, optional sound file) that may be linked to a Task. The text is markdown without images, not HTML. Not Срок and not a notification toast; the Calendar window is where occurrences are browsed. The UI never says «серия» — delete is «Удалить событие»; snooze («Напомнить через») delays a ping and is not a second entity. If the Event has no sound file, the ping uses the melody from settings.
+_Avoid_: reminder, серия, срок, toast, notification (the UI chrome), HTML
 
 **Сегодня**:
 The calendar date of the system clock; the month grid fills that cell with a light theme-accent wash.
@@ -57,8 +57,8 @@ The calendar cell the user clicked; the day pane shows that date and may differ 
 _Avoid_: текущий день, Сегодня
 
 **Event color** (цвет события):
-An optional color on the Event itself, drawn from the same palette as Task Color. Not Priority and not Task Color.
-_Avoid_: Priority, Task Color, inherited color
+An optional color on the Event itself, drawn from the same palette as **Цвет заявки**. Not Priority and not **Цвет заявки**.
+_Avoid_: Priority, Цвет заявки, inherited color
 
 **Hidden** (скрытая):
 A task flag: in the default view the task is omitted; in «Скрытые» mode only hidden active tasks are listed. Mutually exclusive with archive browsing mode.
@@ -73,8 +73,12 @@ A file of a Source item that, after download, lives in a dedicated folder inside
 _Avoid_: attachment (as a Task field), Link, Notes file
 
 **Priority** (приоритет):
-An integer urgency score on a task from 0 (critical) to 10 (calm). Distinct from the task row Color.
+An integer urgency score on a task from 0 (critical) to 10 (calm). Distinct from **Цвет заявки**.
 _Avoid_: severity, importance, rank, color
+
+**Цвет заявки**:
+Цвет, который оператор ставит на заявку; рисуется фоном строки.
+_Avoid_: приоритет, цвет статуса, подсветка срока, Task Color
 
 **Description** (описание):
 The Task's markdown body. On Import or Refresh from source it may be wholly replaced from a Source item.
@@ -104,6 +108,14 @@ _Avoid_: Source status, archive, Task status
 A Source module catalog entry (`id` + label; `default_selected` for Import filters). On a linked Task, also the read-only snapshot of that id/label written on Import and Refresh from source (not background sync).
 _Avoid_: Workflow status, archive
 
+**Цвет статуса**:
+Необязательный цвет id статуса источника; задаётся отдельно для каждого модуля и рисуется меткой у подписи, когда подсветка этого модуля включена.
+_Avoid_: статус работы, Workflow status, Цвет статуса работы, цвет заявки, Priority
+
+**Цвет статуса работы**:
+Необязательный цвет одного из пяти статусов работы; задаётся в настройках и рисуется кружком у подписи, когда подсветка включена. Только у заявки без источника.
+_Avoid_: цвет статуса, Цвет статуса, цвет заявки, Priority
+
 **Source priority** (приоритет источника):
 A catalog entry from a Source module whose `mapped_priority` is already on the Task **Priority** scale (0..10). Used when mapping a Source item into a Task; not a separate Task field.
 _Avoid_: severity, Razr-native priority id as Task priority
@@ -113,9 +125,13 @@ SQLite rows for installed Source modules (id, GitHub repo, display name, enabled
 _Avoid_: settings list, plugin folder alone as source of truth
 
 **Import**:
-Bringing a Source item into the current Project as a Task. The single path snapshots the item into the create-Task dialog; the bulk path creates Tasks from snapshots without that dialog (settings defaults for folder/notes; honors «Скачать файлы…»). That option writes Source files into the dedicated folder inside the Task folder and creates the Task folder if it is missing. A Source item is already imported when the Project has a Task with the same `(source_module_id, external_id)` (any status/hidden). Status/priority catalogs are session-cached by the host; on catalog failure Import shows an error and does not call `list_items`.
+Bringing a Source item into the current Project as a Task. The single path snapshots the item into the create-Task dialog; the bulk path creates Tasks from snapshots without that dialog (settings defaults for folder/notes; honors «Скачать файлы…»). Several source ids in «По номеру» take the bulk path; one id still opens the create-Task dialog. That option writes Source files into the dedicated folder inside the Task folder and creates the Task folder if it is missing. A Source item is already imported when the Project has a Task with the same `(source_module_id, external_id)` (any status/hidden). Status/priority catalogs are session-cached by the host; on catalog failure Import shows an error and does not call `list_items`.
 _Avoid_: sync, clone
 
 **Refresh from source**:
 A manual overwrite of the mapped Task fields from the Source item. Comment is never overwritten. Priority is overwritten from Source priority unless the operator chose to keep Priority on the Task. Source files are downloaded when the «Скачать файлы источника» checkbox is enabled in the confirmation dialog (enabled by default).
 _Avoid_: sync, pull all
+
+**Заметки версии**:
+Текст для пользователя о том, что появилось или исправлено в версии.
+_Avoid_: описание для разработчика, changelog

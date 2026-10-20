@@ -5,7 +5,7 @@ a = Analysis(
     ['src/taskmanager/__main__.py'],
     pathex=[],
     binaries=[],
-    datas=[('src/taskmanager/ui/styles/app.qss', 'taskmanager/ui/styles'), ('src/taskmanager/resources/app_icon.png', 'taskmanager/resources'), ('src/taskmanager/resources/app_icon.ico', 'taskmanager/resources')],
+    datas=[('src/taskmanager/ui/styles/app.qss', 'taskmanager/ui/styles'), ('src/taskmanager/resources/app_icon.png', 'taskmanager/resources'), ('src/taskmanager/resources/app_icon.ico', 'taskmanager/resources'), ('src/taskmanager/resources/whats_new.md', 'taskmanager/resources')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

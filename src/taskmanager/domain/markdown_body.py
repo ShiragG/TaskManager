@@ -1,7 +1,8 @@
-"""Markdown canon for Task Description and Comment.
+"""Markdown canon for Task Description, Comment, and Event text.
 
 Stored text is markdown. Preview HTML is produced for Qt and is not written
-back. Existing HTML is converted once when a database is opened.
+back. Existing HTML is converted once when a database is opened. Event text
+uses the same conversion and drops images.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ _IMG_SRC_RE = re.compile(
     re.IGNORECASE,
 )
 _MD_SPECIAL_RE = re.compile(r"([\\`*_\[]|])")
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)\r\n]*\)")
 
 _engine: MarkdownIt | None = None
 
@@ -98,25 +100,38 @@ def toggle_task(text: str, index: int) -> str:
     return text[: match.start(2)] + mark + text[match.end(2) :]
 
 
-def html_to_markdown(html: str) -> str:
+def strip_markdown_images(text: str) -> str:
+    """Remove markdown image links. Other markup stays."""
+    if not text:
+        return text
+    cleaned = _MARKDOWN_IMAGE_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", cleaned)
+
+
+def html_to_markdown(html: str, *, drop_images: bool = False) -> str:
     """Convert stored HTML once. Non-HTML is returned unchanged.
 
     Underline is dropped. ``file://`` images under ``.images/`` become
-    ``![](.images/name)``.
+    ``![](.images/name)``. With ``drop_images``, those pictures are removed
+    instead, including pictures already written as markdown image links.
     """
     if not looks_like_html(html):
-        return html
-    from PySide6.QtGui import QTextDocument
+        text = html
+    else:
+        from PySide6.QtGui import QTextDocument
 
-    from taskmanager.domain import ensure_qt_app
+        from taskmanager.domain import ensure_qt_app
 
-    ensure_qt_app()
-    doc = QTextDocument()
-    doc.setHtml(html)
-    return document_to_markdown(doc)
+        ensure_qt_app()
+        doc = QTextDocument()
+        doc.setHtml(html)
+        text = document_to_markdown(doc, drop_images=drop_images)
+    if drop_images:
+        text = strip_markdown_images(text)
+    return text
 
 
-def document_to_markdown(doc) -> str:
+def document_to_markdown(doc, *, drop_images: bool = False) -> str:
     """Serialize a Qt document edited as rendered markdown."""
     from PySide6.QtGui import QTextCursor
 
@@ -177,7 +192,9 @@ def document_to_markdown(doc) -> str:
             code_lines.extend(text.split("\n"))
         else:
             flush_code()
-            kind, rendered, style = _block_markdown(block)
+            kind, rendered, style = _block_markdown(
+                block, drop_images=drop_images
+            )
             if rendered:
                 _append_block(
                     parts, kind, rendered, prev_kind, prev_style, style, gap=gap
@@ -250,7 +267,7 @@ def _rewrite_image_srcs(html: str, images_dir: Path) -> str:
     return _IMG_SRC_RE.sub(repl, html)
 
 
-def _block_markdown(block) -> tuple[str, str, object]:
+def _block_markdown(block, *, drop_images: bool = False) -> tuple[str, str, object]:
     from PySide6.QtGui import QTextListFormat
 
     text_list = block.textList()
@@ -260,6 +277,7 @@ def _block_markdown(block) -> tuple[str, str, object]:
         block,
         skip_checkbox=task_mark is not None,
         ignore_bold=bool(heading),
+        drop_images=drop_images,
     )
     if text_list is not None:
         fmt = text_list.format()
@@ -335,6 +353,7 @@ def _inline_markdown(
     *,
     skip_checkbox: bool = False,
     ignore_bold: bool = False,
+    drop_images: bool = False,
 ) -> str:
     pieces: list[str] = []
     skipping = skip_checkbox
@@ -362,6 +381,7 @@ def _inline_markdown(
                 fragment,
                 ignore_bold=ignore_bold,
                 text_override=text_override,
+                drop_images=drop_images,
             )
             if piece:
                 if (
@@ -417,9 +437,12 @@ def _fragment_markdown(
     *,
     ignore_bold: bool = False,
     text_override: str | None = None,
+    drop_images: bool = False,
 ) -> str:
     fmt = fragment.charFormat()
     if text_override is None and fmt.isImageFormat():
+        if drop_images:
+            return ""
         return _image_markdown(fmt.toImageFormat().name())
     if text_override is None:
         text = fragment.text()

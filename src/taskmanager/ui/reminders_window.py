@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import calendar
+import html
 from datetime import date, datetime, time, timedelta
 
 from PySide6.QtCore import QDate, QSize, QTime, QUrl, Qt, Signal
@@ -37,10 +38,14 @@ from taskmanager.domain import (
     ReminderSeries,
     Task,
     WEEKDAY_LABELS,
-    html_to_plain,
     occurrence_on,
     occurrences_in_range,
     truncate_plain,
+)
+from taskmanager.domain.markdown_body import (
+    markdown_to_plain,
+    preview_html,
+    strip_markdown_images,
 )
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
 from taskmanager.services.settings_service import (
@@ -55,7 +60,8 @@ from taskmanager.services.settings_service import (
     parse_snooze_minutes,
 )
 from taskmanager.services.task_service import ServiceError, TaskService
-from taskmanager.ui.dialogs import ColorSwatchButton, HtmlEditRow, SWATCH_SIZE
+from taskmanager.ui.dialogs import ColorSwatchButton, SWATCH_SIZE
+from taskmanager.ui.markdown_editor import MarkdownEditRow
 from taskmanager.ui.event_sound_picker import EventSoundPicker
 
 _MONTH_NAMES = (
@@ -214,9 +220,26 @@ class DayEventsList(QListWidget):
             self.empty_double_clicked.emit()
 
 
+def event_text_plain(text: str) -> str:
+    """One-line preview of Event markdown."""
+    return markdown_to_plain(text) or "—"
+
+
+def event_text_html(text: str) -> str:
+    """Rendered Event markdown. Empty text is an em dash, not stored HTML."""
+    if not text or not text.strip():
+        return "—"
+    return preview_html(text) or "—"
+
+
+def event_popup_html(heading: str, text: str) -> str:
+    """Notify popup: the moment, then rendered Event markdown."""
+    return f"<p>{html.escape(heading)}</p>{event_text_html(text)}"
+
+
 def _open_event_link(parent: QWidget, url: QUrl) -> None:
     target = url.toString()
-    if not target:
+    if not target or target.startswith("tm-task:"):
         return
     try:
         open_target(target)
@@ -303,7 +326,9 @@ class ReminderEditDialog(QDialog):
         self._filter_task_choices("")
         self._sync_search_from_pick()
 
-        self.text_edit = HtmlEditRow(title="Текст", html="")
+        self.text_edit = MarkdownEditRow(
+            title="Текст", markdown="", allow_images=False
+        )
         self._form.addRow("Текст", self.text_edit)
 
         self.time_edit = QTimeEdit()
@@ -367,7 +392,7 @@ class ReminderEditDialog(QDialog):
         self._sync_rule_fields()
 
     def _load_series(self, series: ReminderSeries) -> None:
-        self.text_edit.html = series.text
+        self.text_edit.markdown = series.text
         clock = series.time_of_day
         self.time_edit.setTime(QTime(clock.hour, clock.minute))
         idx = self.rule_combo.findData(series.rule.value)
@@ -602,7 +627,7 @@ class ReminderEditDialog(QDialog):
 
     @property
     def reminder_text(self) -> str:
-        return self.text_edit.html.strip()
+        return strip_markdown_images(self.text_edit.markdown).strip()
 
     @property
     def time_of_day(self) -> time:
@@ -635,7 +660,7 @@ class ReminderEditDialog(QDialog):
 
 def format_reminder_series(series: ReminderSeries) -> str:
     clock = series.time_of_day.strftime("%H:%M")
-    text = html_to_plain(series.text) or "—"
+    text = event_text_plain(series.text)
     if series.rule == ReminderRule.ONCE:
         day = series.once_date.strftime("%d.%m.%Y") if series.once_date else ""
         return f"{clock}  {text}  разово {day}".strip()
@@ -779,7 +804,7 @@ class ReminderCardDialog(QDialog):
         self.moment_label.setText(
             f"{self._occ.strftime('%d.%m.%Y %H:%M')}{repeating}"
         )
-        self.body_label.setHtml(self._series.text or "—")
+        self.body_label.setHtml(event_text_html(self._series.text))
         self._sync_task_chrome()
 
     def _edit(self) -> None:
@@ -1204,7 +1229,7 @@ class RemindersWindow(QDialog):
         occ: datetime,
         task: Task | None,
     ) -> QListWidgetItem:
-        plain = truncate_plain(html_to_plain(series.text) or "—")
+        plain = truncate_plain(event_text_plain(series.text))
         clock = occ.strftime("%H:%M")
         if task is not None:
             line_text = f"{clock}  {plain}  №{task.number}"
@@ -1397,7 +1422,7 @@ class RemindersWindow(QDialog):
         now = datetime.now()
         for series, occ, task, project in self._service.list_missed_reminders(now=now):
             repeating = " · повторяемое" if series.is_repeating else ""
-            plain = html_to_plain(series.text) or "—"
+            plain = event_text_plain(series.text)
             moment = occ.strftime("%d.%m.%Y %H:%M")
             if task is not None and project is not None:
                 prefix = f"{project.name} / №{task.number}  "

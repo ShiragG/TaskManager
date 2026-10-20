@@ -356,6 +356,40 @@ class SourceHost:
         cache = self._catalogs.get(module_id)
         return cache.error if cache is not None else None
 
+    def status_catalog(
+        self, module_id: str
+    ) -> tuple[list[SourceStatusOption], str | None]:
+        """Status list for the color dialog.
+
+        A healthy session cache is reused. Otherwise the module is asked
+        directly, including when it is turned off. Failure is a message so
+        the dialog can still show saved colors.
+        """
+        mid = (module_id or "").strip()
+        if not mid:
+            return [], "Модуль ещё не установлен"
+        cache = self._catalogs.get(mid)
+        if cache is not None and cache.error is None:
+            return list(cache.statuses), None
+        try:
+            loaded = self.get(mid)
+        except SourceModuleError as exc:
+            return [], str(exc)
+        module = loaded.module
+        if module is None:
+            return [], loaded.load_error or f"Модуль «{mid}» не установлен"
+        try:
+            creds = self.get_credentials(mid)
+            if creds is not None:
+                module.configure(login=creds[0], password=creds[1])
+            statuses = list(module.list_statuses())
+        except SourceModuleError as exc:
+            return [], str(exc)
+        except Exception as exc:
+            logger.warning("status catalog failed module=%s: %s", mid, exc)
+            return [], str(exc)
+        return statuses, None
+
     def refresh_catalogs(self, module_ids: list[str] | None = None) -> None:
         """Fetch status/priority catalogs for enabled modules (session cache)."""
         targets = module_ids

@@ -592,3 +592,65 @@ def test_install_persists_enabled_before_save(tmp_path: Path, monkeypatch):
     assert row["installed_version"] == "1.2.3"
     assert host.get("stub").module is not None
     repo.close()
+
+
+def test_status_catalog_disabled_module_and_cache(tmp_path: Path, monkeypatch):
+    from taskmanager.services.source_host import LoadedSource, ModuleCatalogCache
+
+    work = tmp_path / "work"
+    work.mkdir()
+    settings = Settings(work_dir=str(work))
+    repo = SqliteRepository(tmp_path / "cat.db")
+    service = TaskService(repo, settings)
+    host = SourceHost(repo, settings, service, modules_base=tmp_path)
+
+    class _Mod:
+        def __init__(self) -> None:
+            self.configured = False
+
+        def configure(self, *, login: str, password: str) -> None:
+            self.configured = True
+
+        def list_statuses(self):
+            return [SourceStatusOption("10", "A", True)]
+
+    mod = _Mod()
+    host._by_id["off"] = LoadedSource(
+        config=SourceModuleConfig(module_id="off", enabled=False),
+        manifest=None,
+        module=mod,  # type: ignore[arg-type]
+        load_error=None,
+    )
+    monkeypatch.setattr(host, "get_credentials", lambda mid: ("u", "p"))
+    statuses, error = host.status_catalog("off")
+    assert error is None
+    assert [item.id for item in statuses] == ["10"]
+    assert mod.configured is True
+
+    host._catalogs["off"] = ModuleCatalogCache(
+        statuses=[SourceStatusOption("1", "Cached", False)],
+        error=None,
+    )
+
+    def fail():
+        raise AssertionError("cache should win")
+
+    mod.list_statuses = fail  # type: ignore[method-assign]
+    statuses, error = host.status_catalog("off")
+    assert error is None
+    assert [item.id for item in statuses] == ["1"]
+
+    host._catalogs["off"] = ModuleCatalogCache(error="down")
+
+    def still_down():
+        raise SourceModuleError("still down")
+
+    mod.list_statuses = still_down  # type: ignore[method-assign]
+    statuses, error = host.status_catalog("off")
+    assert statuses == []
+    assert error == "still down"
+
+    missing, missing_error = host.status_catalog("missing")
+    assert missing == []
+    assert missing_error
+    repo.close()

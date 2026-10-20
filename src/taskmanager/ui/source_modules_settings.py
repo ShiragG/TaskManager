@@ -19,7 +19,11 @@ from PySide6.QtWidgets import (
 )
 
 from taskmanager.services.module_install import fetch_latest_module_release
-from taskmanager.services.settings_service import SourceModuleConfig
+from taskmanager.services.settings_service import (
+    Settings,
+    SourceModuleConfig,
+    SourceStatusHighlight,
+)
 from taskmanager.services.source_host import SourceHost
 from taskmanager.services.source_protocol import SourceModuleError
 
@@ -39,9 +43,12 @@ class SourceModulesSettingsWidget(QWidget):
         self,
         source_host: SourceHost | None,
         parent=None,
+        *,
+        settings: Settings | None = None,
     ) -> None:
         super().__init__(parent)
         self._host = source_host
+        self._settings = settings
         self._rows: list[_ModuleRow] = []
 
         layout = QVBoxLayout(self)
@@ -85,7 +92,9 @@ class SourceModulesSettingsWidget(QWidget):
         self._add_row(SourceModuleConfig())
 
     def _add_row(self, cfg: SourceModuleConfig) -> None:
-        row = _ModuleRow(cfg, host=self._host, parent=self)
+        row = _ModuleRow(
+            cfg, host=self._host, settings=self._settings, parent=self
+        )
         row.deleted.connect(self._on_row_deleted)
         self._rows.append(row)
         self._list_host.addWidget(row)
@@ -105,6 +114,11 @@ class SourceModulesSettingsWidget(QWidget):
         for row in self._rows:
             row.save_credentials_if_needed(self._host)
 
+    def apply_status_highlights(self, settings: Settings) -> None:
+        """Write each card's status colors. Modules not on the form are kept."""
+        for row in self._rows:
+            row.write_status_highlight(settings)
+
 
 class _ModuleRow(QGroupBox):
     deleted = Signal(object)
@@ -114,22 +128,39 @@ class _ModuleRow(QGroupBox):
         cfg: SourceModuleConfig,
         *,
         host: SourceHost | None,
+        settings: Settings | None = None,
         parent=None,
     ) -> None:
         title = cfg.display_name or cfg.module_id or "Модуль источника"
         super().__init__(title, parent)
         self._host = host
+        self._settings = settings
         self._module_id = cfg.module_id
         self._display_name = cfg.display_name
         self._update_asset_name = cfg.update_asset_name
         self._update_asset_pattern = cfg.update_asset_pattern
         self._password_dirty = False
+        self._highlight_module_id: str | None = None
+        self._status_colors: dict[str, str] = {}
+        self._status_labels: dict[str, str] = {}
 
         form = QFormLayout(self)
 
         self.enabled_cb = QCheckBox("Включён")
         self.enabled_cb.setChecked(cfg.enabled)
         form.addRow(self.enabled_cb)
+
+        highlight_row = QHBoxLayout()
+        self.highlight_cb = QCheckBox("Подсвечивать статусы")
+        self.highlight_cb.setChecked(False)
+        self.status_colors_btn = QPushButton("Цвета статусов…")
+        self.status_colors_btn.setObjectName("secondaryButton")
+        self.status_colors_btn.setAutoDefault(False)
+        self.status_colors_btn.clicked.connect(self._open_status_colors)
+        highlight_row.addWidget(self.highlight_cb)
+        highlight_row.addWidget(self.status_colors_btn)
+        highlight_row.addStretch()
+        form.addRow(highlight_row)
 
         self.github_edit = QLineEdit(cfg.github_repo)
         self.github_edit.setPlaceholderText("https://github.com/owner/repo")
@@ -182,6 +213,83 @@ class _ModuleRow(QGroupBox):
                 creds = None
             if creds is not None:
                 self.login_edit.setText(creds[0])
+        self._load_highlight(self._module_id)
+
+    def _load_highlight(self, module_id: str) -> None:
+        mid = (module_id or "").strip()
+        if mid and mid == self._highlight_module_id:
+            self._sync_status_color_controls()
+            return
+        entry = SourceStatusHighlight()
+        if self._settings is not None and mid:
+            stored = self._settings.source_status_highlights.get(mid)
+            if stored is not None:
+                entry = stored
+        self._highlight_module_id = mid
+        self._status_colors = dict(entry.colors)
+        self._status_labels = dict(entry.labels)
+        self.highlight_cb.setChecked(bool(mid) and entry.enabled)
+        self._sync_status_color_controls()
+
+    def _sync_status_color_controls(self) -> None:
+        has_id = bool((self._module_id or "").strip())
+        self.highlight_cb.setEnabled(has_id)
+        self.status_colors_btn.setEnabled(has_id)
+        self.status_colors_btn.setToolTip(
+            "" if has_id else "Сначала установите модуль"
+        )
+
+    def write_status_highlight(self, settings: Settings) -> None:
+        mid = (self._module_id or "").strip()
+        if not mid:
+            return
+        colors = {
+            status_id: color
+            for status_id, color in self._status_colors.items()
+            if color
+        }
+        labels = {
+            status_id: label
+            for status_id, label in self._status_labels.items()
+            if str(label).strip()
+        }
+        enabled = self.highlight_cb.isChecked()
+        if not enabled and not colors and not labels:
+            settings.source_status_highlights.pop(mid, None)
+            return
+        settings.source_status_highlights[mid] = SourceStatusHighlight(
+            enabled=enabled,
+            colors=colors,
+            labels=labels,
+        )
+
+    def _open_status_colors(self) -> None:
+        module_id = (self._module_id or "").strip()
+        if not module_id:
+            return
+        catalog: list[tuple[str, str]] = []
+        unavailable = True
+        if self._host is not None:
+            try:
+                statuses, error = self._host.status_catalog(module_id)
+            except Exception:
+                logger.exception("status catalog failed module=%s", module_id)
+                statuses, error = [], "Свежий список статусов недоступен."
+            unavailable = error is not None
+            catalog = [(item.id, item.label) for item in statuses]
+        from taskmanager.ui.source_modules_dialog import (
+            SourceStatusColorsDialog,
+            status_color_rows,
+        )
+
+        dialog = SourceStatusColorsDialog(
+            status_color_rows(catalog, self._status_colors, self._status_labels),
+            catalog_unavailable=unavailable,
+            parent=self,
+        )
+        if dialog.exec() != SourceStatusColorsDialog.DialogCode.Accepted:
+            return
+        self._status_colors, self._status_labels = dialog.collect()
 
     def _on_password_changed(self, _text: str) -> None:
         self._password_dirty = True
@@ -315,6 +423,7 @@ class _ModuleRow(QGroupBox):
         self._display_name = manifest.display_name
         self._update_asset_name = manifest.update.asset_name
         self._update_asset_pattern = manifest.update.asset_pattern
+        self._load_highlight(manifest.id)
         self.id_label.setText(manifest.id)
         self.version_label.setText(manifest.version)
         self.setTitle(manifest.display_name)

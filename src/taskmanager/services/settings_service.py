@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from taskmanager.domain import WorkflowStatus
 from taskmanager.infrastructure.event_sounds import parse_event_sound_path
 from taskmanager.infrastructure.paths import resolve_work_dir
 from taskmanager.services.hotkeys import default_hotkeys_copy, normalize_hotkeys
@@ -145,6 +146,141 @@ def parse_source_module_configs(raw: Any) -> list[SourceModuleConfig]:
     return modules
 
 
+_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+
+
+def _normalize_hex_color(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if len(text) < 2 or text[0] != "#":
+        return None
+    raw = text[1:]
+    if len(raw) == 3 and all(ch in _HEX_DIGITS for ch in raw):
+        raw = "".join(ch * 2 for ch in raw)
+    if len(raw) != 6 or any(ch not in _HEX_DIGITS for ch in raw):
+        return None
+    return f"#{raw.lower()}"
+
+
+def _clean_color_map(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    colors: dict[str, str] = {}
+    for key, value in raw.items():
+        status_id = str(key).strip()
+        if not status_id:
+            continue
+        color = _normalize_hex_color(value)
+        if color:
+            colors[status_id] = color
+    return colors
+
+
+_WORKFLOW_STATUS_IDS = frozenset(status.value for status in WorkflowStatus)
+
+
+def parse_workflow_status_colors(raw: Any) -> dict[str, str]:
+    """Keep only the five workflow status ids that have a real #rrggbb color."""
+    return {
+        status_id: color
+        for status_id, color in _clean_color_map(raw).items()
+        if status_id in _WORKFLOW_STATUS_IDS
+    }
+
+
+def workflow_status_mark_color(
+    enabled: bool,
+    colors: dict[str, str],
+    status: str | WorkflowStatus | None,
+) -> str | None:
+    """Hex for a workflow status mark, or None when highlight is off or unset."""
+    if enabled is not True:
+        return None
+    if isinstance(status, WorkflowStatus):
+        key = status.value
+    else:
+        key = str(status or "").strip()
+    if not key:
+        return None
+    return colors.get(key) or None
+
+
+def _clean_label_map(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    labels: dict[str, str] = {}
+    for key, value in raw.items():
+        status_id = str(key).strip()
+        if not status_id or not isinstance(value, str):
+            continue
+        text = value.strip()
+        if text:
+            labels[status_id] = text
+    return labels
+
+
+@dataclass
+class SourceStatusHighlight:
+    """Per-module status marks: on/off, status id → #rrggbb, and last labels."""
+
+    enabled: bool = False
+    colors: dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.enabled, bool):
+            self.enabled = False
+        self.colors = _clean_color_map(self.colors)
+        self.labels = _clean_label_map(self.labels)
+
+
+def parse_source_status_highlights(raw: Any) -> dict[str, SourceStatusHighlight]:
+    """Drop empty module entries and anything that is not a color or a label."""
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, SourceStatusHighlight] = {}
+    for key, item in raw.items():
+        module_id = str(key).strip()
+        if not module_id:
+            continue
+        if isinstance(item, SourceStatusHighlight):
+            enabled: Any = item.enabled
+            colors: Any = item.colors
+            labels: Any = item.labels
+        elif isinstance(item, dict):
+            enabled = item.get("enabled", False)
+            colors = item.get("colors")
+            labels = item.get("labels")
+        else:
+            continue
+        entry = SourceStatusHighlight(
+            enabled=enabled if isinstance(enabled, bool) else False,
+            colors=colors if isinstance(colors, dict) else {},
+            labels=labels if isinstance(labels, dict) else {},
+        )
+        if not entry.enabled and not entry.colors and not entry.labels:
+            continue
+        result[module_id] = entry
+    return result
+
+
+def source_status_mark_color(
+    highlights: dict[str, SourceStatusHighlight],
+    module_id: str | None,
+    status_id: str | None,
+) -> str | None:
+    """Hex for a source status mark, or None when that module's highlight is off."""
+    mid = (module_id or "").strip()
+    sid = (status_id or "").strip()
+    if not mid or not sid:
+        return None
+    entry = highlights.get(mid)
+    if entry is None or not entry.enabled:
+        return None
+    return entry.colors.get(sid) or None
+
+
 @dataclass
 class Settings:
     work_dir: str = "Working directory"
@@ -166,6 +302,7 @@ class Settings:
     event_snooze_minutes: int = DEFAULT_SNOOZE_MINUTES
     check_updates_on_startup: bool = True
     check_module_updates_on_startup: bool = True
+    last_seen_version: str = ""
     calendar_view: str = CALENDAR_VIEW_COMPACT
     calendar_week_splitter: list[int] = field(default_factory=list)
     calendar_compact_splitter: list[int] = field(default_factory=list)
@@ -173,11 +310,36 @@ class Settings:
     image_preview_width: int = DEFAULT_IMAGE_PREVIEW_WIDTH
     show_in_tray: bool = True
     colors: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_COLORS))
+    highlight_workflow_statuses: bool = False
+    workflow_status_colors: dict[str, str] = field(default_factory=dict)
+    source_status_highlights: dict[str, SourceStatusHighlight] = field(
+        default_factory=dict
+    )
     hotkeys: dict[str, str] = field(default_factory=default_hotkeys_copy)
+
+    def __post_init__(self) -> None:
+        self.highlight_workflow_statuses = self.highlight_workflow_statuses is True
+        self.workflow_status_colors = parse_workflow_status_colors(
+            self.workflow_status_colors
+        )
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         data["hotkeys"] = normalize_hotkeys(self.hotkeys)
+        data["highlight_workflow_statuses"] = self.highlight_workflow_statuses is True
+        data["workflow_status_colors"] = parse_workflow_status_colors(
+            self.workflow_status_colors
+        )
+        data["source_status_highlights"] = {
+            module_id: {
+                "enabled": entry.enabled,
+                "colors": dict(entry.colors),
+                "labels": dict(entry.labels),
+            }
+            for module_id, entry in parse_source_status_highlights(
+                self.source_status_highlights
+            ).items()
+        }
         return data
 
     @classmethod
@@ -208,6 +370,8 @@ class Settings:
         merged["check_module_updates_on_startup"] = bool(
             merged.get("check_module_updates_on_startup", True)
         )
+        raw_seen = merged.get("last_seen_version", "")
+        merged["last_seen_version"] = raw_seen.strip() if isinstance(raw_seen, str) else ""
         merged["calendar_view"] = parse_calendar_view(merged.get("calendar_view"))
         merged["calendar_week_splitter"] = parse_splitter_sizes(
             merged.get("calendar_week_splitter")
@@ -224,6 +388,15 @@ class Settings:
         merged["show_in_tray"] = bool(merged.get("show_in_tray", True))
         merged["keep_priority_on_source_refresh"] = bool(
             merged.get("keep_priority_on_source_refresh", False)
+        )
+        merged["highlight_workflow_statuses"] = (
+            merged.get("highlight_workflow_statuses") is True
+        )
+        merged["workflow_status_colors"] = parse_workflow_status_colors(
+            merged.get("workflow_status_colors")
+        )
+        merged["source_status_highlights"] = parse_source_status_highlights(
+            merged.get("source_status_highlights")
         )
         return cls(**merged)
 

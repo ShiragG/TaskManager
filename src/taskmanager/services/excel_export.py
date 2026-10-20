@@ -64,6 +64,7 @@ def export_tasks_to_excel(
     settings = service.settings
     today = date.today()
     months_map = archive_months_by_project or {}
+    deadline_column = HEADERS.index("Срок") + 1
 
     for project in selected:
         ws = wb.create_sheet(title=_safe_sheet_name(project.name))
@@ -89,24 +90,24 @@ def export_tasks_to_excel(
                     fill_type="solid",
                     fgColor=_hex_to_rgb(task.color),
                 )
-            warn = settings.highlight_warnings and is_deadline_warning(
+            contrast = (
+                _hex_to_rgb(contrast_foreground(task.color)) if task.color else None
+            )
+            warning_font = None
+            if settings.highlight_warnings and is_deadline_warning(
                 task.date_end,
                 today=today,
                 lead_days=settings.warning_lead_days,
-            )
-            if warn:
-                font_color = _hex_to_rgb(settings.warning_color)
-            elif task.color:
-                font_color = _hex_to_rgb(contrast_foreground(task.color))
-            else:
-                font_color = None
-            font = Font(color=font_color) if font_color else None
+            ):
+                warning_font = _hex_to_rgb(settings.warning_color)
             for col in range(1, len(HEADERS) + 1):
                 cell = ws.cell(row=excel_row, column=col)
                 if fill is not None:
                     cell.fill = fill
-                if font is not None:
-                    cell.font = font
+                if warning_font and col == deadline_column:
+                    cell.font = Font(color=warning_font)
+                elif contrast:
+                    cell.font = Font(color=contrast)
 
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)

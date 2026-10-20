@@ -24,3 +24,7 @@ def app_icon_png() -> Path:
 
 def app_icon_ico() -> Path:
     return resource_path("app_icon.ico")
+
+
+def whats_new_markdown() -> Path:
+    return resource_path("whats_new.md")

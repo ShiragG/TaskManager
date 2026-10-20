@@ -365,3 +365,193 @@ def test_settings_load_rewrites_legacy_source_modules_key(tmp_path: Path):
     assert loaded.to_dict() == canonical
     assert "source_modules" not in json.loads(path.read_text(encoding="utf-8"))
     assert loaded_store.pending_source_module_migration[0].module_id == "razr"
+
+
+def test_source_status_highlights_roundtrip(tmp_path: Path):
+    from taskmanager.services.settings_service import (
+        SourceStatusHighlight,
+        source_status_mark_color,
+    )
+
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(
+        work_dir=str(tmp_path / "work"),
+        source_status_highlights={
+            "razr": SourceStatusHighlight(
+                enabled=True,
+                colors={"10": "#FF0000", "3": "nope", "4": "#abc"},
+                labels={"10": "  НАЗНАЧЕНО ", "x": "  ", "": "no"},
+            ),
+            "empty": SourceStatusHighlight(),
+        },
+    )
+    assert settings.source_status_highlights["razr"].colors == {
+        "10": "#ff0000",
+        "4": "#aabbcc",
+    }
+    assert settings.source_status_highlights["razr"].labels == {"10": "НАЗНАЧЕНО"}
+    assert "empty" not in settings.to_dict()["source_status_highlights"]
+    assert (
+        source_status_mark_color(settings.source_status_highlights, "razr", "10")
+        == "#ff0000"
+    )
+    assert (
+        source_status_mark_color(settings.source_status_highlights, "razr", "3")
+        is None
+    )
+    off = SourceStatusHighlight(
+        enabled=False, colors={"10": "#ff0000"}, labels={"10": "A"}
+    )
+    assert source_status_mark_color({"razr": off}, "razr", "10") is None
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.source_status_highlights["razr"].enabled is True
+    assert loaded.source_status_highlights["razr"].colors["4"] == "#aabbcc"
+    assert loaded.source_status_highlights["razr"].labels["10"] == "НАЗНАЧЕНО"
+    assert "empty" not in loaded.source_status_highlights
+
+    work = tmp_path / "w"
+    work.mkdir()
+    raw_path = tmp_path / "raw.json"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "work_dir": str(work),
+                "source_status_highlights": {
+                    "razr": {
+                        "enabled": "yes",
+                        "colors": {"1": "#00ff00"},
+                        "labels": {"1": "Ok"},
+                    },
+                    "   ": {"enabled": True, "colors": {"1": "#ffffff"}},
+                    "bad": ["nope"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    parsed = SettingsStore(raw_path).load()
+    assert parsed.source_status_highlights["razr"].enabled is False
+    assert parsed.source_status_highlights["razr"].colors["1"] == "#00ff00"
+    assert (
+        source_status_mark_color(parsed.source_status_highlights, "razr", "1")
+        is None
+    )
+    assert "   " not in parsed.source_status_highlights
+    assert "bad" not in parsed.source_status_highlights
+
+
+def test_last_seen_version_roundtrip_and_invalid(tmp_path: Path):
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(work_dir=str(tmp_path / "work"), last_seen_version="0.11.0")
+    store.save(settings)
+    assert store.load().last_seen_version == "0.11.0"
+
+    work = tmp_path / "w"
+    work.mkdir()
+    raw = tmp_path / "raw.json"
+    raw.write_text(
+        json.dumps({"work_dir": str(work), "last_seen_version": 11}),
+        encoding="utf-8",
+    )
+    assert SettingsStore(raw).load().last_seen_version == ""
+
+    raw.write_text(
+        json.dumps({"work_dir": str(work), "last_seen_version": "  0.10.8  "}),
+        encoding="utf-8",
+    )
+    assert SettingsStore(raw).load().last_seen_version == "0.10.8"
+
+
+def test_workflow_status_colors_roundtrip(tmp_path: Path):
+    from taskmanager.domain import WorkflowStatus
+    from taskmanager.services.settings_service import workflow_status_mark_color
+
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = Settings(
+        work_dir=str(tmp_path / "work"),
+        highlight_workflow_statuses=True,
+        workflow_status_colors={
+            "in_progress": "#FF0000",
+            "done": "#abc",
+            "waiting": "nope",
+            "archived": "#ffffff",
+            "": "#000000",
+        },
+    )
+    assert settings.highlight_workflow_statuses is True
+    assert settings.workflow_status_colors == {
+        "in_progress": "#ff0000",
+        "done": "#aabbcc",
+    }
+    assert (
+        workflow_status_mark_color(
+            settings.highlight_workflow_statuses,
+            settings.workflow_status_colors,
+            WorkflowStatus.IN_PROGRESS,
+        )
+        == "#ff0000"
+    )
+    assert (
+        workflow_status_mark_color(
+            settings.highlight_workflow_statuses,
+            settings.workflow_status_colors,
+            WorkflowStatus.NEW,
+        )
+        is None
+    )
+    assert (
+        workflow_status_mark_color(
+            False, settings.workflow_status_colors, "in_progress"
+        )
+        is None
+    )
+    store.save(settings)
+    loaded = store.load()
+    assert loaded.highlight_workflow_statuses is True
+    assert loaded.workflow_status_colors == {
+        "in_progress": "#ff0000",
+        "done": "#aabbcc",
+    }
+    assert "archived" not in loaded.workflow_status_colors
+
+    work = tmp_path / "w"
+    work.mkdir()
+    raw_path = tmp_path / "raw.json"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "work_dir": str(work),
+                "highlight_workflow_statuses": "yes",
+                "workflow_status_colors": {
+                    "new": "#00ff00",
+                    "nope": "#ffffff",
+                    "waiting": "",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    parsed = SettingsStore(raw_path).load()
+    assert parsed.highlight_workflow_statuses is False
+    assert parsed.workflow_status_colors == {"new": "#00ff00"}
+    assert (
+        workflow_status_mark_color(
+            parsed.highlight_workflow_statuses,
+            parsed.workflow_status_colors,
+            "new",
+        )
+        is None
+    )
+    off = Settings(
+        work_dir=str(work),
+        highlight_workflow_statuses=False,
+        workflow_status_colors={"new": "#00ff00"},
+    )
+    assert off.workflow_status_colors == {"new": "#00ff00"}
+    assert workflow_status_mark_color(True, off.workflow_status_colors, "new") == (
+        "#00ff00"
+    )

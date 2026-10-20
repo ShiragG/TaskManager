@@ -112,6 +112,16 @@ def _parse_time_of_day(value: str) -> time:
     return time(hour=min(hour, 23), minute=min(minute, 59))
 
 
+# Grid and search skip the markdown bodies. Plain previews and row fields stay.
+_TASK_COLUMNS_WITHOUT_BODIES = (
+    "id, directory_id, number, description_plain, comment_plain, "
+    "date_end, color, priority, hidden, has_folder, status, folder_name, "
+    "archive_month, archive_project_folder, created_at, "
+    "source_module_id, external_id, source_label, "
+    "workflow_status, source_status_id, source_status_label"
+)
+
+
 # Applied in _migrate after source columns exist and duplicates are renamed.
 SOURCE_LINK_UNIQUE_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source_link
@@ -239,6 +249,7 @@ class SqliteRepository:
         self._migrate_reminders_task_id_nullable()
         self._migrate_reminders_color()
         self._migrate_reminders_sound_path()
+        self._migrate_event_text_markdown()
 
     def _migrate_plain_columns(self) -> None:
         cols = {
@@ -444,6 +455,36 @@ class SqliteRepository:
         if "sound_path" in cols:
             return
         self._conn.execute("ALTER TABLE reminders ADD COLUMN sound_path TEXT")
+
+    def _migrate_event_text_markdown(self) -> None:
+        """Convert stored Event HTML to markdown once. Images are dropped."""
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        row = self._conn.execute(
+            "SELECT value FROM app_meta WHERE key = 'event_text_format'"
+        ).fetchone()
+        if row is not None and row["value"] == "markdown":
+            return
+        reminders = self._conn.execute("SELECT id, text FROM reminders").fetchall()
+        for reminder in reminders:
+            text = html_to_markdown(reminder["text"] or "", drop_images=True)
+            self._conn.execute(
+                "UPDATE reminders SET text = ? WHERE id = ?",
+                (text, reminder["id"]),
+            )
+        self._conn.execute(
+            """
+            INSERT INTO app_meta (key, value)
+            VALUES ('event_text_format', 'markdown')
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """
+        )
 
     def _dedupe_source_links(self) -> None:
         """Rename duplicate source links so the unique index can be created.
@@ -681,7 +722,9 @@ class SqliteRepository:
         status: TaskStatus | None = TaskStatus.ACTIVE,
         only_hidden: bool | None = None,
         query: str | None = None,
+        bodies: bool = True,
     ) -> list[Task]:
+        """List tasks. ``bodies=False`` leaves description and comment empty."""
         clauses: list[str] = []
         params: list[object] = []
         if project_id is not None:
@@ -701,11 +744,41 @@ class SqliteRepository:
             )
             params.extend([like, like, like])
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        columns = "*" if bodies else _TASK_COLUMNS_WITHOUT_BODIES
         rows = self._conn.execute(
-            f"SELECT * FROM tasks {where} ORDER BY number",
+            f"SELECT {columns} FROM tasks {where} ORDER BY number",
             params,
         ).fetchall()
         return [self._task_from_row(r) for r in rows]
+
+    def list_active_task_folders(self, project_id: int) -> list[Task]:
+        """Active tasks with only the fields needed to resolve a folder path."""
+        rows = self._conn.execute(
+            """
+            SELECT id, directory_id, number, folder_name, has_folder, status
+            FROM tasks
+            WHERE directory_id = ? AND status = ?
+            ORDER BY number
+            """,
+            (project_id, TaskStatus.ACTIVE.value),
+        ).fetchall()
+        return [self._task_from_row(r) for r in rows]
+
+    def task_ids_with_existing_projects(self, task_ids: list[int]) -> set[int]:
+        """Task ids whose row and project both still exist."""
+        if not task_ids:
+            return set()
+        placeholders = ",".join("?" for _ in task_ids)
+        rows = self._conn.execute(
+            f"""
+            SELECT tasks.id AS id
+            FROM tasks
+            INNER JOIN directories ON directories.id = tasks.directory_id
+            WHERE tasks.id IN ({placeholders})
+            """,
+            task_ids,
+        ).fetchall()
+        return {int(row["id"]) for row in rows}
 
     def list_archive_months(self, project_id: int) -> list[str]:
         """Distinct archive_month values for archived tasks of a project."""
@@ -873,60 +946,68 @@ class SqliteRepository:
         return result
 
     def _task_from_row(self, row: sqlite3.Row) -> Task:
-        date_end = date.fromisoformat(row["date_end"]) if row["date_end"] else None
-        created_at = (
-            datetime.fromisoformat(row["created_at"]) if row["created_at"] else None
-        )
-        keys = row.keys()
-        priority = int(row["priority"]) if "priority" in keys else 10
-        comment = row["comment"] if "comment" in keys and row["comment"] is not None else ""
-        has_folder = bool(row["has_folder"]) if "has_folder" in keys else True
+        keys = set(row.keys())
+
+        def value(key: str, default=None):
+            if key not in keys:
+                return default
+            return row[key]
+
+        raw_date = value("date_end")
+        date_end = date.fromisoformat(raw_date) if raw_date else None
+        raw_created = value("created_at")
+        created_at = datetime.fromisoformat(raw_created) if raw_created else None
+        priority_raw = value("priority", 10)
+        priority = int(priority_raw if priority_raw is not None else 10)
+        raw_comment = value("comment", "")
+        comment = raw_comment if raw_comment is not None else ""
+        has_folder = bool(value("has_folder")) if "has_folder" in keys else True
         archive_project_folder = (
-            row["archive_project_folder"]
+            value("archive_project_folder")
             if "archive_project_folder" in keys
             else None
         )
-        color = row["color"]
+        color = value("color") if "color" in keys else None
         source_module_id = (
-            row["source_module_id"] if "source_module_id" in keys else None
+            value("source_module_id") if "source_module_id" in keys else None
         )
-        external_id = row["external_id"] if "external_id" in keys else None
-        source_label = row["source_label"] if "source_label" in keys else None
+        external_id = value("external_id") if "external_id" in keys else None
+        source_label = value("source_label") if "source_label" in keys else None
         workflow_status = (
-            parse_workflow_status(row["workflow_status"])
+            parse_workflow_status(value("workflow_status"))
             if "workflow_status" in keys
             else WorkflowStatus.NEW
         )
         source_status_id = (
-            row["source_status_id"] if "source_status_id" in keys else None
+            value("source_status_id") if "source_status_id" in keys else None
         )
         source_status_label = (
-            row["source_status_label"] if "source_status_label" in keys else None
+            value("source_status_label") if "source_status_label" in keys else None
         )
+        raw_description_plain = value("description_plain", "")
         description_plain = (
-            row["description_plain"]
-            if "description_plain" in keys and row["description_plain"] is not None
-            else ""
+            raw_description_plain if raw_description_plain is not None else ""
         )
-        comment_plain = (
-            row["comment_plain"]
-            if "comment_plain" in keys and row["comment_plain"] is not None
-            else ""
-        )
+        raw_comment_plain = value("comment_plain", "")
+        comment_plain = raw_comment_plain if raw_comment_plain is not None else ""
+        raw_description = value("description", "")
+        description = raw_description if raw_description is not None else ""
+        hidden = bool(value("hidden")) if "hidden" in keys else False
+        archive_month = value("archive_month") if "archive_month" in keys else None
         return Task(
             id=row["id"],
             project_id=row["directory_id"],
             number=row["number"],
-            description=row["description"] or "",
+            description=description,
             folder_name=row["folder_name"],
             status=TaskStatus(row["status"]),
             date_end=date_end,
             color=color,
             comment=comment,
             priority=priority,
-            hidden=bool(row["hidden"]),
+            hidden=hidden,
             has_folder=has_folder,
-            archive_month=row["archive_month"],
+            archive_month=archive_month,
             archive_project_folder=archive_project_folder,
             created_at=created_at,
             source_module_id=source_module_id,

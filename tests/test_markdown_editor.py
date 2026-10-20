@@ -1308,3 +1308,47 @@ def _has_image(edit) -> bool:
             iterator += 1
         block = block.next()
     return False
+
+
+def test_editor_without_images_drops_paste_and_hides_the_button(qtbot):
+    from PySide6.QtCore import QMimeData
+    from PySide6.QtGui import QImage
+
+    dialog = MarkdownEditDialog(markdown="текст", allow_images=False)
+    qtbot.addWidget(dialog)
+    assert dialog.image_action is None
+    assert dialog.insert_image_bytes(PNG_1x1, "clipboard.png") is False
+    assert dialog.markdown == "текст"
+
+    image = QImage(8, 8, QImage.Format.Format_RGB32)
+    image.fill(Qt.GlobalColor.red)
+    mime = QMimeData()
+    mime.setImageData(image)
+    dialog.text_edit.insertFromMimeData(mime)
+    dialog.source_edit.insertFromMimeData(mime)
+    assert dialog.markdown == "текст"
+    assert "![](" not in dialog.markdown
+
+    mixed = QMimeData()
+    mixed.setHtml('<p>слово<img src="data:image/png;base64,aaaa"></p>')
+    mixed.setText("слово")
+    dialog.text_edit.insertFromMimeData(mixed)
+    assert "слово" in dialog.text_edit.toPlainText()
+    assert "data:image" not in dialog.markdown
+    assert "![](" not in dialog.markdown
+    dialog.set_markdown_mode(True)
+    dialog.source_edit.insertFromMimeData(mime)
+    assert "![](" not in dialog.markdown
+    assert "data:image" not in dialog.markdown
+
+    typed = MarkdownEditDialog(
+        markdown="см ![](shot.png) слово", allow_images=False
+    )
+    qtbot.addWidget(typed)
+    assert "![](" not in typed.markdown
+    assert "слово" in typed.markdown
+    typed.set_markdown_mode(True)
+    typed.source_edit.insertPlainText(" ![](other.png)")
+    typed.set_markdown_mode(False)
+    assert "![](" not in typed.markdown
+    assert "слово" in typed.markdown

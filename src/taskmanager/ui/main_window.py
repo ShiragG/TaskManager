@@ -6,7 +6,17 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QModelIndex, Qt, QThread, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QColor, QKeySequence, QShortcut
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QColor,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -35,7 +45,6 @@ from PySide6.QtWidgets import (
 from taskmanager.domain import (
     Project,
     contrast_foreground,
-    html_to_plain,
     is_deadline_warning,
     make_folder_name,
     natural_sort_key,
@@ -51,6 +60,8 @@ from taskmanager.services.settings_service import (
     BASE_COLOR_NAMES,
     Settings,
     SettingsStore,
+    source_status_mark_color,
+    workflow_status_mark_color,
 )
 from taskmanager.services.inline_images import (
     IMAGES_DIR_NAME,
@@ -88,6 +99,8 @@ from taskmanager.ui.reminders_window import (
     ReminderEditDialog,
     ReminderNotifyDialog,
     RemindersWindow,
+    event_popup_html,
+    event_text_plain,
     format_reminder_series,
 )
 from taskmanager.ui.settings_dialog import SettingsDialog
@@ -125,6 +138,7 @@ _SORT_KEY_COLUMNS = {name: index for index, name in _SORT_COLUMN_KEYS.items()}
 
 DESC_COL_WIDTH = 720
 MSG_SELECT_ONE = "Выберите одну заявку"
+STATUS_RESULT_MS = 5000
 
 
 def _sort_indicator(project: Project | None) -> tuple[int, Qt.SortOrder]:
@@ -152,6 +166,27 @@ def _format_bytes(n: int) -> str:
 
 def _format_speed(bps: float) -> str:
     return f"{_format_bytes(int(bps))}/с"
+
+
+def status_mark_icon(hex_color: str) -> QIcon:
+    """Small circle drawn to the left of a status label."""
+    color = QColor(hex_color)
+    if not color.isValid():
+        return QIcon()
+    size = 16
+    diameter = 10
+    image = QImage(size, size, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        offset = (size - diameter) // 2
+        painter.drawEllipse(offset, offset, diameter, diameter)
+    finally:
+        painter.end()
+    return QIcon(QPixmap.fromImage(image))
 
 
 class SortableItem(QTableWidgetItem):
@@ -366,7 +401,18 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._bulk_refresh_panel)
 
         self.setCentralWidget(central)
-        self.statusBar().showMessage("Готово")
+        self._selection_count = QLabel("Заявок: 0")
+        self._selection_count.setObjectName("selectionCount")
+        self.statusBar().addPermanentWidget(self._selection_count)
+        self.statusBar().clearMessage()
+
+    def _status_result(self, message: str) -> None:
+        """Outcome on the left. Fades; the counter on the right stays."""
+        self.statusBar().showMessage(message, STATUS_RESULT_MS)
+
+    def _status_progress(self, message: str) -> None:
+        """Import or update progress. Stays until the next line or a result."""
+        self.statusBar().showMessage(message)
 
     def _rebuild_color_palette(self) -> None:
         while self.palette_layout.count():
@@ -412,7 +458,7 @@ class MainWindow(QMainWindow):
     def _apply_color_to_selection(self, color: str | None) -> None:
         task_ids = self.selected_task_ids()
         if not task_ids:
-            self.statusBar().showMessage("Выберите заявку, чтобы задать цвет")
+            self._status_result("Выберите заявку, чтобы задать цвет")
             return
         errors: list[str] = []
         updated = 0
@@ -439,7 +485,7 @@ class MainWindow(QMainWindow):
                 + "\n".join(errors[:10]),
             )
         elif updated:
-            self.statusBar().showMessage(
+            self._status_result(
                 "Цвет обновлён"
                 if updated == 1
                 else f"Цвет обновлён для заявок: {updated}"
@@ -550,6 +596,7 @@ class MainWindow(QMainWindow):
     def reload_current_tab(self) -> None:
         idx = self.tabs.currentIndex()
         if idx < 0:
+            self._update_selection_counter()
             return
         project_id = self.tabs.tabBar().tabData(idx)
         project = next(
@@ -604,6 +651,9 @@ class MainWindow(QMainWindow):
         delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, table)
         delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         delete_shortcut.activated.connect(self.delete_selected_task)
+        table.itemSelectionChanged.connect(
+            lambda t=table: self._on_table_selection_changed(t)
+        )
         return table
 
     def _on_table_sort_changed(self, project_id: int, section: int, order: Qt.SortOrder) -> None:
@@ -623,6 +673,7 @@ class MainWindow(QMainWindow):
             only_hidden=self._show_hidden,
             archived=self._show_archive,
             query=query,
+            bodies=False,
         )
 
         table.setSortingEnabled(False)
@@ -692,21 +743,31 @@ class MainWindow(QMainWindow):
                         item.setForeground(fg)
 
             if self.settings.show_priority_colors:
-                priority_item.setBackground(QColor(priority_color_hex(task.priority)))
-                priority_item.setForeground(
-                    QColor(contrast_foreground(priority_color_hex(task.priority)))
-                )
+                priority_hex = priority_color_hex(task.priority)
+                priority_item.setBackground(QColor(priority_hex))
+                priority_item.setForeground(QColor(contrast_foreground(priority_hex)))
 
             if self.settings.highlight_warnings and is_deadline_warning(
                 task.date_end,
                 today=today,
                 lead_days=self.settings.warning_lead_days,
             ):
-                warn = QColor(self.settings.warning_color)
-                for col in all_cols:
-                    item = table.item(row, col)
-                    if item:
-                        item.setForeground(warn)
+                date_item.setForeground(QColor(self.settings.warning_color))
+
+            if task.has_source:
+                mark = source_status_mark_color(
+                    self.settings.source_status_highlights,
+                    task.source_module_id,
+                    task.source_status_id,
+                )
+            else:
+                mark = workflow_status_mark_color(
+                    self.settings.highlight_workflow_statuses,
+                    self.settings.workflow_status_colors,
+                    task.workflow_status,
+                )
+            if mark:
+                status_item.setIcon(status_mark_icon(mark))
 
         table.setSortingEnabled(True)
         header = table.horizontalHeader()
@@ -714,13 +775,7 @@ class MainWindow(QMainWindow):
             header.resizeSection(COL_DESCRIPTION, DESC_COL_WIDTH)
         table.sortItems(header.sortIndicatorSection(), header.sortIndicatorOrder())
         self._sync_mode_actions()
-        if self._show_archive:
-            mode = "в архиве"
-        elif self._show_hidden:
-            mode = "скрытых"
-        else:
-            mode = "заявок"
-        self.statusBar().showMessage(f"{project.name}: {len(tasks)} {mode}")
+        self._update_selection_counter()
 
     def _bind_draft_images(self, dialog: TaskDialog, project_id: int) -> None:
         dialog.set_images_dir_provider(
@@ -900,6 +955,20 @@ class MainWindow(QMainWindow):
             seen.add(task_id)
             ids.append(task_id)
         return ids
+
+    def _on_table_selection_changed(self, table: QTableWidget) -> None:
+        if self.current_table() is not table:
+            return
+        self._update_selection_counter()
+
+    def _update_selection_counter(self) -> None:
+        table = self.current_table()
+        total = table.rowCount() if table is not None else 0
+        selected = len(self.selected_task_ids()) if table is not None else 0
+        if selected:
+            self._selection_count.setText(f"Выделено {selected} из {total}")
+        else:
+            self._selection_count.setText(f"Заявок: {total}")
 
     # --- actions ---
 
@@ -1173,11 +1242,11 @@ class MainWindow(QMainWindow):
         create_notes = self.settings.create_notes_file
         total = len(external_ids)
         picker.begin_bulk_progress(total)
-        self.statusBar().showMessage(f"Импорт: 0 из {total}…")
+        self._status_progress(f"Импорт: 0 из {total}…")
         try:
             for index, external_id in enumerate(external_ids, start=1):
                 picker.update_bulk_progress(index - 1, total, external_id)
-                self.statusBar().showMessage(
+                self._status_progress(
                     f"Импорт: {index - 1} из {total} — {external_id}"
                 )
                 try:
@@ -1215,7 +1284,7 @@ class MainWindow(QMainWindow):
                     logger.exception("Bulk import failed for %s", external_id)
                     errors.append(f"{external_id}: {exc}")
                 picker.update_bulk_progress(index, total, external_id)
-                self.statusBar().showMessage(f"Импорт: {index} из {total}")
+                self._status_progress(f"Импорт: {index} из {total}")
         finally:
             picker.end_bulk_progress()
 
@@ -1230,7 +1299,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "Импорт", "\n".join(lines))
         picker.refresh_imported_marks()
         self.reload_current_tab()
-        self.statusBar().showMessage(
+        self._status_result(
             f"Импорт завершён: создано {created}"
             + (f", пропущено {skipped}" if skipped else "")
             + (f", ошибок {len(errors)}" if errors else "")
@@ -1510,7 +1579,7 @@ class MainWindow(QMainWindow):
             self.reload_current_tab()
             self._bulk_refresh_panel.hide()
             self._sync_mode_actions()
-            self.statusBar().showMessage(
+            self._status_result(
                 f"Обновление завершено: обновлено {updated}"
                 + (f", ошибок {len(errors)}" if errors else "")
                 + (", отменено" if cancelled else "")
@@ -1669,7 +1738,7 @@ class MainWindow(QMainWindow):
                 "Не удалось заархивировать часть заявок:\n" + "\n".join(errors[:10]),
             )
         elif archived:
-            self.statusBar().showMessage(
+            self._status_result(
                 "Заявка в архиве"
                 if archived == 1
                 else f"В архиве заявок: {archived}"
@@ -1700,7 +1769,7 @@ class MainWindow(QMainWindow):
                 "Не удалось вернуть часть заявок:\n" + "\n".join(errors[:10]),
             )
         elif restored:
-            self.statusBar().showMessage(
+            self._status_result(
                 "Заявка возвращена"
                 if restored == 1
                 else f"Возвращено заявок: {restored}"
@@ -1750,7 +1819,7 @@ class MainWindow(QMainWindow):
                     if changed == 1
                     else f"Показано заявок: {changed}"
                 )
-            self.statusBar().showMessage(msg)
+            self._status_result(msg)
 
     def delete_selected_task(self) -> None:
         if self._show_archive:
@@ -1792,7 +1861,7 @@ class MainWindow(QMainWindow):
                 "Не удалось удалить часть заявок:\n" + "\n".join(errors[:10]),
             )
         elif deleted:
-            self.statusBar().showMessage(
+            self._status_result(
                 "Заявка удалена" if deleted == 1 else f"Удалено заявок: {deleted}"
             )
 
@@ -1818,7 +1887,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
         QApplication.clipboard().setText(task.number)
-        self.statusBar().showMessage("Номер скопирован")
+        self._status_result("Номер скопирован")
 
     def export_excel(self) -> None:
         projects = self.service.list_projects()
@@ -1861,7 +1930,7 @@ class MainWindow(QMainWindow):
         except ExcelExportError as exc:
             QMessageBox.warning(self, "Ошибка", str(exc))
             return
-        self.statusBar().showMessage(f"Экспорт сохранён: {path}")
+        self._status_result(f"Экспорт сохранён: {path}")
         QMessageBox.information(self, "Excel", f"Файл сохранён:\n{path}")
 
     def open_settings(self) -> None:
@@ -1934,12 +2003,18 @@ class MainWindow(QMainWindow):
         return self
 
     def run_startup_update_checks(self) -> None:
+        self._show_whats_new_if_needed()
         if self.settings.check_updates_on_startup:
             self.start_update_check(
                 quiet=True, on_finished=self._run_startup_module_update_check
             )
             return
         self._run_startup_module_update_check()
+
+    def _show_whats_new_if_needed(self) -> None:
+        from taskmanager.ui.whats_new_dialog import show_whats_new
+
+        show_whats_new(self, self.settings, self.settings_store)
 
     def _run_startup_module_update_check(self) -> None:
         if self._skip_module_updates_this_session:
@@ -2017,7 +2092,7 @@ class MainWindow(QMainWindow):
         self._update_quiet = False
         if quiet:
             return
-        self.statusBar().showMessage(f"Ошибка обновления модулей: {message}")
+        self._status_result(f"Ошибка обновления модулей: {message}")
         QMessageBox.warning(
             self._update_parent(),
             "Обновления модулей",
@@ -2032,7 +2107,7 @@ class MainWindow(QMainWindow):
         host._update_progress.show()
         host._update_progress.setRange(0, 0)
         host._update_label.setText("Загрузка модулей…")
-        self.statusBar().showMessage("Загрузка модулей…")
+        self._status_progress("Загрузка модулей…")
         thread = QThread(self)
         worker = ModuleUpdateDownloadWorker(offers)
         worker.moveToThread(thread)
@@ -2092,14 +2167,14 @@ class MainWindow(QMainWindow):
                 "Не все модули установлены:\n" + "\n".join(errors),
             )
             return
-        self.statusBar().showMessage(f"Обновлено модулей: {installed}")
+        self._status_result(f"Обновлено модулей: {installed}")
 
     def _on_module_update_download_failed(self, message: str) -> None:
         self._update_busy = False
         self._hide_update_panel()
         self._update_quiet = False
         logger.error("Module update download failed: %s", message)
-        self.statusBar().showMessage(f"Ошибка загрузки модулей: {message}")
+        self._status_result(f"Ошибка загрузки модулей: {message}")
         QMessageBox.warning(
             self._update_parent(),
             "Обновления модулей",
@@ -2114,7 +2189,7 @@ class MainWindow(QMainWindow):
                     "Обновления",
                     "Обновление уже выполняется…",
                 )
-                self.statusBar().showMessage("Обновление уже выполняется…")
+                self._status_result("Обновление уже выполняется…")
             if on_finished is not None:
                 on_finished()
             return
@@ -2169,7 +2244,7 @@ class MainWindow(QMainWindow):
             quiet = self._update_quiet
             self._finish_update_check()
             if not quiet:
-                self.statusBar().showMessage(msg)
+                self._status_result(msg)
                 QMessageBox.information(self._update_parent(), "Обновления", msg)
             return
 
@@ -2181,7 +2256,7 @@ class MainWindow(QMainWindow):
             quiet = self._update_quiet
             self._finish_update_check()
             if not quiet:
-                self.statusBar().showMessage(msg)
+                self._status_result(msg)
                 QMessageBox.warning(self._update_parent(), "Обновления", msg)
             return
 
@@ -2192,7 +2267,7 @@ class MainWindow(QMainWindow):
             f"Скачать «{asset.name}»?",
         )
         if answer != QMessageBox.StandardButton.Yes:
-            self.statusBar().showMessage("Загрузка обновления не начата")
+            self._status_result("Загрузка обновления не начата")
             self._finish_update_check()
             return
 
@@ -2208,7 +2283,7 @@ class MainWindow(QMainWindow):
         self._finish_update_check()
         if quiet:
             return
-        self.statusBar().showMessage(f"Ошибка обновления: {message}")
+        self._status_result(f"Ошибка обновления: {message}")
         QMessageBox.warning(
             self._update_parent(),
             "Обновления",
@@ -2226,7 +2301,7 @@ class MainWindow(QMainWindow):
         host._update_progress.setRange(0, 0)
         host._update_progress.setValue(0)
         host._update_cancel_btn.setEnabled(True)
-        self.statusBar().showMessage("Загрузка обновления…")
+        self._status_progress("Загрузка обновления…")
 
         thread = QThread(self)
         worker = UpdateDownloadWorker(asset, dest)
@@ -2282,12 +2357,12 @@ class MainWindow(QMainWindow):
                 "файл заменят; затем запустите приложение снова вручную."
             )
             host._update_label.setText(banner)
-            self.statusBar().showMessage(f"Обновление готово: {path}")
+            self._status_result(f"Обновление готово: {path}")
             host._update_restart_btn.show()
         else:
             msg = "Загрузка обновления завершена"
             host._update_label.setText(msg)
-            self.statusBar().showMessage(f"{msg}: {path}")
+            self._status_result(f"{msg}: {path}")
             host._update_restart_btn.hide()
             QMessageBox.information(
                 self._update_parent(),
@@ -2334,7 +2409,7 @@ class MainWindow(QMainWindow):
         self._download_worker = None
         self._update_busy = False
         logger.error("Update download failed: %s", message)
-        self.statusBar().showMessage(f"Ошибка загрузки: {message}")
+        self._status_result(f"Ошибка загрузки: {message}")
         QMessageBox.warning(
             self._update_parent(), "Обновления", f"Ошибка загрузки: {message}"
         )
@@ -2343,7 +2418,7 @@ class MainWindow(QMainWindow):
         self._hide_update_panel()
         self._download_worker = None
         self._update_busy = False
-        self.statusBar().showMessage("Загрузка отменена")
+        self._status_result("Загрузка отменена")
 
     def _cancel_update_download(self) -> None:
         if self._download_worker is not None:
@@ -2361,7 +2436,7 @@ class MainWindow(QMainWindow):
         host._update_progress.hide()
         host._update_cancel_btn.hide()
         host._update_restart_btn.hide()
-        self.statusBar().showMessage(message)
+        self._status_progress(message)
 
     def _hide_update_panel(self) -> None:
         for host in {self, self._update_ui} - {None}:
@@ -2625,13 +2700,13 @@ class MainWindow(QMainWindow):
 
     def _notify_reminder(self, series, occ: datetime, task=None, project=None) -> None:
         repeating = " · повторяемое" if series.is_repeating else ""
-        plain = html_to_plain(series.text) or "—"
+        plain = event_text_plain(series.text)
         if task is not None and project is not None:
             title = f"{project.name} / №{task.number}"
         else:
             title = plain
         heading = f"{occ.strftime('%d.%m.%Y %H:%M')}{repeating}"
-        body_html = f"<p>{heading}</p>{series.text or '—'}"
+        body_html = event_popup_html(heading, series.text)
         task_id = task.id if task is not None else None
         if series.id is not None:
             self._pending_notify = (series.id, occ, task_id)

@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from taskmanager.domain import WORKFLOW_STATUS_LABELS
 from taskmanager.infrastructure.paths import resolve_work_dir
 from taskmanager.services.hotkeys import (
     DEFAULT_HOTKEYS,
@@ -52,8 +53,48 @@ from taskmanager.services.settings_service import (
 )
 from taskmanager.ui.about_dialog import AboutDialog
 from taskmanager.ui.event_sound_picker import EventSoundPicker
-from taskmanager.ui.source_modules_dialog import SourceModulesSettingsDialog
+from taskmanager.ui.source_modules_dialog import (
+    SourceModulesSettingsDialog,
+    _StatusColorEditor,
+)
 from taskmanager.version import get_version
+
+
+class WorkflowStatusColorsDialog(QDialog):
+    """Five workflow statuses and an optional color. Empty color draws no mark."""
+
+    def __init__(self, colors: dict[str, str], parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Цвета статусов работы")
+        self.setMinimumWidth(420)
+        self._editors: list[_StatusColorEditor] = []
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        for status, label in WORKFLOW_STATUS_LABELS.items():
+            editor = _StatusColorEditor(
+                status.value,
+                label,
+                colors.get(status.value, ""),
+                picker_title="Цвет статуса работы",
+            )
+            self._editors.append(editor)
+            form.addRow(QLabel(label), editor)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def collect(self) -> dict[str, str]:
+        colors: dict[str, str] = {}
+        for editor in self._editors:
+            if editor.color:
+                colors[editor.status_id] = editor.color
+        return colors
 
 
 class SettingsDialog(QDialog):
@@ -183,6 +224,10 @@ class SettingsDialog(QDialog):
         update_btn.setObjectName("secondaryButton")
         update_btn.clicked.connect(self._check_updates)
         footer.addWidget(update_btn)
+        whats_new_btn = QPushButton("Что нового")
+        whats_new_btn.setObjectName("secondaryButton")
+        whats_new_btn.clicked.connect(self._open_whats_new)
+        footer.addWidget(whats_new_btn)
         about_btn = QPushButton("О приложении…")
         about_btn.setObjectName("secondaryButton")
         about_btn.clicked.connect(self._open_about)
@@ -238,6 +283,19 @@ class SettingsDialog(QDialog):
         self.show_priority_colors_cb = QCheckBox("Цвета приоритета в таблице")
         self.show_priority_colors_cb.setChecked(settings.show_priority_colors)
         form.addRow(self.show_priority_colors_cb)
+
+        self.highlight_workflow_cb = QCheckBox("Подсвечивать статусы работы")
+        self.highlight_workflow_cb.setChecked(settings.highlight_workflow_statuses)
+        self.workflow_status_colors_btn = QPushButton("Цвета статусов работы…")
+        self.workflow_status_colors_btn.setObjectName("secondaryButton")
+        self.workflow_status_colors_btn.setAutoDefault(False)
+        self.workflow_status_colors_btn.clicked.connect(self._open_workflow_status_colors)
+        workflow_row = QHBoxLayout()
+        workflow_row.addWidget(self.highlight_workflow_cb)
+        workflow_row.addWidget(self.workflow_status_colors_btn)
+        workflow_row.addStretch()
+        form.addRow(workflow_row)
+        self._workflow_status_colors = dict(settings.workflow_status_colors)
 
         self.keep_priority_on_source_refresh_cb = QCheckBox(
             "Не изменять приоритет при обновлении из источника"
@@ -362,6 +420,11 @@ class SettingsDialog(QDialog):
     def _open_about(self) -> None:
         AboutDialog(self).exec()
 
+    def _open_whats_new(self) -> None:
+        from taskmanager.ui.whats_new_dialog import show_whats_new
+
+        show_whats_new(self, self._settings, self._store, force=True)
+
     def _on_sound_combo_changed(self, index: int) -> None:
         self.sound_picker._on_changed(index)
 
@@ -383,6 +446,12 @@ class SettingsDialog(QDialog):
             f"QPushButton {{ background-color: {color.name()}; "
             f"border: 1px solid #334155; border-radius: 3px; }}"
         )
+
+    def _open_workflow_status_colors(self) -> None:
+        dialog = WorkflowStatusColorsDialog(self._workflow_status_colors, self)
+        if dialog.exec() != WorkflowStatusColorsDialog.DialogCode.Accepted:
+            return
+        self._workflow_status_colors = dialog.collect()
 
     def _pick_warning_color(self) -> None:
         current = QColor(self.warning_color_edit.text().strip() or "#ff0000")
@@ -446,6 +515,10 @@ class SettingsDialog(QDialog):
         self._settings.create_notes_file = self.create_notes_cb.isChecked()
         self._settings.autonumber_on_create = self.autonumber_cb.isChecked()
         self._settings.show_priority_colors = self.show_priority_colors_cb.isChecked()
+        self._settings.highlight_workflow_statuses = (
+            self.highlight_workflow_cb.isChecked()
+        )
+        self._settings.workflow_status_colors = dict(self._workflow_status_colors)
         self._settings.keep_priority_on_source_refresh = (
             self.keep_priority_on_source_refresh_cb.isChecked()
         )

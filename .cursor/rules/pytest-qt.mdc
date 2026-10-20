@@ -1,5 +1,5 @@
 ---
-description: How to run pytest for this PySide6 app (avoid Qt ABRT in agent shells)
+description: Set QT_QPA_PLATFORM=offscreen before any headless QApplication (pytest, python -c, scripts)
 alwaysApply: true
 ---
 
@@ -20,3 +20,20 @@ QT_QPA_PLATFORM=offscreen .venv/bin/pytest tests/ -q --tb=short
 ```
 
 Do not treat a Qt abort as an application logic failure until the suite actually reports pass/fail under `offscreen`.
+
+# Headless QApplication
+
+Any `python -c`, script, or pytest that creates a `QApplication` must set `QT_QPA_PLATFORM=offscreen` before the application is constructed. Qt aborts in `createPlatformIntegration` (signal 6 / ABRT and a coredump) when no platform is available — that happens before later calls such as `setHtml` or `setMarkdown`.
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/bin/python -c '...'
+```
+
+```python
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+app = QApplication([])
+```
+
+`tests/conftest.py`, the CLI, and `ensure_qt_app` already set `offscreen` when the variable is empty. Do not change the GUI window launch (`run` / `_application` in `main.py`): the real window keeps the normal platform and must not force `offscreen`.

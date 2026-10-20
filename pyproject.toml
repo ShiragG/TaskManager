@@ -1,6 +1,6 @@
 [project]
 name = "taskmanager"
-version = "0.10.8"
+version = "0.12.0"
 description = "Приложение помогающее вести заявки"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -29,6 +29,7 @@ packages = ["src/taskmanager"]
 "src/taskmanager/ui/styles/app_dark.qss" = "taskmanager/ui/styles/app_dark.qss"
 "src/taskmanager/resources/app_icon.png" = "taskmanager/resources/app_icon.png"
 "src/taskmanager/resources/app_icon.ico" = "taskmanager/resources/app_icon.ico"
+"src/taskmanager/resources/whats_new.md" = "taskmanager/resources/whats_new.md"
 
 [dependency-groups]
 dev = [

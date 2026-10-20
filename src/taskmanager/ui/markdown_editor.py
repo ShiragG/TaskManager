@@ -1,7 +1,8 @@
-"""Text and Markdown editors for Task Description and Comment.
+"""Text and Markdown editors for Task Description, Comment, and Event text.
 
 Both modes edit the same markdown. Text shows the rendered document.
-Markdown shows the source. The toolbar is shared.
+Markdown shows the source. The toolbar is shared. Event text turns image
+insertion off.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from PySide6.QtCore import (
     QBuffer,
     QEvent,
     QIODevice,
+    QMimeData,
     QPoint,
     QRect,
     QSize,
@@ -72,6 +74,7 @@ from taskmanager.domain.markdown_body import (
     _is_fenced_code_block,
     document_to_markdown,
     preview_html,
+    strip_markdown_images,
 )
 from taskmanager.infrastructure.filesystem import source_files_present
 from taskmanager.infrastructure.platform_open import PlatformOpenError, open_target
@@ -192,17 +195,13 @@ class MarkdownSourceEdit(QPlainTextEdit):
         self.setPlaceholderText("Markdown…")
 
     def canInsertFromMimeData(self, source) -> bool:  # noqa: N802
-        if _image_from_mime(source) is not None:
-            return True
-        return super().canInsertFromMimeData(source)
+        return _can_insert_mime(self._on_image, source, super().canInsertFromMimeData)
 
     def insertFromMimeData(self, source) -> None:  # noqa: N802
-        found = _image_from_mime(source)
-        if found is not None:
-            data, name = found
-            self._on_image(data, name)
+        prepared = _prepare_paste(self._on_image, source)
+        if prepared is None:
             return
-        super().insertFromMimeData(source)
+        super().insertFromMimeData(prepared)
 
 
 class _ImageHit:
@@ -236,17 +235,13 @@ class MarkdownTextEdit(QTextEdit):
         self.viewport().setMouseTracking(True)
 
     def canInsertFromMimeData(self, source) -> bool:  # noqa: N802
-        if _image_from_mime(source) is not None:
-            return True
-        return super().canInsertFromMimeData(source)
+        return _can_insert_mime(self._on_image, source, super().canInsertFromMimeData)
 
     def insertFromMimeData(self, source) -> None:  # noqa: N802
-        found = _image_from_mime(source)
-        if found is not None:
-            data, name = found
-            self._on_image(data, name)
+        prepared = _prepare_paste(self._on_image, source)
+        if prepared is None:
             return
-        super().insertFromMimeData(source)
+        super().insertFromMimeData(prepared)
         cursor = self.textCursor()
         position = cursor.position()
         anchor = cursor.anchor()
@@ -656,11 +651,13 @@ class MarkdownEditDialog(QDialog):
         source_files_dir: Path | None = None,
         show_source_files_button: bool = False,
         image_preview_width: int = DEFAULT_IMAGE_PREVIEW_WIDTH,
+        allow_images: bool = True,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setMinimumSize(820, 468)
         self.setStyleSheet("")
+        self._allow_images = allow_images
         self._ensure_images_dir = ensure_images_dir
         self._images_dir = images_dir
         self._source_files_dir = source_files_dir
@@ -728,9 +725,15 @@ class MarkdownEditDialog(QDialog):
         self.link_action = self._add_format_action(
             toolbar, "Ссылка", "Ссылка", self._insert_link, checkable=False
         )
-        self.image_action = self._add_format_action(
-            toolbar, "Рис.", "Вставить изображение", self._pick_image, checkable=False
-        )
+        self.image_action = None
+        if allow_images:
+            self.image_action = self._add_format_action(
+                toolbar,
+                "Рис.",
+                "Вставить изображение",
+                self._pick_image,
+                checkable=False,
+            )
         self.table_action = self._add_format_action(
             toolbar, "Таблица", "Таблица", self._insert_table, checkable=False
         )
@@ -745,10 +748,14 @@ class MarkdownEditDialog(QDialog):
             self.source_files_button = files_button
         layout.addLayout(header)
 
-        self.text_edit = MarkdownTextEdit(self.insert_image_bytes)
+        on_image = self.insert_image_bytes if allow_images else None
+        self.text_edit = MarkdownTextEdit(on_image)
         self.text_edit.image_preview_width = image_preview_width
-        self.source_edit = MarkdownSourceEdit(self.insert_image_bytes)
-        self._load_text(markdown or "")
+        self.source_edit = MarkdownSourceEdit(on_image)
+        loaded = markdown or ""
+        if not allow_images:
+            loaded = strip_markdown_images(loaded)
+        self._load_text(loaded)
         self.stack = QStackedWidget()
         self.stack.addWidget(self.text_edit)
         self.stack.addWidget(self.source_edit)
@@ -781,11 +788,11 @@ class MarkdownEditDialog(QDialog):
         showing_source = self._showing_source()
         if source:
             if not showing_source:
-                self.source_edit.setPlainText(self._text_to_markdown())
+                self.source_edit.setPlainText(self.markdown)
             self.stack.setCurrentWidget(self.source_edit)
         else:
             if showing_source:
-                self._load_text(self.source_edit.toPlainText())
+                self._load_text(self.markdown)
             self.stack.setCurrentWidget(self.text_edit)
         self._show_mode(source)
         self._sync_format_actions()
@@ -807,8 +814,12 @@ class MarkdownEditDialog(QDialog):
     @property
     def markdown(self) -> str:
         if self._showing_source():
-            return self.source_edit.toPlainText()
-        return self._text_to_markdown()
+            text = self.source_edit.toPlainText()
+        else:
+            text = self._text_to_markdown()
+        if not self._allow_images:
+            text = strip_markdown_images(text)
+        return text
 
     def toggle_task_checkbox(self, index: int) -> bool:
         """Flip the ``index``-th task glyph in Text, or the marker in Markdown."""
@@ -846,6 +857,8 @@ class MarkdownEditDialog(QDialog):
         return self.insert_image_bytes(data, Path(path).name)
 
     def insert_image_bytes(self, data: bytes, name: str) -> bool:
+        if not self._allow_images:
+            return False
         if sniff_image(data) is None:
             QMessageBox.warning(self, "Ошибка", "Неподдерживаемый формат изображения")
             return False
@@ -1180,6 +1193,7 @@ class MarkdownEditRow(QWidget):
         source_files_dir: Path | None = None,
         show_source_files_button: bool = False,
         image_preview_width: int = DEFAULT_IMAGE_PREVIEW_WIDTH,
+        allow_images: bool = True,
     ) -> None:
         super().__init__(parent)
         self._title = title
@@ -1188,6 +1202,7 @@ class MarkdownEditRow(QWidget):
         self.image_preview_width = image_preview_width
         self.source_files_dir = source_files_dir
         self.show_source_files_button = show_source_files_button
+        self.allow_images = allow_images
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.edit = QLineEdit(markdown or "")
@@ -1213,6 +1228,7 @@ class MarkdownEditRow(QWidget):
             source_files_dir=self.source_files_dir,
             show_source_files_button=self.show_source_files_button,
             image_preview_width=self.image_preview_width,
+            allow_images=self.allow_images,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.edit.setText(dialog.markdown)
@@ -2360,6 +2376,52 @@ def _natural_image_size(
     if cache is not None:
         cache[name] = image.size()
     return image.size()
+
+
+_IMG_TAG_RE = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
+
+
+def _mime_without_images(source) -> QMimeData:
+    """Clipboard copy with image files, image data, and ``<img>`` tags removed."""
+    mime = QMimeData()
+    if source is None:
+        return mime
+    if source.hasHtml():
+        html_text = _IMG_TAG_RE.sub("", source.html())
+        if html_text.strip():
+            mime.setHtml(html_text)
+    if source.hasText():
+        plain = source.text()
+        if plain:
+            mime.setText(plain)
+    return mime
+
+
+def _prepare_paste(on_image, source):
+    """Return mime to insert, or None when the paste is fully consumed.
+
+    With an image handler, an image paste is stored and nothing else is inserted.
+    Without one, pictures are dropped and any remaining text is pasted.
+    """
+    found = _image_from_mime(source)
+    if found is not None and on_image is not None:
+        data, name = found
+        on_image(data, name)
+        return None
+    if on_image is None:
+        source = _mime_without_images(source)
+        if not source.hasText() and not source.hasHtml():
+            return None
+    return source
+
+
+def _can_insert_mime(on_image, source, fallback) -> bool:
+    if on_image is None:
+        stripped = _mime_without_images(source)
+        return bool(stripped.hasText() or stripped.hasHtml())
+    if _image_from_mime(source) is not None:
+        return True
+    return bool(fallback(source))
 
 
 def _image_from_mime(source) -> tuple[bytes, str] | None:

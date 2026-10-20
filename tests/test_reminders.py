@@ -232,6 +232,138 @@ def test_archive_destroys_linked_event_standalone_remains(service: TaskService):
     assert kept.text == "без заявки"
 
 
+def _delete_without_cascade(db_path: Path, sql: str, *params: object) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(sql, params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_missed_marker_ids_match_live_tasks_only(service: TaskService):
+    now = datetime(2026, 8, 10, 12, 0)
+    past = date(2026, 8, 10)
+    future = date(2026, 8, 11)
+
+    live_project = service.create_project("Live")
+    live = service.create_task(
+        CreateTaskRequest(project_id=live_project.id, number="1", create_folder=False)
+    )
+    second = service.create_task(
+        CreateTaskRequest(project_id=live_project.id, number="2", create_folder=False)
+    )
+    quiet = service.create_task(
+        CreateTaskRequest(project_id=live_project.id, number="3", create_folder=False)
+    )
+    service.create_reminder(
+        live.id,
+        text="пинг",
+        time_of_day=time(9, 0),
+        rule=ReminderRule.ONCE,
+        once_date=past,
+    )
+    service.create_reminder(
+        second.id,
+        text="ещё",
+        time_of_day=time(9, 0),
+        rule=ReminderRule.ONCE,
+        once_date=past,
+    )
+    service.create_reminder(
+        quiet.id,
+        text="позже",
+        time_of_day=time(9, 0),
+        rule=ReminderRule.ONCE,
+        once_date=future,
+    )
+    service.create_reminder(
+        None,
+        text="без заявки",
+        time_of_day=time(9, 0),
+        rule=ReminderRule.ONCE,
+        once_date=past,
+    )
+
+    gone_task_project = service.create_project("GoneTask")
+    gone_task = service.create_task(
+        CreateTaskRequest(
+            project_id=gone_task_project.id, number="9", create_folder=False
+        )
+    )
+    service.create_reminder(
+        gone_task.id,
+        text="заявка удалена",
+        time_of_day=time(9, 0),
+        rule=ReminderRule.ONCE,
+        once_date=past,
+    )
+    gone_project = service.create_project("GoneProject")
+    orphan_task = service.create_task(
+        CreateTaskRequest(
+            project_id=gone_project.id, number="8", create_folder=False
+        )
+    )
+    service.create_reminder(
+        orphan_task.id,
+        text="проект удалён",
+        time_of_day=time(9, 0),
+        rule=ReminderRule.ONCE,
+        once_date=past,
+    )
+    _delete_without_cascade(
+        service.repo.db_path, "DELETE FROM tasks WHERE id = ?", gone_task.id
+    )
+    _delete_without_cascade(
+        service.repo.db_path,
+        "DELETE FROM directories WHERE id = ?",
+        gone_project.id,
+    )
+
+    ids = service.task_ids_with_missed_reminders(now=now)
+    assert ids == {live.id, second.id}
+    assert gone_task.id not in ids
+    assert orphan_task.id not in ids
+
+    linked = [
+        (task.id, project.id)
+        for _series, _when, task, project in service.list_missed_reminders(now=now)
+        if task is not None and project is not None
+    ]
+    assert linked == [(live.id, live_project.id), (second.id, live_project.id)]
+
+
+def test_missed_event_marks_the_task_number(reminder_ui):
+    from datetime import timedelta
+
+    from taskmanager.ui.main_window import COL_NUMBER
+
+    window, service, _qtbot = reminder_ui
+    project = service.create_project("Dot")
+    marked = service.create_task(
+        CreateTaskRequest(project_id=project.id, number="1", create_folder=False)
+    )
+    quiet = service.create_task(
+        CreateTaskRequest(project_id=project.id, number="2", create_folder=False)
+    )
+    past = datetime.now().replace(second=0, microsecond=0) - timedelta(hours=1)
+    service.create_reminder(
+        marked.id,
+        text="пинг",
+        time_of_day=past.time(),
+        rule=ReminderRule.ONCE,
+        once_date=past.date(),
+    )
+    window.reload_projects()
+    table = window.current_table()
+    assert table is not None
+    texts = {table.item(row, COL_NUMBER).text() for row in range(table.rowCount())}
+    assert f"● {marked.number}" in texts
+    assert quiet.number in texts
+
+
 def test_list_missed_includes_standalone_event(service: TaskService):
     from datetime import timedelta
 
@@ -1982,6 +2114,147 @@ def test_notify_ping_clickable_over_task_dialog(reminder_ui, monkeypatch):
     assert seen["revealed"] == task.id
     assert seen["selected"] == [task.id]
     assert opened == []
+
+
+def test_opening_database_converts_event_html_once(tmp_path: Path):
+    import base64
+
+    png = base64.b64encode(
+        bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082"
+        )
+    ).decode()
+    html = (
+        "<p>see <b>bold</b> <u>under</u></p>"
+        f'<p><img src="data:image/png;base64,{png}"></p>'
+        "<p>after</p>"
+    )
+    db = tmp_path / "events.db"
+    repo = SqliteRepository(db)
+    repo._conn.execute("DELETE FROM app_meta WHERE key = 'event_text_format'")
+    repo._conn.execute(
+        "INSERT INTO reminders (text, time_of_day, rule) VALUES (?, '09:00', 'once')",
+        (html,),
+    )
+    repo._conn.execute(
+        "INSERT INTO reminders (text, time_of_day, rule) VALUES (?, '10:00', 'once')",
+        ("**keep** ![](pic.png)",),
+    )
+    repo._conn.commit()
+    repo.close()
+
+    again = SqliteRepository(db)
+    rows = again.list_reminders()
+    converted = rows[0].text
+    assert "**bold**" in converted
+    assert "under" in converted
+    assert "after" in converted
+    assert "<u>" not in converted
+    assert "![](" not in converted
+    assert "data:" not in converted
+    assert "<img" not in converted
+    assert "**keep**" in rows[1].text
+    assert "![](" not in rows[1].text
+
+    again._conn.execute(
+        "UPDATE reminders SET text = ? WHERE id = ?",
+        ("<p><b>stay</b></p>", rows[0].id),
+    )
+    again._conn.commit()
+    again.close()
+
+    third = SqliteRepository(db)
+    try:
+        assert third.get_reminder(rows[0].id).text == "<p><b>stay</b></p>"
+    finally:
+        third.close()
+
+
+def test_event_form_edits_markdown_without_images(reminder_ui, monkeypatch):
+    from PySide6.QtWidgets import QDialog, QPushButton
+
+    from taskmanager.ui.markdown_editor import MarkdownEditDialog, MarkdownEditRow
+    from taskmanager.ui.reminders_window import ReminderEditDialog
+
+    window, service, qtbot = reminder_ui
+    dialog = ReminderEditDialog(service, window)
+    qtbot.addWidget(dialog)
+    assert isinstance(dialog.text_edit, MarkdownEditRow)
+    assert dialog.text_edit.allow_images is False
+    dialog.text_edit.markdown = "см ![](shot.png) **жирный**"
+    saved = dialog.reminder_text
+    assert "![](" not in saved
+    assert "**жирный**" in saved
+
+    seen: dict[str, object] = {}
+
+    def fake_exec(self):
+        seen["images"] = self._allow_images
+        seen["action"] = self.image_action
+        return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(MarkdownEditDialog, "exec", fake_exec)
+    button = dialog.text_edit.findChild(QPushButton)
+    assert button is not None
+    button.click()
+    assert seen["images"] is False
+    assert seen["action"] is None
+
+
+def test_event_views_render_markdown_not_stored_html(reminder_ui, monkeypatch):
+    from datetime import time as time_cls
+
+    from taskmanager.domain import ReminderRule
+    from taskmanager.ui.reminders_window import (
+        ReminderCardDialog,
+        ReminderNotifyDialog,
+        RemindersWindow,
+        format_reminder_series,
+    )
+
+    window, service, qtbot = reminder_ui
+    monkeypatch.setattr(window._event_sound_player, "play", lambda _path: None)
+    text = "**жирный** и [сайт](https://example.com)"
+    occ_day = date.today()
+    series = service.create_reminder(
+        None,
+        text=text,
+        time_of_day=time_cls(9, 15),
+        rule=ReminderRule.ONCE,
+        once_date=occ_day,
+    )
+    label = format_reminder_series(series)
+    assert "жирный" in label
+    assert "сайт" in label
+    assert "**" not in label
+    assert "<" not in label
+
+    rem = RemindersWindow(service, window)
+    qtbot.addWidget(rem)
+    occ = datetime(occ_day.year, occ_day.month, occ_day.day, 9, 15)
+    item = rem._occurrence_item(series, occ, None)
+    assert "жирный" in item.text()
+    assert "**" not in item.text()
+
+    card = ReminderCardDialog(service, series, occ, None, "", window)
+    qtbot.addWidget(card)
+    assert "жирный" in card.body_label.toPlainText()
+    assert "сайт" in card.body_label.toPlainText()
+    assert "**" not in card.body_label.toPlainText()
+    assert "example.com" in card.body_label.toHtml()
+    assert series.text == text
+
+    window._notify_reminder(series, occ, None, None)
+    visible = [
+        w for w in window.findChildren(ReminderNotifyDialog) if w.isVisible()
+    ]
+    assert visible
+    body = visible[0].body_edit
+    assert "жирный" in body.toPlainText()
+    assert "**" not in body.toPlainText()
+    assert "example.com" in body.toHtml()
+    visible[0].reject()
 
 
 

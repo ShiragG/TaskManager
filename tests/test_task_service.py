@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from taskmanager.domain import Task, TaskStatus
+from taskmanager.domain import Task, TaskStatus, WorkflowStatus
 from taskmanager.infrastructure.filesystem import TaskFilesystem
 from taskmanager.infrastructure.sqlite_repo import SqliteRepository
 from taskmanager.services.settings_service import Settings
@@ -580,3 +580,107 @@ def test_workflow_status_local_and_blocked_when_sourced(service: TaskService):
         service.update_task(
             sourced.id, UpdateTaskRequest(workflow_status=WorkflowStatus.DONE)
         )
+
+
+def test_table_list_omits_bodies_and_keeps_search_fields(service: TaskService):
+    project = service.create_project("Grid")
+    created = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="15",
+            description="**bold token** and more",
+            comment="*note token*",
+            date_end=date(2026, 12, 1),
+            color="#336699",
+            priority=3,
+            create_folder=False,
+            workflow_status=WorkflowStatus.IN_PROGRESS,
+            source_module_id="mod",
+            external_id="ext-1",
+            source_status_id="assigned",
+            source_status_label="НАЗНАЧЕНО",
+        )
+    )
+    loaded = service.get_task(created.id)
+    assert loaded.description == "**bold token** and more"
+    assert loaded.comment == "*note token*"
+
+    full = service.list_tasks(project.id)
+    assert full[0].description == loaded.description
+    assert full[0].comment == loaded.comment
+    stored = service.repo.list_tasks(project.id)
+    assert stored[0].description == loaded.description
+    assert stored[0].comment == loaded.comment
+
+    rows = service.list_tasks(project.id, bodies=False)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.description == ""
+    assert row.comment == ""
+    assert row.id == loaded.id
+    assert row.number == loaded.number
+    assert row.date_end == loaded.date_end
+    assert row.priority == loaded.priority
+    assert row.status == loaded.status
+    assert row.display_status == loaded.display_status
+    assert row.color == loaded.color
+    assert row.description_plain == loaded.description_plain
+    assert row.comment_plain == loaded.comment_plain
+
+    found = service.list_tasks(project.id, query="note token", bodies=False)
+    assert [item.id for item in found] == [loaded.id]
+    assert found[0].description == ""
+    assert found[0].comment_plain == loaded.comment_plain
+    assert service.list_tasks(project.id, query="**", bodies=False) == []
+
+
+def test_missing_folder_check_lists_absent_catalog_without_bodies(
+    service: TaskService, tmp_path: Path
+):
+    project = service.create_project("Folders")
+    missing = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="1",
+            description="full description",
+            comment="full comment",
+        )
+    )
+    present = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="2",
+            description="stays on disk",
+            comment="present comment",
+        )
+    )
+    no_folder = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="3",
+            description="no folder body",
+            comment="no folder comment",
+            create_folder=False,
+        )
+    )
+    catalog = tmp_path / "work" / "Folders" / missing.folder_name
+    assert catalog.is_dir()
+    catalog.rmdir()
+
+    found = service.check_missing_folders()
+    assert [(item_project.name, item.number) for item_project, item in found] == [
+        ("Folders", "1")
+    ]
+    task = found[0][1]
+    assert task.id == missing.id
+    assert task.folder_name == missing.folder_name
+    assert task.has_folder is True
+    assert task.status == TaskStatus.ACTIVE
+    assert task.description == ""
+    assert task.comment == ""
+    loaded = service.get_task(missing.id)
+    assert loaded.description == "full description"
+    assert loaded.comment == "full comment"
+    listed_ids = {item.id for _, item in found}
+    assert present.id not in listed_ids
+    assert no_folder.id not in listed_ids

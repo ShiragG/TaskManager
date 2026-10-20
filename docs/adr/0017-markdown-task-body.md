@@ -1,6 +1,6 @@
 # Task Description and Comment are markdown
 
-Description and Comment are the Task's own text. They were stored as HTML from a Qt rich-text editor, which made the database the owner of a widget format: agents and the CLI had to escape tags, underline could not round-trip through markdown, and preview depended on `QTextDocument`. The canon is now markdown in those same columns. Rendering uses a markdown library (tables, strikethrough, task lists, single-newline breaks). An embedded browser was the other way to show that set, and it would pull a second document engine into a desktop app that already draws text with Qt. Event text stays on the HTML editor; it is not Description or Comment.
+Description and Comment are the Task's own text. They were stored as HTML from a Qt rich-text editor, which made the database the owner of a widget format: agents and the CLI had to escape tags, underline could not round-trip through markdown, and preview depended on `QTextDocument`. The canon is now markdown in those same columns. Rendering uses a markdown library (tables, strikethrough, task lists, single-newline breaks). An embedded browser was the other way to show that set, and it would pull a second document engine into a desktop app that already draws text with Qt. Event text was left on the HTML editor here because it is not Description or Comment. ADR 0020 later stores Event text as markdown without images.
 
 **Status:** accepted
 

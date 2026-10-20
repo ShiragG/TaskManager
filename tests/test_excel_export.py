@@ -46,9 +46,19 @@ def test_export_excel(tmp_path: Path):
     assert rows[1][2] == "1"
     assert rows[1][4] == "Hello https://example.com"
     assert rows[1][5] == "c"
-    cell = wb["ProjA"].cell(row=2, column=5)
-    assert cell.fill.fgColor.rgb in ("00FFFF00", "FFFF00")
-    assert cell.font.color.rgb in ("00FF0000", "FF0000")
+    from taskmanager.domain import contrast_foreground
+
+    deadline = wb["ProjA"].cell(row=2, column=4)
+    description = wb["ProjA"].cell(row=2, column=5)
+    assert "Статус" not in HEADERS
+    assert description.fill.fgColor.rgb in ("00FFFF00", "FFFF00")
+    assert deadline.fill.fgColor.rgb in ("00FFFF00", "FFFF00")
+    assert str(deadline.font.color.rgb).upper().endswith("FF0000")
+    contrast = contrast_foreground("#ffff00").lstrip("#").upper()
+    for column in (1, 2, 3, 5, 6):
+        rgb = str(wb["ProjA"].cell(row=2, column=column).font.color.rgb).upper()
+        assert rgb.endswith(contrast)
+        assert not rgb.endswith("FF0000")
     repo.close()
 
 
@@ -114,4 +124,70 @@ def test_export_excel_archive_month_filter(tmp_path: Path):
     assert active.number in numbers
     assert "NEW" in numbers
     assert "OLD" not in numbers
+    repo.close()
+
+
+def _font_rgb(cell) -> str | None:
+    color = cell.font.color
+    if color is None:
+        return None
+    try:
+        rgb = color.rgb
+    except Exception:
+        return None
+    if not isinstance(rgb, str):
+        return None
+    return rgb.upper()
+
+
+def test_export_warning_font_only_on_deadline_without_row_color(tmp_path: Path):
+    work = tmp_path / "work"
+    work.mkdir()
+    settings = Settings(
+        work_dir=str(work),
+        warning_color="#ff0000",
+        highlight_warnings=True,
+        warning_lead_days=1,
+    )
+    repo = SqliteRepository(tmp_path / "e3.db")
+    service = TaskService(repo, settings, TaskFilesystem(settings))
+    project = service.create_project("Plain")
+    service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="1",
+            description="warn",
+            date_end=date(2020, 1, 1),
+            create_folder=False,
+        )
+    )
+    service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="2",
+            description="later",
+            date_end=date(2099, 1, 1),
+            color="#0000ff",
+            create_folder=False,
+        )
+    )
+    path = export_tasks_to_excel(service, tmp_path / "plain.xlsx", project_ids=[project.id])
+    from openpyxl import load_workbook
+
+    from taskmanager.domain import contrast_foreground
+
+    ws = load_workbook(path)["Plain"]
+    by_number = {ws.cell(row=row, column=3).value: row for row in range(2, ws.max_row + 1)}
+    warned = by_number["1"]
+    later = by_number["2"]
+    assert str(_font_rgb(ws.cell(row=warned, column=4))).endswith("FF0000")
+    for column in (1, 2, 3, 5, 6):
+        rgb = _font_rgb(ws.cell(row=warned, column=column))
+        assert rgb is None or not rgb.endswith("FF0000")
+    calm = contrast_foreground("#0000ff").lstrip("#").upper()
+    for column in range(1, 7):
+        rgb = _font_rgb(ws.cell(row=later, column=column))
+        assert rgb is not None
+        assert rgb.endswith(calm)
+        assert not rgb.endswith("FF0000")
     repo.close()
