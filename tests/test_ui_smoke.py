@@ -629,6 +629,595 @@ def test_context_menu_source_section_for_multi_selection(app_env, qtbot, monkeyp
     assert "Скачать файлы источника…" in menu.labels
 
 
+def _open_table_menu(window, table, pos):
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    found: list[QMenu] = []
+
+    def grab() -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        for widget in app.topLevelWidgets():
+            if isinstance(widget, QMenu) and widget.isVisible():
+                found.append(widget)
+        for menu in found:
+            menu.close()
+
+    QTimer.singleShot(0, grab)
+    window._show_context_menu(table, pos)
+    assert len(found) == 1
+    return found[0]
+
+
+def _row_for_number(table, number: str) -> int:
+    for row in range(table.rowCount()):
+        item = table.item(row, COL_NUMBER)
+        if item is not None and item.text() == number:
+            return row
+    raise AssertionError(number)
+
+
+def _cell_pos(table, row: int, column: int):
+    item = table.item(row, column)
+    assert item is not None
+    return table.visualItemRect(item).center()
+
+
+def _menu_texts(menu) -> list[str]:
+    return [action.text() for action in menu.actions()]
+
+
+def _priority_menu_rows(menu):
+    from PySide6.QtWidgets import QLabel, QWidgetAction
+
+    rows = []
+    for action in menu.actions():
+        assert isinstance(action, QWidgetAction)
+        widget = action.defaultWidget()
+        assert widget is not None
+        value = widget.findChild(QLabel, "priorityMenuValue")
+        mark = widget.findChild(QLabel, "priorityMenuMark")
+        assert value is not None and mark is not None
+        rows.append((int(value.text()), mark.text(), action, widget))
+    return rows
+
+
+def _rendered_background(widget) -> str:
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+
+    if widget.width() < 4 or widget.height() < 4:
+        widget.resize(96, 28)
+    widget.ensurePolished()
+    image = QImage(widget.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.white)
+    widget.render(image)
+    return image.pixelColor(2, 2).name()
+
+
+def _action_for(rows, value: int):
+    for row_value, _mark, action, _widget in rows:
+        if row_value == value:
+            return action
+    raise AssertionError(value)
+
+
+def _select_rows(table, rows: list[int]) -> None:
+    from PySide6.QtCore import QItemSelectionModel
+
+    assert rows
+    table.clearSelection()
+    table.selectRow(rows[0])
+    model = table.selectionModel()
+    assert model is not None
+    for row in rows[1:]:
+        model.select(
+            table.model().index(row, 0),
+            QItemSelectionModel.SelectionFlag.Rows
+            | QItemSelectionModel.SelectionFlag.Select,
+        )
+
+
+def test_priority_context_menu_updates_only_clicked_task(app_env, qtbot):
+    from datetime import date
+
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QColor, QPalette
+    from PySide6.QtWidgets import QApplication
+
+    from taskmanager.domain import contrast_foreground, priority_color_hex
+    from taskmanager.services.task_service import UpdateTaskRequest
+    from taskmanager.ui.main_window import COL_DESCRIPTION, COL_PRIORITY
+
+    window, service = app_env
+    window.settings.show_priority_colors = False
+    project = service.create_project("PriMenu")
+    kept = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="1",
+            description="описание 1",
+            comment="комментарий 1",
+            priority=10,
+            date_end=date(2026, 5, 1),
+            links=[("docs", "https://example.com/1")],
+            create_folder=False,
+        )
+    )
+    clicked = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="2",
+            description="описание 2",
+            comment="комментарий 2",
+            priority=7,
+            date_end=date(2026, 5, 2),
+            links=[("docs", "https://example.com/2")],
+            create_folder=False,
+        )
+    )
+    window.reload_projects()
+    table = window.current_table()
+    assert table is not None
+    clicked_row = _row_for_number(table, "2")
+    kept_row = _row_for_number(table, "1")
+    assert (
+        table.item(clicked_row, COL_PRIORITY).background().style()
+        == Qt.BrushStyle.NoBrush
+    )
+
+    desc_pos = _cell_pos(table, clicked_row, COL_DESCRIPTION)
+    assert table.indexAt(desc_pos).column() == COL_DESCRIPTION
+    desc_menu = _open_table_menu(window, table, desc_pos)
+    assert "Изменить" in _menu_texts(desc_menu)
+    assert "Копировать номер" in _menu_texts(desc_menu)
+
+    empty = QPoint(-8, -8)
+    assert not table.indexAt(empty).isValid()
+    empty_menu = _open_table_menu(window, table, empty)
+    assert "Копировать номер" in _menu_texts(empty_menu)
+    assert "Изменить" in _menu_texts(empty_menu)
+
+    _select_rows(table, [kept_row, clicked_row])
+    assert len(window.selected_task_ids()) == 2
+    app = QApplication.instance()
+    assert isinstance(app, QApplication)
+    previous_style = app.styleSheet()
+    app.setStyleSheet(
+        "QWidget { background-color: #f1f5f9; color: #0f172a; font-size: 13px; }"
+    )
+    try:
+        menu = _open_table_menu(
+            window, table, _cell_pos(table, clicked_row, COL_PRIORITY)
+        )
+        assert len(window.selected_task_ids()) == 2
+        assert "Изменить" not in _menu_texts(menu)
+        rows = _priority_menu_rows(menu)
+        assert [value for value, _mark, _action, _widget in rows] == list(range(11))
+        marks = [mark for _value, mark, _action, _widget in rows]
+        assert marks.count("✓") == 1
+        assert marks[7] == "✓"
+        for value, _mark, _action, widget in rows:
+            background = priority_color_hex(value)
+            foreground = contrast_foreground(background)
+            assert _rendered_background(widget) == QColor(background).name()
+            assert background in widget.styleSheet()
+            assert foreground in widget.styleSheet()
+            assert (
+                widget.palette().color(QPalette.ColorRole.WindowText).name()
+                == QColor(foreground).name()
+            )
+    finally:
+        app.setStyleSheet(previous_style)
+
+    calls: list[tuple[int, UpdateTaskRequest]] = []
+    selected_during: list[list[int]] = []
+    original = service.update_task
+
+    def spy(task_id, request):
+        selected_during.append(list(window.selected_task_ids()))
+        calls.append((task_id, request))
+        return original(task_id, request)
+
+    service.update_task = spy
+    try:
+        _action_for(rows, 0).trigger()
+    finally:
+        service.update_task = original
+
+    assert len(selected_during) == 1
+    assert set(selected_during[0]) == {kept.id, clicked.id}
+    assert calls == [(clicked.id, UpdateTaskRequest(priority=0))]
+    fresh = service.get_task(clicked.id)
+    assert fresh.priority == 0
+    assert fresh.number == "2"
+    assert fresh.description == "описание 2"
+    assert fresh.comment == "комментарий 2"
+    assert fresh.date_end == date(2026, 5, 2)
+    assert [(link.name, link.target) for link in fresh.links] == [
+        ("docs", "https://example.com/2")
+    ]
+    assert fresh.hidden is False
+    assert fresh.is_archived is False
+    untouched = service.get_task(kept.id)
+    assert untouched.priority == 10
+    assert untouched.description == "описание 1"
+    assert untouched.comment == "комментарий 1"
+    assert window.selected_task_ids() == []
+    table = window.current_table()
+    assert table is not None
+    assert table.item(_row_for_number(table, "2"), COL_PRIORITY).text() == "0"
+    assert table.item(_row_for_number(table, "1"), COL_PRIORITY).text() == "10"
+
+
+def test_workflow_context_menu_updates_only_clicked_task(app_env, qtbot):
+    from taskmanager.domain import WORKFLOW_STATUS_LABELS
+    from taskmanager.services.task_service import UpdateTaskRequest
+    from taskmanager.ui.main_window import COL_STATUS
+
+    window, service = app_env
+    project = service.create_project("WfMenu")
+    kept = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="1",
+            description="держим",
+            comment="как было",
+            workflow_status=WorkflowStatus.IN_PROGRESS,
+            create_folder=False,
+        )
+    )
+    clicked = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="2",
+            description="меняем",
+            comment="тоже",
+            workflow_status=WorkflowStatus.NEW,
+            create_folder=False,
+        )
+    )
+    window.reload_projects()
+    table = window.current_table()
+    assert table is not None
+    clicked_row = _row_for_number(table, "2")
+    kept_row = _row_for_number(table, "1")
+    _select_rows(table, [kept_row, clicked_row])
+    menu = _open_table_menu(window, table, _cell_pos(table, clicked_row, COL_STATUS))
+    assert [action.text() for action in menu.actions()] == list(
+        WORKFLOW_STATUS_LABELS.values()
+    )
+    assert "Изменить" not in _menu_texts(menu)
+    checked = [action.text() for action in menu.actions() if action.isChecked()]
+    assert checked == [workflow_status_label(WorkflowStatus.NEW)]
+    done = next(
+        action
+        for action in menu.actions()
+        if action.text() == workflow_status_label(WorkflowStatus.DONE)
+    )
+    calls: list[tuple[int, UpdateTaskRequest]] = []
+    selected_during: list[list[int]] = []
+    original = service.update_task
+
+    def spy(task_id, request):
+        selected_during.append(list(window.selected_task_ids()))
+        calls.append((task_id, request))
+        return original(task_id, request)
+
+    service.update_task = spy
+    try:
+        done.trigger()
+    finally:
+        service.update_task = original
+
+    assert len(selected_during) == 1
+    assert set(selected_during[0]) == {kept.id, clicked.id}
+    assert calls == [
+        (clicked.id, UpdateTaskRequest(workflow_status=WorkflowStatus.DONE))
+    ]
+    fresh = service.get_task(clicked.id)
+    assert fresh.workflow_status == WorkflowStatus.DONE
+    assert fresh.description == "меняем"
+    assert fresh.comment == "тоже"
+    assert fresh.number == "2"
+    assert fresh.hidden is False
+    assert fresh.is_archived is False
+    assert service.get_task(kept.id).workflow_status == WorkflowStatus.IN_PROGRESS
+    assert service.get_task(kept.id).description == "держим"
+    assert window.selected_task_ids() == []
+    table = window.current_table()
+    assert table is not None
+    assert table.item(_row_for_number(table, "2"), COL_STATUS).text() == "Готово"
+    assert (
+        table.item(_row_for_number(table, "1"), COL_STATUS).text()
+        == workflow_status_label(WorkflowStatus.IN_PROGRESS)
+    )
+
+    cancelled_row = _row_for_number(table, "2")
+    menu = _open_table_menu(
+        window, table, _cell_pos(table, cancelled_row, COL_STATUS)
+    )
+    cancel = next(
+        action
+        for action in menu.actions()
+        if action.text() == workflow_status_label(WorkflowStatus.CANCELLED)
+    )
+    cancel.trigger()
+    cancelled = service.get_task(clicked.id)
+    assert cancelled.workflow_status == WorkflowStatus.CANCELLED
+    assert cancelled.hidden is False
+    assert cancelled.is_archived is False
+    table = window.current_table()
+    assert table is not None
+    assert table.item(_row_for_number(table, "2"), COL_STATUS).text() == "Отменена"
+    assert table.item(_row_for_number(table, "1"), COL_STATUS) is not None
+    assert window.archive_cb.isChecked() is False
+    assert window.hidden_cb.isChecked() is False
+
+
+def test_sourced_status_context_menu_stays_row_menu(app_env, qtbot):
+    from PySide6.QtGui import QColor
+
+    from taskmanager.domain import priority_color_hex
+    from taskmanager.ui.main_window import COL_PRIORITY, COL_STATUS
+
+    window, service = app_env
+    window.settings.show_priority_colors = False
+    project = service.create_project("SrcMenu")
+    sourced = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="S1",
+            create_folder=False,
+            priority=4,
+            source_module_id="fake",
+            external_id="99",
+            source_label="Fake",
+            source_status_id="10",
+            source_status_label="НАЗНАЧЕНО",
+        )
+    )
+    window.reload_projects()
+    table = window.current_table()
+    assert table is not None
+    row = _row_for_number(table, "S1")
+    status_menu = _open_table_menu(window, table, _cell_pos(table, row, COL_STATUS))
+    texts = _menu_texts(status_menu)
+    assert "Изменить" in texts
+    assert "Обновить из источника…" in texts
+    assert "Скачать файлы источника…" in texts
+    assert "Новая" not in texts
+    assert service.get_task(sourced.id).workflow_status == WorkflowStatus.NEW
+
+    priority_menu = _open_table_menu(
+        window, table, _cell_pos(table, row, COL_PRIORITY)
+    )
+    rows = _priority_menu_rows(priority_menu)
+    assert [value for value, _mark, _action, _widget in rows] == list(range(11))
+    assert [mark for _value, mark, _action, _widget in rows].count("✓") == 1
+    checked = next(item for item in rows if item[1] == "✓")
+    assert checked[0] == 4
+    assert _rendered_background(checked[3]) == QColor(priority_color_hex(4)).name()
+
+
+def test_archive_value_cells_keep_row_menu(app_env, qtbot):
+    from PySide6.QtWidgets import QWidgetAction
+
+    from taskmanager.ui.main_window import COL_PRIORITY, COL_STATUS
+
+    window, service = app_env
+    project = service.create_project("ArchMenu")
+    task = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="9",
+            workflow_status=WorkflowStatus.DONE,
+            create_folder=False,
+        )
+    )
+    service.archive_task(task.id)
+    window.reload_projects()
+    window.archive_cb.setChecked(True)
+    table = window.current_table()
+    assert table is not None
+    row = _row_for_number(table, "9")
+    for column in (COL_PRIORITY, COL_STATUS):
+        menu = _open_table_menu(window, table, _cell_pos(table, row, column))
+        texts = _menu_texts(menu)
+        assert "Вернуть" in texts
+        assert "Копировать номер" in texts
+        assert "Изменить" not in texts
+        assert "Новая" not in texts
+        assert "Готово" not in texts
+        assert not any(isinstance(action, QWidgetAction) for action in menu.actions())
+    assert service.get_task(task.id).is_archived is True
+    assert service.get_task(task.id).priority == 10
+
+
+def test_context_value_repeat_does_not_call_service(app_env, qtbot):
+    from taskmanager.ui.main_window import COL_PRIORITY, COL_STATUS
+
+    window, service = app_env
+    project = service.create_project("RepeatMenu")
+    task = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="4",
+            priority=0,
+            description="та же",
+            workflow_status=WorkflowStatus.WAITING,
+            create_folder=False,
+        )
+    )
+    window.reload_projects()
+    table = window.current_table()
+    assert table is not None
+    row = _row_for_number(table, "4")
+    table.selectRow(row)
+    priority_item = table.item(row, COL_PRIORITY)
+    status_item = table.item(row, COL_STATUS)
+    calls: list[int] = []
+    original = service.update_task
+
+    def spy(task_id, request):
+        calls.append(task_id)
+        return original(task_id, request)
+
+    service.update_task = spy
+    try:
+        priority_menu = _open_table_menu(
+            window, table, _cell_pos(table, row, COL_PRIORITY)
+        )
+        current = next(
+            action
+            for value, _mark, action, _widget in _priority_menu_rows(priority_menu)
+            if value == 0
+        )
+        current.trigger()
+        assert calls == []
+        assert table.item(row, COL_PRIORITY) is priority_item
+        assert service.get_task(task.id).priority == 0
+        assert service.get_task(task.id).description == "та же"
+        assert window.selected_task_ids() == [task.id]
+
+        status_menu = _open_table_menu(
+            window, table, _cell_pos(table, row, COL_STATUS)
+        )
+        waiting = next(
+            action for action in status_menu.actions() if action.text() == "Ждёт"
+        )
+        assert waiting.isChecked()
+        waiting.trigger()
+        assert calls == []
+        assert table.item(row, COL_STATUS) is status_item
+        assert service.get_task(task.id).workflow_status == WorkflowStatus.WAITING
+        assert service.get_task(task.id).hidden is False
+        assert service.get_task(task.id).is_archived is False
+        assert window.selected_task_ids() == [task.id]
+    finally:
+        service.update_task = original
+
+
+def test_context_value_menu_error_does_not_reload(app_env, qtbot, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from taskmanager.services.task_service import ServiceError, UpdateTaskRequest
+    from taskmanager.ui.main_window import COL_PRIORITY, COL_STATUS
+
+    window, service = app_env
+    project = service.create_project("ErrMenu")
+    task = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="5",
+            priority=6,
+            description="на месте",
+            workflow_status=WorkflowStatus.NEW,
+            create_folder=False,
+        )
+    )
+    window.reload_projects()
+    table = window.current_table()
+    assert table is not None
+    row = _row_for_number(table, "5")
+    table.selectRow(row)
+    priority_item = table.item(row, COL_PRIORITY)
+    warnings: list[tuple[str, str]] = []
+    requests: list[UpdateTaskRequest] = []
+
+    def fail_update(task_id, request):
+        requests.append(request)
+        raise ServiceError("Сбой записи")
+
+    def capture_warning(*args, **kwargs):
+        warnings.append((args[1], args[2]))
+        return QMessageBox.StandardButton.Ok
+
+    monkeypatch.setattr(service, "update_task", fail_update)
+    monkeypatch.setattr(QMessageBox, "warning", capture_warning)
+    priority_menu = _open_table_menu(
+        window, table, _cell_pos(table, row, COL_PRIORITY)
+    )
+    next(
+        action
+        for value, _mark, action, _widget in _priority_menu_rows(priority_menu)
+        if value == 1
+    ).trigger()
+    assert requests == [UpdateTaskRequest(priority=1)]
+    assert warnings == [("Ошибка", "Сбой записи")]
+    assert table.item(row, COL_PRIORITY) is priority_item
+    assert table.item(row, COL_PRIORITY).text() == "6"
+    assert service.get_task(task.id).priority == 6
+    assert service.get_task(task.id).description == "на месте"
+    assert window.selected_task_ids() == [task.id]
+
+    status_item = table.item(row, COL_STATUS)
+    status_menu = _open_table_menu(window, table, _cell_pos(table, row, COL_STATUS))
+    next(
+        action for action in status_menu.actions() if action.text() == "В работе"
+    ).trigger()
+    assert requests[-1] == UpdateTaskRequest(workflow_status=WorkflowStatus.IN_PROGRESS)
+    assert warnings[-1] == ("Ошибка", "Сбой записи")
+    assert table.item(row, COL_STATUS) is status_item
+    assert service.get_task(task.id).workflow_status == WorkflowStatus.NEW
+    assert window.selected_task_ids() == [task.id]
+
+
+def test_hidden_list_priority_and_workflow_menus(app_env, qtbot):
+    from taskmanager.services.task_service import UpdateTaskRequest
+    from taskmanager.ui.main_window import COL_PRIORITY, COL_STATUS
+
+    window, service = app_env
+    project = service.create_project("HidMenu")
+    task = service.create_task(
+        CreateTaskRequest(
+            project_id=project.id,
+            number="8",
+            priority=2,
+            workflow_status=WorkflowStatus.IN_PROGRESS,
+            create_folder=False,
+        )
+    )
+    service.update_task(task.id, UpdateTaskRequest(hidden=True))
+    window.reload_projects()
+    window.hidden_cb.setChecked(True)
+    table = window.current_table()
+    assert table is not None
+    row = _row_for_number(table, "8")
+    priority_menu = _open_table_menu(
+        window, table, _cell_pos(table, row, COL_PRIORITY)
+    )
+    rows = _priority_menu_rows(priority_menu)
+    assert [value for value, _mark, _action, _widget in rows] == list(range(11))
+    assert next(mark for value, mark, _action, _widget in rows if value == 2) == "✓"
+    next(action for value, _mark, action, _widget in rows if value == 9).trigger()
+    assert service.get_task(task.id).priority == 9
+    assert service.get_task(task.id).hidden is True
+    assert service.get_task(task.id).is_archived is False
+    table = window.current_table()
+    assert table is not None
+    assert table.item(_row_for_number(table, "8"), COL_PRIORITY).text() == "9"
+
+    status_menu = _open_table_menu(
+        window,
+        table,
+        _cell_pos(table, _row_for_number(table, "8"), COL_STATUS),
+    )
+    assert [action.text() for action in status_menu.actions()] == [
+        "Новая",
+        "В работе",
+        "Ждёт",
+        "Готово",
+        "Отменена",
+    ]
+    current = next(
+        action for action in status_menu.actions() if action.text() == "В работе"
+    )
+    assert current.isChecked() is True
+
+
 def test_delete_disabled_in_archive_mode(app_env, qtbot, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 

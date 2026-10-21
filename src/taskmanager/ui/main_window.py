@@ -13,7 +13,9 @@ from PySide6.QtGui import (
     QIcon,
     QImage,
     QKeySequence,
+    QMouseEvent,
     QPainter,
+    QPalette,
     QPixmap,
     QShortcut,
 )
@@ -40,10 +42,17 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from taskmanager.domain import (
+    PRIORITY_MAX,
+    PRIORITY_MIN,
+    WORKFLOW_STATUS_LABELS,
     Project,
+    Task,
+    WorkflowStatus,
+    clamp_priority,
     contrast_foreground,
     is_deadline_warning,
     make_folder_name,
@@ -200,6 +209,74 @@ class SortableItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
+def _paint_menu_colors(widget: QWidget, background: str, foreground: str) -> None:
+    palette = widget.palette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(background))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(foreground))
+    widget.setPalette(palette)
+    widget.setAutoFillBackground(True)
+
+
+class _PriorityValueRow(QWidget):
+    """Priority menu row colored like the card combo. A QAction cannot paint its background."""
+
+    def __init__(self, value: int, *, checked: bool) -> None:
+        super().__init__()
+        self.setObjectName("priorityMenuRow")
+        self._action: QWidgetAction | None = None
+        background = priority_color_hex(value)
+        foreground = contrast_foreground(background)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 12, 4)
+        layout.setSpacing(6)
+        mark = QLabel("✓" if checked else "")
+        mark.setObjectName("priorityMenuMark")
+        mark.setFixedWidth(20)
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        value_label = QLabel(str(value))
+        value_label.setObjectName("priorityMenuValue")
+        value_label.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+        )
+        layout.addWidget(mark)
+        layout.addWidget(value_label, 1)
+        self.setStyleSheet(
+            "QWidget#priorityMenuRow {"
+            f" background-color: {background}; color: {foreground};"
+            "}"
+            "QWidget#priorityMenuRow QLabel {"
+            f" background-color: {background}; color: {foreground};"
+            "}"
+        )
+        for colored in (self, mark, value_label):
+            _paint_menu_colors(colored, background, foreground)
+        mark.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        value_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def bind_action(self, action: QWidgetAction) -> None:
+        self._action = action
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        inside = self.rect().contains(event.position().toPoint())
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and inside
+            and self._action is not None
+        ):
+            self._action.trigger()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -215,6 +292,7 @@ class MainWindow(QMainWindow):
         self.source_host = source_host
         self._show_hidden = False
         self._show_archive = False
+        self._cell_value_menu: QMenu | None = None
         self._search_query = ""
         self._update_thread: QThread | None = None
         self._update_worker: (
@@ -2519,6 +2597,8 @@ class MainWindow(QMainWindow):
     def _show_context_menu(self, table: QTableWidget, pos) -> None:
         index = table.indexAt(pos)
         self._ensure_context_row_selected(table, index)
+        if self._show_cell_value_menu(table, index, pos):
+            return
         task_ids = self.selected_task_ids()
         task_id = task_ids[0] if len(task_ids) == 1 else None
         menu = QMenu(self)
@@ -2561,6 +2641,133 @@ class MainWindow(QMainWindow):
                     )
 
         menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _task_on_context_row(self, table: QTableWidget, row: int) -> Task | None:
+        item = table.item(row, COL_NUMBER)
+        if item is None:
+            return None
+        value = item.data(TASK_ID_ROLE)
+        if value is None:
+            return None
+        try:
+            return self.service.get_task(int(value))
+        except ServiceError:
+            return None
+
+    def _show_cell_value_menu(self, table: QTableWidget, index, pos) -> bool:
+        """Priority or workflow list for the clicked cell. False keeps the row menu."""
+        if self._show_archive or not index.isValid():
+            return False
+        column = index.column()
+        if column != COL_PRIORITY and column != COL_STATUS:
+            return False
+        task = self._task_on_context_row(table, index.row())
+        if task is None or task.id is None:
+            return False
+        if column == COL_PRIORITY:
+            self._exec_priority_value_menu(table, pos, task)
+            return True
+        if task.has_source:
+            return False
+        self._exec_workflow_value_menu(table, pos, task)
+        return True
+
+    def _exec_cell_menu(self, menu: QMenu, table: QTableWidget, pos) -> None:
+        previous = self._cell_value_menu
+        self._cell_value_menu = menu
+        if previous is not None:
+            previous.deleteLater()
+        menu.exec(table.viewport().mapToGlobal(pos))
+
+    def _exec_priority_value_menu(
+        self, table: QTableWidget, pos, task: Task
+    ) -> None:
+        task_id = task.id
+        if task_id is None:
+            return
+        current = clamp_priority(task.priority)
+        menu = QMenu(self)
+        for value in range(PRIORITY_MIN, PRIORITY_MAX + 1):
+            action = QWidgetAction(menu)
+            row = _PriorityValueRow(value, checked=value == current)
+            action.setDefaultWidget(row)
+            row.bind_action(action)
+            action.triggered.connect(
+                lambda checked=False, v=value, tid=task_id, cur=current, m=menu: (
+                    self._commit_menu_priority(m, tid, v, cur)
+                )
+            )
+            menu.addAction(action)
+        self._exec_cell_menu(menu, table, pos)
+
+    def _exec_workflow_value_menu(
+        self, table: QTableWidget, pos, task: Task
+    ) -> None:
+        task_id = task.id
+        if task_id is None:
+            return
+        current = task.workflow_status
+        menu = QMenu(self)
+        for status, label in WORKFLOW_STATUS_LABELS.items():
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(status == current)
+            action.triggered.connect(
+                lambda checked=False, s=status, tid=task_id, cur=current, m=menu: (
+                    self._commit_menu_workflow(m, tid, s, cur)
+                )
+            )
+        self._exec_cell_menu(menu, table, pos)
+
+    def _commit_menu_priority(
+        self, menu: QMenu, task_id: int, priority: int, current: int
+    ) -> None:
+        menu.close()
+        self._write_clicked_priority(task_id, priority, current)
+
+    def _commit_menu_workflow(
+        self,
+        menu: QMenu,
+        task_id: int,
+        status: WorkflowStatus,
+        current: WorkflowStatus,
+    ) -> None:
+        menu.close()
+        self._write_clicked_workflow(task_id, status, current)
+
+    def _write_clicked_priority(self, task_id: int, priority: int, current: int) -> None:
+        chosen = clamp_priority(priority)
+        if chosen == clamp_priority(current):
+            return
+        try:
+            self.service.update_task(task_id, UpdateTaskRequest(priority=chosen))
+        except ServiceError as exc:
+            logger.debug("Priority menu update failed id=%s: %s", task_id, exc)
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        logger.debug("UI: priority from menu id=%s value=%s", task_id, chosen)
+        self.reload_current_tab()
+
+    def _write_clicked_workflow(
+        self,
+        task_id: int,
+        status: WorkflowStatus,
+        current: WorkflowStatus,
+    ) -> None:
+        if status == current:
+            return
+        try:
+            self.service.update_task(
+                task_id, UpdateTaskRequest(workflow_status=status)
+            )
+        except ServiceError as exc:
+            logger.debug("Workflow menu update failed id=%s: %s", task_id, exc)
+            QMessageBox.warning(self, "Ошибка", str(exc))
+            return
+        logger.debug(
+            "UI: workflow status from menu id=%s value=%s", task_id, status.value
+        )
+        self.reload_current_tab()
 
     def _open_link(self, target: str) -> None:
         try:
